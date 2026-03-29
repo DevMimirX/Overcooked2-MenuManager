@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using HarmonyLib;
 using Team17.Online;
 
 namespace HostUtilities
@@ -38,7 +39,7 @@ namespace HostUtilities
             }
 
             List<DLCFrontendData> allDlc = dlcManager.AllDlc;
-            GameSession.GameType gameType = serverLobby.m_bIsCoop ? GameSession.GameType.Cooperative : GameSession.GameType.Competitive;
+            GameSession.GameType gameType = GetLobbyGameType(serverLobby);
             List<SceneDirectoryData.SceneDirectoryEntry> list = new List<SceneDirectoryData.SceneDirectoryEntry>();
             for (int i = 0; i < sceneDirectories.Length; i++)
             {
@@ -67,6 +68,24 @@ namespace HostUtilities
                     || entry.Label.Contains("DLC07Battlements08");
             });
             return list;
+        }
+
+        private static GameSession.GameType GetLobbyGameType(ServerLobbyFlowController serverLobby)
+        {
+            if (serverLobby == null)
+            {
+                return GameSession.GameType.Cooperative;
+            }
+
+            try
+            {
+                AccessTools.FieldRef<ServerLobbyFlowController, bool> coopRef = AccessTools.FieldRefAccess<ServerLobbyFlowController, bool>("m_bIsCoop");
+                return coopRef(serverLobby) ? GameSession.GameType.Cooperative : GameSession.GameType.Competitive;
+            }
+            catch
+            {
+                return GameSession.GameType.Cooperative;
+            }
         }
 
         public static string GetLevelName(SceneDirectoryData.SceneDirectoryEntry entry, bool withLevelLabel)

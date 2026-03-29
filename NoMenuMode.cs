@@ -10,6 +10,7 @@ namespace HostUtilities
 {
     internal static class NoMenuMode
     {
+        private static readonly ConfigDefinition LegacyToggleKeyDefinition = new ConfigDefinition("00-菜单管理", "切换无菜单热键");
         private static readonly MethodInfo TriggerAudioMessageMethod = AccessTools.Method("ServerMessenger:TriggerAudioMessage");
         private static readonly FieldInfo CampaignFlowGameModeField = AccessTools.Field(typeof(ServerCampaignFlowController), "m_gameMode");
         private static readonly FieldInfo CampaignModeContextField = AccessTools.Field(typeof(ServerCampaignMode), "m_context");
@@ -20,8 +21,6 @@ namespace HostUtilities
         private static readonly MethodInfo MatchesMethod = AccessTools.Method(typeof(ServerOrderControllerBase), "Matches");
 
         private static ConfigEntry<bool> enabled;
-        private static ConfigEntry<KeyCode> toggleKey;
-
         public static bool IsReady
         {
             get { return enabled != null; }
@@ -34,17 +33,12 @@ namespace HostUtilities
 
         public static void Awake()
         {
-            enabled = _MODEntry.Instance.Config.Bind<bool>("00-菜单管理", "无菜单", false, "启用内置无菜单模式，不依赖外部 OC2NoMenu.dll。");
-            toggleKey = _MODEntry.Instance.Config.Bind<KeyCode>("00-菜单管理", "切换无菜单热键", KeyCode.F8, "切换内置无菜单模式。");
-            ModuleUtility.RegisterHarmony(typeof(NoMenuMode));
-        }
-
-        public static void Update()
-        {
-            if (toggleKey != null && Input.GetKeyDown(toggleKey.Value))
+            if (_MODEntry.Instance.Config.Remove(LegacyToggleKeyDefinition))
             {
-                ToggleEnabled();
+                _MODEntry.Instance.Config.Save();
             }
+            enabled = _MODEntry.Instance.Config.Bind<bool>("00-菜单管理", "无菜单", false, "启用内置无菜单模式，不依赖外部 OC2NoMenu.dll。");
+            ModuleUtility.RegisterHarmony(typeof(NoMenuMode));
         }
 
         public static void ToggleEnabled()
@@ -137,18 +131,29 @@ namespace HostUtilities
                 plateReturnController.FoodDelivered(_definition, _plateType, _station);
             }
 
-            List<RecipeList.Entry> recipes = GetAvailableRecipes(kitchenLevelConfig);
-            RecipeList.Entry deliveredEntry = recipes.Find(delegate(RecipeList.Entry entry)
-            {
-                return entry != null
-                    && entry.m_order != null
-                    && MatchesOrder(monitor.OrdersController, entry.m_order, _definition, _plateType);
-            });
-
             float timeRemainingPercent = 1f;
             int tip = 0;
             bool wasCombo = false;
             OrderID orderId = new OrderID(0u);
+            RecipeList.Entry deliveredEntry = null;
+            if (monitor.OrdersController.FindBestOrderForRecipe(_definition, _plateType, out orderId, out timeRemainingPercent))
+            {
+                deliveredEntry = monitor.OrdersController.GetRecipe(orderId);
+            }
+
+            if (deliveredEntry == null)
+            {
+                List<RecipeList.Entry> recipes = GetAvailableRecipes(kitchenLevelConfig);
+                deliveredEntry = recipes.Find(delegate(RecipeList.Entry entry)
+                {
+                    return entry != null
+                        && entry.m_order != null
+                        && MatchesOrder(monitor.OrdersController, entry.m_order, _definition, _plateType);
+                });
+                orderId = new OrderID(0u);
+                timeRemainingPercent = 1f;
+            }
+
             KitchenFlowControllerBase kitchenFlowController = GetKitchenFlowController(__instance);
             if (kitchenFlowController != null)
             {

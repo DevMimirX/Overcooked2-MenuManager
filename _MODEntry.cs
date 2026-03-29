@@ -22,7 +22,6 @@ namespace HostUtilities
 
         private static readonly Action[] ModuleUpdateActions = new Action[]
         {
-            NoMenuMode.Update,
             ServedDishTracker.Update
         };
 
