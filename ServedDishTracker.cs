@@ -38,6 +38,8 @@ namespace HostUtilities
             public string InternalName;
             public string EnglishName;
             public string ChineseName;
+            public string CategoryName;
+            public int CategoryTier;
             public OrderDefinitionNode Definition;
         }
 
@@ -224,6 +226,7 @@ namespace HostUtilities
         private const string DishSelectionSection = "04-历史菜单菜品";
         private const string SceneSelectorKey = "选择关卡";
         private const string NoSceneSelectorValue = "暂无可选关卡";
+        private const string SettingsWindowHotkeyKey = "打开菜单管理窗口";
         private const int MaxSceneSelectorDisplayLength = 40;
         private const int MaxDishSelectorDisplayLength = 26;
         private const int MaxOverlaySceneDisplayLength = 24;
@@ -244,11 +247,13 @@ namespace HostUtilities
         private const int DiscoveryFlushIntervalFrames = 900;
         private const int ControllerLookupIntervalFrames = 120;
         private const int ControllerLookupRetryIntervalFrames = 15;
-        private const int PreparedSourceRefreshIntervalFrames = 4;
-        private const int MaxPreparedSourceRefreshesPerBatch = 4;
-        private const int PreparedSourcePruneIntervalFrames = 600;
-        private const int PreparedBootstrapStepIntervalFrames = 2;
-        private const int TicketWidgetRetryIntervalFrames = 6;
+        private const int PreparedSourceRefreshIntervalFrames = 8;
+        private const int MaxPreparedSourceRefreshesPerBatch = 2;
+        private const int PreparedSourcePruneIntervalFrames = 900;
+        private const int PreparedBootstrapStepIntervalFrames = 8;
+        private const int TicketWidgetRetryIntervalFrames = 12;
+        private const int HotkeyFilePollIntervalFrames = 600;
+        private const KeyCode DefaultSettingsWindowHotkey = KeyCode.F6;
 
         private static readonly Dictionary<string, HashSet<int>> TrackedIdsByScene = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, SceneInfo> SceneCache = new Dictionary<string, SceneInfo>(StringComparer.OrdinalIgnoreCase);
@@ -278,6 +283,7 @@ namespace HostUtilities
         private static readonly ConfigDefinition LegacyEnabledDefinition = new ConfigDefinition("03-已送菜品追踪", "启用已送菜品追踪");
         private static readonly ConfigDefinition LegacyLanguageDefinition = new ConfigDefinition("03-已送菜品追踪", "显示语言");
         private static readonly ConfigDefinition LegacySelectedSceneStateDefinition = new ConfigDefinition("99-内部", "已选关卡内部状态");
+        private static readonly ConfigDefinition LegacySettingsWindowHotkeyDefinition = new ConfigDefinition("00-菜单管理", SettingsWindowHotkeyKey);
         private static readonly ConfigDefinition[] LegacyConfigDefinitions = new ConfigDefinition[]
         {
             new ConfigDefinition("03-已送菜品追踪", "启用已送菜品追踪"),
@@ -296,7 +302,6 @@ namespace HostUtilities
         private static ConfigEntry<bool> preparedTrackingEnabled;
         private static ConfigEntry<bool> menuTicketTintEnabled;
         private static ConfigEntry<TrackerLanguage> languageMode;
-        private static ConfigEntry<KeyCode> settingsWindowHotkey;
         private static ConfigEntry<int> overlayX;
         private static ConfigEntry<int> overlayY;
         private static ConfigEntry<int> overlayWidth;
@@ -343,6 +348,7 @@ namespace HostUtilities
         private static int nextPreparedSourcePruneFrame;
         private static int nextPreparedBootstrapFrame;
         private static int nextTicketWidgetRefreshFrame;
+        private static int nextHotkeyFilePollFrame;
         private static int lastOverlayBuildFrame = int.MinValue;
         private static int cachedCurrentSceneInfoFrame = int.MinValue;
         private static bool overlayVisible;
@@ -358,6 +364,8 @@ namespace HostUtilities
         private static int lastSettingsWindowToggleFrame = int.MinValue;
         private static int preparedSourceBootstrapStage;
         private static SceneInfo cachedCurrentSceneInfo;
+        private static KeyCode settingsWindowHotkey = DefaultSettingsWindowHotkey;
+        private static DateTime hotkeyConfigLastWriteUtc = DateTime.MinValue;
         private static string overlayHeaderText = string.Empty;
         private static string overlayFooterText = string.Empty;
         private static string preparedSourceSceneName = string.Empty;
@@ -371,6 +379,7 @@ namespace HostUtilities
             CaptureLegacyValues();
             RemoveLegacyConfigEntries();
             RemoveGeneratedConfigEntries();
+            RemoveLegacySettingsWindowHotkeyEntry();
 
             enabled = _MODEntry.SettingsConfig.Bind<bool>(
                 TrackerSection,
@@ -387,11 +396,6 @@ namespace HostUtilities
                 "菜单颜色",
                 true,
                 "是否给关卡内真实菜单票据染色。橙色=在单未备，绿色=已备。关闭后可以进一步降低运行开销。");
-            settingsWindowHotkey = _MODEntry.SettingsConfig.Bind<KeyCode>(
-                "00-菜单管理",
-                "打开菜单管理窗口",
-                KeyCode.F6,
-                "打开或关闭 OC2MenuManager 独立菜单窗口。");
             languageMode = _MODEntry.SettingsConfig.Bind<TrackerLanguage>(
                 TrackerSection,
                 "显示语言",
@@ -459,6 +463,7 @@ namespace HostUtilities
                 "Left / Right / Center");
 
             LoadSelections();
+            InitializeHotkeyConfig();
             CenterSettingsWindow();
 
             overlayHost = new DebugOverlayHost(
@@ -474,6 +479,7 @@ namespace HostUtilities
 
         public static void Update()
         {
+            RefreshHotkeyFromFileIfChanged();
             KeyCode hotkey = GetSettingsWindowHotkey();
             if (!capturingHotkey && hotkey != KeyCode.None && Input.GetKeyDown(hotkey))
             {
@@ -579,7 +585,9 @@ namespace HostUtilities
 
         public static void OnGUI()
         {
-            if (overlayVisible)
+            Event currentEvent = Event.current;
+            bool isRepaintEvent = currentEvent == null || currentEvent.type == EventType.Repaint;
+            if (overlayVisible && isRepaintEvent)
             {
                 overlayHost.OnGUI();
             }
@@ -589,13 +597,13 @@ namespace HostUtilities
                 return;
             }
 
-            Event currentEvent = Event.current;
             KeyCode hotkey = GetSettingsWindowHotkey();
             if (capturingHotkey && currentEvent != null && currentEvent.isKey && currentEvent.type == EventType.KeyDown)
             {
                 if (currentEvent.keyCode != KeyCode.None)
                 {
-                    settingsWindowHotkey.Value = currentEvent.keyCode;
+                    settingsWindowHotkey = currentEvent.keyCode;
+                    SaveHotkeyConfig();
                 }
                 capturingHotkey = false;
                 currentEvent.Use();
@@ -625,12 +633,7 @@ namespace HostUtilities
 
         private static KeyCode GetSettingsWindowHotkey()
         {
-            if (settingsWindowHotkey == null || settingsWindowHotkey.Value == KeyCode.None)
-            {
-                return KeyCode.F6;
-            }
-
-            return settingsWindowHotkey.Value;
+            return settingsWindowHotkey;
         }
 
         private static void ToggleSettingsWindowVisibility()
@@ -646,6 +649,167 @@ namespace HostUtilities
             if (settingsWindowVisible)
             {
                 nextTrackedSceneRefreshPollFrame = 0;
+            }
+        }
+
+        private static void InitializeHotkeyConfig()
+        {
+            settingsWindowHotkey = DefaultSettingsWindowHotkey;
+            EnsureHotkeyConfigFileExists();
+            RefreshHotkeyFromFile(true);
+        }
+
+        private static void RefreshHotkeyFromFileIfChanged()
+        {
+            if (string.IsNullOrEmpty(_MODEntry.HotkeyConfigPath) || Time.frameCount < nextHotkeyFilePollFrame)
+            {
+                return;
+            }
+
+            RefreshHotkeyFromFile(false);
+        }
+
+        private static void RefreshHotkeyFromFile(bool force)
+        {
+            string path = _MODEntry.HotkeyConfigPath;
+            if (string.IsNullOrEmpty(path))
+            {
+                settingsWindowHotkey = DefaultSettingsWindowHotkey;
+                nextHotkeyFilePollFrame = Time.frameCount + HotkeyFilePollIntervalFrames;
+                return;
+            }
+
+            if (!File.Exists(path))
+            {
+                EnsureHotkeyConfigFileExists();
+            }
+
+            DateTime writeTimeUtc = GetHotkeyConfigWriteTimeUtc(path);
+            if (!force && writeTimeUtc == hotkeyConfigLastWriteUtc)
+            {
+                nextHotkeyFilePollFrame = Time.frameCount + HotkeyFilePollIntervalFrames;
+                return;
+            }
+
+            KeyCode parsedHotkey;
+            if (TryParseHotkeyConfig(path, out parsedHotkey))
+            {
+                settingsWindowHotkey = parsedHotkey;
+            }
+            else
+            {
+                settingsWindowHotkey = DefaultSettingsWindowHotkey;
+                _MODEntry.LogWarning("[ServedDishTracker] Invalid hotkey config, falling back to " + DefaultSettingsWindowHotkey + ": " + path);
+                WriteHotkeyConfig(path, settingsWindowHotkey);
+                writeTimeUtc = GetHotkeyConfigWriteTimeUtc(path);
+            }
+
+            hotkeyConfigLastWriteUtc = writeTimeUtc;
+            nextHotkeyFilePollFrame = Time.frameCount + HotkeyFilePollIntervalFrames;
+        }
+
+        private static void SaveHotkeyConfig()
+        {
+            string path = _MODEntry.HotkeyConfigPath;
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
+            WriteHotkeyConfig(path, settingsWindowHotkey);
+            hotkeyConfigLastWriteUtc = GetHotkeyConfigWriteTimeUtc(path);
+            nextHotkeyFilePollFrame = Time.frameCount + HotkeyFilePollIntervalFrames;
+        }
+
+        private static void EnsureHotkeyConfigFileExists()
+        {
+            string path = _MODEntry.HotkeyConfigPath;
+            if (string.IsNullOrEmpty(path) || File.Exists(path))
+            {
+                return;
+            }
+
+            WriteHotkeyConfig(path, settingsWindowHotkey);
+            hotkeyConfigLastWriteUtc = GetHotkeyConfigWriteTimeUtc(path);
+        }
+
+        private static void WriteHotkeyConfig(string path, KeyCode hotkey)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllLines(path, new string[]
+            {
+                "# OC2MenuManager hotkey config",
+                "# Edit the value after Hotkey= and save the file.",
+                "# Valid values use Unity KeyCode names, for example: F6, F7, Alpha1, Keypad1, Home.",
+                "# Use Hotkey=None if you want to disable the launch hotkey.",
+                "# The mod will reload this file automatically within a few seconds.",
+                "Hotkey=" + hotkey
+            });
+        }
+
+        private static bool TryParseHotkeyConfig(string path, out KeyCode hotkey)
+        {
+            hotkey = DefaultSettingsWindowHotkey;
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            string[] lines = File.ReadAllLines(path);
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string line = lines[i];
+                if (line == null)
+                {
+                    continue;
+                }
+
+                string trimmed = line.Trim();
+                if (trimmed.Length == 0
+                    || trimmed.StartsWith("#", StringComparison.Ordinal)
+                    || trimmed.StartsWith("//", StringComparison.Ordinal)
+                    || trimmed.StartsWith(";", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                string value = trimmed;
+                int separatorIndex = trimmed.IndexOf('=');
+                if (separatorIndex >= 0)
+                {
+                    string key = trimmed.Substring(0, separatorIndex).Trim();
+                    if (!string.Equals(key, "Hotkey", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    value = trimmed.Substring(separatorIndex + 1).Trim();
+                }
+
+                try
+                {
+                    KeyCode parsed = (KeyCode)Enum.Parse(typeof(KeyCode), value, true);
+                    hotkey = parsed;
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            return false;
+        }
+
+        private static DateTime GetHotkeyConfigWriteTimeUtc(string path)
+        {
+            try
+            {
+                return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : DateTime.MinValue;
+            }
+            catch
+            {
+                return DateTime.MinValue;
             }
         }
 
@@ -1016,19 +1180,20 @@ namespace HostUtilities
             GUILayout.Label("打开菜单管理窗口", GUILayout.Width(SettingsLabelWidth));
             string hotkeyText = capturingHotkey
                 ? "按任意键..."
-                : (settingsWindowHotkey != null ? settingsWindowHotkey.Value.ToString() : KeyCode.None.ToString());
+                : settingsWindowHotkey.ToString();
             if (GUILayout.Button(hotkeyText, GUILayout.Width(140f)))
             {
                 capturingHotkey = !capturingHotkey;
             }
-            if (GUILayout.Button("重置", GUILayout.Width(SettingsActionButtonWidth)) && settingsWindowHotkey != null)
+            if (GUILayout.Button("重置", GUILayout.Width(SettingsActionButtonWidth)))
             {
-                settingsWindowHotkey.Value = KeyCode.F6;
+                settingsWindowHotkey = DefaultSettingsWindowHotkey;
+                SaveHotkeyConfig();
                 capturingHotkey = false;
             }
             GUILayout.FlexibleSpace();
             GUILayout.EndHorizontal();
-            DrawInfoText("点击当前热键后可重新绑定；独立窗口默认使用 F6 打开。");
+            DrawInfoText("热键保存在 BepInEx/config/OC2MenuManager.hotkey.txt。点击当前热键可改写该文件，也可以直接编辑文本文件。");
             GUILayout.EndVertical();
         }
 
@@ -1261,8 +1426,7 @@ namespace HostUtilities
                     if (RunPreparedBootstrapStep())
                     {
                         preparedSourceBootstrapComplete = true;
-                        RefreshDirtyPreparedSources(int.MaxValue);
-                        nextPreparedSourceRefreshFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
+                        nextPreparedSourceRefreshFrame = Time.frameCount;
                         nextPreparedSourcePruneFrame = Time.frameCount + PreparedSourcePruneIntervalFrames;
                     }
                     else
@@ -3338,6 +3502,8 @@ namespace HostUtilities
             info.InternalName = recipe.name;
             info.EnglishName = DishNameCatalog.GetEnglishName(recipe.name);
             info.ChineseName = DishNameCatalog.GetChineseFullName(recipe.name);
+            info.CategoryName = DishNameCatalog.GetCategoryName(recipe.name);
+            info.CategoryTier = DishNameCatalog.GetCategoryTier(recipe.name);
             info.Definition = recipe;
             scene.RecipesById.Add(info.Id, info);
             scene.OrderedRecipes.Add(info);
@@ -3600,6 +3766,21 @@ namespace HostUtilities
                     }
                 }
 
+                int positiveProbabilityCompare = (b.Probability > 0d ? 1 : 0).CompareTo(a.Probability > 0d ? 1 : 0);
+                if (positiveProbabilityCompare != 0)
+                {
+                    return positiveProbabilityCompare;
+                }
+
+                if (a.Probability > 0d && b.Probability > 0d)
+                {
+                    int categoryCompare = a.Recipe.CategoryTier.CompareTo(b.Recipe.CategoryTier);
+                    if (categoryCompare != 0)
+                    {
+                        return categoryCompare;
+                    }
+                }
+
                 int probabilityCompare = b.Probability.CompareTo(a.Probability);
                 if (probabilityCompare != 0)
                 {
@@ -3621,8 +3802,8 @@ namespace HostUtilities
             builder.Append(chinese ? "已追踪 " : "Tracking ");
             builder.Append(rows.Count).Append('/').Append(scene.OrderedRecipes.Count).Append('\n');
             builder.Append(showPrepared
-                ? (chinese ? "排序: 未备优先 > 在单按菜单顺序 > 概率 > 上单" : "Rank: Not-ready first > Menu by ticket order > Prob > Served")
-                : (chinese ? "排序: 在单按菜单顺序 > 概率 > 上单" : "Rank: Menu by ticket order > Prob > Served")).Append('\n');
+                ? (chinese ? "排序: 未备优先 > 在单按菜单顺序 > 正概率优先 > 类别(仅正概率) > 概率 > 上单" : "Rank: Not-ready first > Menu by ticket order > Positive prob first > Category (positive only) > Prob > Served")
+                : (chinese ? "排序: 在单按菜单顺序 > 正概率优先 > 类别(仅正概率) > 概率 > 上单" : "Rank: Menu by ticket order > Positive prob first > Category (positive only) > Prob > Served")).Append('\n');
             builder.Append(WrapRichValue(chinese ? "蓝=上单" : "Blue=Served", overlayServedValueColor != null ? overlayServedValueColor.Value : new Color(0.58f, 0.84f, 1f, 1f)));
             builder.Append(" | ");
             builder.Append(WrapRichValue(chinese ? "金=概率" : "Gold=Prob", overlayProbabilityValueColor != null ? overlayProbabilityValueColor.Value : new Color(1f, 0.84f, 0.40f, 1f)));
@@ -4171,6 +4352,15 @@ namespace HostUtilities
             }
 
             if (removedAny)
+            {
+                config.Save();
+            }
+        }
+
+        private static void RemoveLegacySettingsWindowHotkeyEntry()
+        {
+            ConfigFile config = _MODEntry.SettingsConfig;
+            if (config.Remove(LegacySettingsWindowHotkeyDefinition))
             {
                 config.Save();
             }
