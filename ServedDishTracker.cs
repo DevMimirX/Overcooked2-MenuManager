@@ -74,9 +74,9 @@ namespace HostUtilities
         {
             private static readonly Color PanelBackgroundColor = new Color(0f, 0f, 0f, 0.58f);
             private const float PanelPadding = 10f;
-            private const int OverlayRebuildIntervalFrames = 10;
             private readonly GUIStyle textStyle = new GUIStyle();
             private string cachedText = string.Empty;
+            private int lastOverlaySignature = int.MinValue;
 
             public override void OnSetUp()
             {
@@ -84,13 +84,15 @@ namespace HostUtilities
 
             public override void OnUpdate()
             {
-                if (!overlayDirty && Time.frameCount < lastOverlayBuildFrame + OverlayRebuildIntervalFrames)
+                int overlaySignature = ComputeOverlayContentSignature();
+                if (!overlayDirty && overlaySignature == lastOverlaySignature)
                 {
                     return;
                 }
 
                 cachedText = BuildOverlayText();
                 overlayDirty = false;
+                lastOverlaySignature = overlaySignature;
                 lastOverlayBuildFrame = Time.frameCount;
             }
 
@@ -165,6 +167,9 @@ namespace HostUtilities
             }
         }
 
+        private static readonly Color SettingsWindowBodyColor = new Color(0.10f, 0.10f, 0.10f, 0.96f);
+        private static readonly Color SettingsWindowHeaderColor = new Color(0.17f, 0.17f, 0.17f, 0.98f);
+
         private sealed class OverlayRow
         {
             public RecipeInfo Recipe;
@@ -172,6 +177,7 @@ namespace HostUtilities
             public int Served;
             public int Prepared;
             public int OnMenu;
+            public int EarliestMenuOrder;
 
             public void Reset()
             {
@@ -180,6 +186,7 @@ namespace HostUtilities
                 Served = 0;
                 Prepared = 0;
                 OnMenu = 0;
+                EarliestMenuOrder = int.MaxValue;
             }
         }
 
@@ -221,18 +228,27 @@ namespace HostUtilities
         private const int MaxDishSelectorDisplayLength = 26;
         private const int MaxOverlaySceneDisplayLength = 24;
         private const int MaxOverlayDishDisplayLength = 12;
+        private const int SettingsWindowId = 49271;
+        private const float SettingsWindowDefaultWidth = 860f;
+        private const float SettingsWindowDefaultHeight = 760f;
+        private const float SettingsWindowMinWidth = 760f;
+        private const float SettingsWindowMinHeight = 620f;
+        private const float SettingsWindowMargin = 24f;
+        private const float SettingsLabelWidth = 210f;
+        private const float SettingsDescriptionWidth = 560f;
+        private const float SettingsActionButtonWidth = 66f;
+        private const float SceneDropdownMaxHeight = 180f;
         private const int SceneRefreshIntervalInRound = 600;
         private const int SceneRefreshIntervalInRoundWithConfigOpen = 30;
         private const int SceneRefreshIntervalOutOfRound = 20;
-        private const int ConfigCustomizationIntervalInRound = 600;
-        private const int ConfigCustomizationIntervalInRoundWithConfigOpen = 30;
-        private const int ConfigCustomizationIntervalOutOfRound = 30;
         private const int DiscoveryFlushIntervalFrames = 900;
-        private const int ConfigurationWindowPollIntervalFrames = 10;
-        private const int ControllerLookupIntervalFrames = 30;
-        private const int PreparedSourceRefreshIntervalFrames = 2;
-        private const int MaxPreparedSourceRefreshesPerBatch = 8;
-        private const int PreparedSourcePruneIntervalFrames = 300;
+        private const int ControllerLookupIntervalFrames = 120;
+        private const int ControllerLookupRetryIntervalFrames = 15;
+        private const int PreparedSourceRefreshIntervalFrames = 4;
+        private const int MaxPreparedSourceRefreshesPerBatch = 4;
+        private const int PreparedSourcePruneIntervalFrames = 600;
+        private const int PreparedBootstrapStepIntervalFrames = 2;
+        private const int TicketWidgetRetryIntervalFrames = 6;
 
         private static readonly Dictionary<string, HashSet<int>> TrackedIdsByScene = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, SceneInfo> SceneCache = new Dictionary<string, SceneInfo>(StringComparer.OrdinalIgnoreCase);
@@ -255,14 +271,13 @@ namespace HostUtilities
         private static readonly Dictionary<int, double> ProbabilityByRecipeBuffer = new Dictionary<int, double>();
         private static readonly Dictionary<int, double> ProbabilityWeightsByRecipeBuffer = new Dictionary<int, double>();
         private static readonly Dictionary<int, int> PreparedRemainingByRecipeBuffer = new Dictionary<int, int>();
+        private static readonly Dictionary<int, int> MenuOrderByRecipeBuffer = new Dictionary<int, int>();
         private static readonly StringBuilder OverlayTextBuilder = new StringBuilder(768);
         private static readonly TeamID[] TeamIds = (TeamID[])Enum.GetValues(typeof(TeamID));
 
         private static readonly ConfigDefinition LegacyEnabledDefinition = new ConfigDefinition("03-已送菜品追踪", "启用已送菜品追踪");
         private static readonly ConfigDefinition LegacyLanguageDefinition = new ConfigDefinition("03-已送菜品追踪", "显示语言");
         private static readonly ConfigDefinition LegacySelectedSceneStateDefinition = new ConfigDefinition("99-内部", "已选关卡内部状态");
-        private static readonly ConfigDefinition SceneSelectorDefinition = new ConfigDefinition(TrackerSection, SceneSelectorKey);
-        private static readonly ConfigDefinition TrackerPanelDefinition = new ConfigDefinition(DishSelectionSection, "关卡与菜品选择器");
         private static readonly ConfigDefinition[] LegacyConfigDefinitions = new ConfigDefinition[]
         {
             new ConfigDefinition("03-已送菜品追踪", "启用已送菜品追踪"),
@@ -279,9 +294,9 @@ namespace HostUtilities
 
         private static ConfigEntry<bool> enabled;
         private static ConfigEntry<bool> preparedTrackingEnabled;
+        private static ConfigEntry<bool> menuTicketTintEnabled;
         private static ConfigEntry<TrackerLanguage> languageMode;
-        private static ConfigEntry<string> selectedScene;
-        private static ConfigEntry<string> trackerPanel;
+        private static ConfigEntry<KeyCode> settingsWindowHotkey;
         private static ConfigEntry<int> overlayX;
         private static ConfigEntry<int> overlayY;
         private static ConfigEntry<int> overlayWidth;
@@ -305,8 +320,8 @@ namespace HostUtilities
         private static string lastIdScanLog = string.Empty;
         private static string lastConfigSyncError = string.Empty;
         private static string lastSceneRefreshContext = string.Empty;
-        private static string lastConfigurationManagerIntegrationError = string.Empty;
         private static string preferredSceneName = string.Empty;
+        private static string selectedSceneName = string.Empty;
         private static bool? migratedEnabledValue;
         private static TrackerLanguage? migratedLanguageValue;
         private static readonly FieldInfo ActiveOrdersField = typeof(ClientOrderControllerBase).GetField("m_activeOrders", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -316,17 +331,6 @@ namespace HostUtilities
             : null;
         private static readonly FieldInfo RecipeWidgetDisplayConfigField = typeof(RecipeWidgetUIController).GetField("m_displayConfig", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeWidgetTopDisplayConfigField = typeof(RecipeWidgetUIController).GetField("m_topDisplayConfig", BindingFlags.Instance | BindingFlags.NonPublic);
-        private static Assembly configurationManagerAssembly;
-        private static Type configurationManagerType;
-        private static Type configSettingEntryType;
-        private static FieldInfo configurationManagerAllSettingsField;
-        private static PropertyInfo configurationManagerDisplayingWindowProperty;
-        private static FieldInfo configurationManagerDisplayingWindowField;
-        private static PropertyInfo configSettingEntryEntryProperty;
-        private static bool configurationManagerReflectionInitialized;
-        private static UnityEngine.Object cachedConfigurationManagerObject;
-        private static int lastConfigurationCustomizationSignature;
-        private static int lastConfigurationManagerInstanceId;
         private static ClientFlowControllerBase cachedClientFlowController;
         private static int nextClientFlowLookupFrame;
         private static ClientKitchenFlowControllerBase cachedKitchenFlowController;
@@ -334,21 +338,32 @@ namespace HostUtilities
         private static string currentOnMenuCountsSceneName = string.Empty;
         private static bool currentOnMenuCountsDirty = true;
         private static int nextTrackedSceneRefreshPollFrame;
-        private static int nextConfigurationCustomizationFrame;
         private static int nextDiscoveryFlushFrame;
-        private static int nextConfigurationWindowPollFrame;
         private static int nextPreparedSourceRefreshFrame;
         private static int nextPreparedSourcePruneFrame;
+        private static int nextPreparedBootstrapFrame;
+        private static int nextTicketWidgetRefreshFrame;
         private static int lastOverlayBuildFrame = int.MinValue;
+        private static int cachedCurrentSceneInfoFrame = int.MinValue;
         private static bool overlayVisible;
         private static bool overlayDirty = true;
         private static bool ticketWidgetsDirty = true;
-        private static bool configurationWindowOpenCached;
-        private static bool lastConfigurationWindowOpen;
+        private static bool ticketWidgetTintActive;
+        private static bool cachedCurrentSceneInfoValid;
+        private static bool lastMenuTicketTintEnabled = true;
         private static bool preparedSourceBootstrapComplete;
+        private static bool settingsWindowVisible;
+        private static bool sceneDropdownExpanded;
+        private static bool capturingHotkey;
+        private static int lastSettingsWindowToggleFrame = int.MinValue;
+        private static int preparedSourceBootstrapStage;
+        private static SceneInfo cachedCurrentSceneInfo;
         private static string overlayHeaderText = string.Empty;
         private static string overlayFooterText = string.Empty;
         private static string preparedSourceSceneName = string.Empty;
+        private static Rect settingsWindowRect = new Rect(140f, 90f, SettingsWindowDefaultWidth, SettingsWindowDefaultHeight);
+        private static Vector2 settingsWindowScrollPosition = Vector2.zero;
+        private static Vector2 sceneDropdownScrollPosition = Vector2.zero;
 
         public static void Awake()
         {
@@ -357,91 +372,94 @@ namespace HostUtilities
             RemoveLegacyConfigEntries();
             RemoveGeneratedConfigEntries();
 
-            enabled = _MODEntry.Instance.Config.Bind<bool>(
+            enabled = _MODEntry.SettingsConfig.Bind<bool>(
                 TrackerSection,
                 "启用历史菜单追踪",
                 migratedEnabledValue ?? true,
-                "标准关卡历史菜单追踪。先在本分组里选择关卡，再到“04-历史菜单菜品”里勾选要追踪的菜品。进入关卡时会自动锁定为当前关卡。");
-            preparedTrackingEnabled = _MODEntry.Instance.Config.Bind<bool>(
+                "标准关卡历史菜单追踪。先在独立菜单窗口里选择关卡，再勾选要追踪的菜品。进入关卡时会自动锁定为当前关卡。");
+            preparedTrackingEnabled = _MODEntry.SettingsConfig.Bind<bool>(
                 TrackerSection,
                 "启用已备跟踪",
                 true,
                 "跟踪已完成但尚未上菜的成品。这个功能开销更高，默认开启。");
-            languageMode = _MODEntry.Instance.Config.Bind<TrackerLanguage>(
+            menuTicketTintEnabled = _MODEntry.SettingsConfig.Bind<bool>(
+                TrackerSection,
+                "菜单颜色",
+                true,
+                "是否给关卡内真实菜单票据染色。橙色=在单未备，绿色=已备。关闭后可以进一步降低运行开销。");
+            settingsWindowHotkey = _MODEntry.SettingsConfig.Bind<KeyCode>(
+                "00-菜单管理",
+                "打开菜单管理窗口",
+                KeyCode.F6,
+                "打开或关闭 OC2MenuManager 独立菜单窗口。");
+            languageMode = _MODEntry.SettingsConfig.Bind<TrackerLanguage>(
                 TrackerSection,
                 "显示语言",
                 migratedLanguageValue ?? TrackerLanguage.Auto,
                 "Auto / English / Chinese");
-            overlayX = _MODEntry.Instance.Config.Bind<int>(
+            overlayX = _MODEntry.SettingsConfig.Bind<int>(
                 TrackerSection,
                 "悬浮窗X",
                 40,
                 new ConfigDescription("历史菜单追踪悬浮窗左上角 X 坐标。默认在左侧中部。", new AcceptableValueRange<int>(0, 4000)));
-            overlayY = _MODEntry.Instance.Config.Bind<int>(
+            overlayY = _MODEntry.SettingsConfig.Bind<int>(
                 TrackerSection,
                 "悬浮窗Y",
                 300,
                 new ConfigDescription("历史菜单追踪悬浮窗左上角 Y 坐标。", new AcceptableValueRange<int>(0, 4000)));
-            overlayWidth = _MODEntry.Instance.Config.Bind<int>(
+            overlayWidth = _MODEntry.SettingsConfig.Bind<int>(
                 TrackerSection,
                 "悬浮窗宽度",
                 280,
                 new ConfigDescription("历史菜单追踪悬浮窗宽度。", new AcceptableValueRange<int>(240, 1600)));
-            overlayHeight = _MODEntry.Instance.Config.Bind<int>(
+            overlayHeight = _MODEntry.SettingsConfig.Bind<int>(
                 TrackerSection,
                 "悬浮窗高度",
                 340,
                 new ConfigDescription("历史菜单追踪悬浮窗高度。", new AcceptableValueRange<int>(120, 1600)));
-            overlayFontSize = _MODEntry.Instance.Config.Bind<int>(
+            overlayFontSize = _MODEntry.SettingsConfig.Bind<int>(
                 TrackerSection,
                 "悬浮窗字体大小",
                 15,
                 new ConfigDescription("历史菜单追踪悬浮窗字体大小。", new AcceptableValueRange<int>(8, 48)));
-            overlayFontColor = _MODEntry.Instance.Config.Bind<Color>(
+            overlayFontColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "悬浮窗字体颜色",
                 new Color(1f, 1f, 1f, 1f),
                 "历史菜单追踪悬浮窗字体颜色。");
-            overlayServedValueColor = _MODEntry.Instance.Config.Bind<Color>(
+            overlayServedValueColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "悬浮窗上单数量颜色",
                 new Color(0.58f, 0.84f, 1f, 1f),
                 "历史菜单追踪悬浮窗中“上单数量”数值的颜色。");
-            overlayProbabilityValueColor = _MODEntry.Instance.Config.Bind<Color>(
+            overlayProbabilityValueColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "悬浮窗概率颜色",
                 new Color(1f, 0.84f, 0.40f, 1f),
                 "历史菜单追踪悬浮窗中“概率”数值的颜色。");
-            overlayPreparedValueColor = _MODEntry.Instance.Config.Bind<Color>(
+            overlayPreparedValueColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "悬浮窗已备颜色",
                 new Color(1f, 0.56f, 0.76f, 1f),
                 "历史菜单追踪悬浮窗中“已备”数值的颜色。");
-            overlayBoldFont = _MODEntry.Instance.Config.Bind<bool>(
+            overlayBoldFont = _MODEntry.SettingsConfig.Bind<bool>(
                 TrackerSection,
                 "悬浮窗粗体",
                 false,
                 "是否使用粗体显示历史菜单追踪悬浮窗文字。");
-            overlayMaxDisplayDishes = _MODEntry.Instance.Config.Bind<int>(
+            overlayMaxDisplayDishes = _MODEntry.SettingsConfig.Bind<int>(
                 TrackerSection,
                 "悬浮窗最大显示菜品数",
                 12,
                 new ConfigDescription("历史菜单追踪悬浮窗最多显示多少道菜。", new AcceptableValueRange<int>(1, 40)));
-            overlayTextAlignment = _MODEntry.Instance.Config.Bind<OverlayTextAlignment>(
+            overlayTextAlignment = _MODEntry.SettingsConfig.Bind<OverlayTextAlignment>(
                 TrackerSection,
                 "悬浮窗文本对齐",
                 OverlayTextAlignment.Left,
                 "Left / Right / Center");
-            selectedScene = _MODEntry.Instance.Config.Bind<string>(
-                SceneSelectorDefinition,
-                NoSceneSelectorValue,
-                new ConfigDescription("在这里选择要配置追踪菜品的关卡。进入关卡时会自动锁定到当前关卡。"));
-            trackerPanel = _MODEntry.Instance.Config.Bind<string>(
-                TrackerPanelDefinition,
-                string.Empty,
-                new ConfigDescription("在这里勾选当前选中关卡的追踪菜品。"));
 
             LoadSelections();
+            CenterSettingsWindow();
 
             overlayHost = new DebugOverlayHost(
                 GetOverlayTextAnchor,
@@ -456,15 +474,25 @@ namespace HostUtilities
 
         public static void Update()
         {
-            bool inActiveRound = IsInActiveRound();
-            bool configurationWindowOpen = IsConfigurationManagerWindowOpenCached();
-            if (configurationWindowOpen != lastConfigurationWindowOpen)
+            KeyCode hotkey = GetSettingsWindowHotkey();
+            if (!capturingHotkey && hotkey != KeyCode.None && Input.GetKeyDown(hotkey))
             {
-                lastConfigurationWindowOpen = configurationWindowOpen;
-                nextTrackedSceneRefreshPollFrame = 0;
-                nextConfigurationCustomizationFrame = 0;
-                lastConfigurationCustomizationSignature = 0;
-                lastConfigurationManagerInstanceId = 0;
+                ToggleSettingsWindowVisibility();
+            }
+
+            if (settingsWindowVisible && Input.GetKeyDown(KeyCode.Escape))
+            {
+                settingsWindowVisible = false;
+                sceneDropdownExpanded = false;
+                capturingHotkey = false;
+            }
+
+            bool inActiveRound = IsInActiveRound();
+            bool shouldTintMenuTickets = IsMenuTicketTintEnabled();
+            if (shouldTintMenuTickets != lastMenuTicketTintEnabled)
+            {
+                lastMenuTicketTintEnabled = shouldTintMenuTickets;
+                InvalidateTicketWidgets();
             }
 
             if (IsPreparedTrackingEnabled())
@@ -484,9 +512,22 @@ namespace HostUtilities
                     ClearTicketWidgetState();
                 }
             }
+            else if (!shouldTintMenuTickets)
+            {
+                if (ticketWidgetTintActive)
+                {
+                    RestoreAllTicketWidgetTints();
+                }
+
+                ticketWidgetsDirty = false;
+                nextTicketWidgetRefreshFrame = 0;
+            }
             else if (ticketWidgetsDirty)
             {
-                RefreshTicketWidgetTints();
+                if (Time.frameCount >= nextTicketWidgetRefreshFrame)
+                {
+                    RefreshTicketWidgetTints();
+                }
             }
 
             overlayVisible = ShouldShowOverlay(inActiveRound);
@@ -496,12 +537,9 @@ namespace HostUtilities
             }
 
             int sceneRefreshInterval = inActiveRound
-                ? (configurationWindowOpen ? SceneRefreshIntervalInRoundWithConfigOpen : SceneRefreshIntervalInRound)
+                ? (settingsWindowVisible ? SceneRefreshIntervalInRoundWithConfigOpen : SceneRefreshIntervalInRound)
                 : SceneRefreshIntervalOutOfRound;
-            int configCustomizationInterval = inActiveRound
-                ? (configurationWindowOpen ? ConfigCustomizationIntervalInRoundWithConfigOpen : ConfigCustomizationIntervalInRound)
-                : ConfigCustomizationIntervalOutOfRound;
-            bool shouldMaintainConfigUi = !inActiveRound || configurationWindowOpen;
+            bool shouldMaintainConfigUi = settingsWindowVisible;
 
             if (shouldMaintainConfigUi && Time.frameCount >= nextTrackedSceneRefreshPollFrame)
             {
@@ -522,12 +560,6 @@ namespace HostUtilities
 
                     nextTrackedSceneRefreshPollFrame = Time.frameCount + sceneRefreshInterval;
                 }
-            }
-
-            if (shouldMaintainConfigUi && Time.frameCount >= nextConfigurationCustomizationFrame)
-            {
-                TryCustomizeConfigurationManagerSettings();
-                nextConfigurationCustomizationFrame = Time.frameCount + configCustomizationInterval;
             }
 
             if (!inActiveRound && Time.frameCount >= nextDiscoveryFlushFrame)
@@ -551,6 +583,509 @@ namespace HostUtilities
             {
                 overlayHost.OnGUI();
             }
+
+            if (!settingsWindowVisible)
+            {
+                return;
+            }
+
+            Event currentEvent = Event.current;
+            KeyCode hotkey = GetSettingsWindowHotkey();
+            if (capturingHotkey && currentEvent != null && currentEvent.isKey && currentEvent.type == EventType.KeyDown)
+            {
+                if (currentEvent.keyCode != KeyCode.None)
+                {
+                    settingsWindowHotkey.Value = currentEvent.keyCode;
+                }
+                capturingHotkey = false;
+                currentEvent.Use();
+            }
+            else if (!capturingHotkey
+                && currentEvent != null
+                && currentEvent.type == EventType.KeyDown
+                && currentEvent.keyCode == hotkey
+                && hotkey != KeyCode.None)
+            {
+                ToggleSettingsWindowVisibility();
+                currentEvent.Use();
+            }
+
+            EnsureSettingsWindowRect();
+            Color previousColor = GUI.color;
+            Color previousBackgroundColor = GUI.backgroundColor;
+            Color previousContentColor = GUI.contentColor;
+            GUI.color = Color.white;
+            GUI.backgroundColor = Color.white;
+            GUI.contentColor = Color.white;
+            settingsWindowRect = GUI.Window(SettingsWindowId, settingsWindowRect, DrawSettingsWindow, "菜单管理");
+            GUI.color = previousColor;
+            GUI.backgroundColor = previousBackgroundColor;
+            GUI.contentColor = previousContentColor;
+        }
+
+        private static KeyCode GetSettingsWindowHotkey()
+        {
+            if (settingsWindowHotkey == null || settingsWindowHotkey.Value == KeyCode.None)
+            {
+                return KeyCode.F6;
+            }
+
+            return settingsWindowHotkey.Value;
+        }
+
+        private static void ToggleSettingsWindowVisibility()
+        {
+            if (lastSettingsWindowToggleFrame == Time.frameCount)
+            {
+                return;
+            }
+
+            lastSettingsWindowToggleFrame = Time.frameCount;
+            settingsWindowVisible = !settingsWindowVisible;
+            sceneDropdownExpanded = false;
+            if (settingsWindowVisible)
+            {
+                nextTrackedSceneRefreshPollFrame = 0;
+            }
+        }
+
+        private static void CenterSettingsWindow()
+        {
+            float width = Mathf.Max(SettingsWindowMinWidth, SettingsWindowDefaultWidth * Mathf.Max(1f, _MODEntry.dpiScaleFactor));
+            float height = Mathf.Max(SettingsWindowMinHeight, SettingsWindowDefaultHeight * Mathf.Max(1f, _MODEntry.dpiScaleFactor));
+            float x = Mathf.Max(SettingsWindowMargin, (Screen.width - width) * 0.5f);
+            float y = Mathf.Max(SettingsWindowMargin, (Screen.height - height) * 0.5f);
+            settingsWindowRect = new Rect(x, y, width, height);
+        }
+
+        private static void EnsureSettingsWindowRect()
+        {
+            if (settingsWindowRect.width < SettingsWindowMinWidth || settingsWindowRect.height < SettingsWindowMinHeight)
+            {
+                settingsWindowRect.width = Mathf.Max(SettingsWindowMinWidth, settingsWindowRect.width);
+                settingsWindowRect.height = Mathf.Max(SettingsWindowMinHeight, settingsWindowRect.height);
+            }
+
+            float maxX = Mathf.Max(SettingsWindowMargin, Screen.width - settingsWindowRect.width - SettingsWindowMargin);
+            float maxY = Mathf.Max(SettingsWindowMargin, Screen.height - settingsWindowRect.height - SettingsWindowMargin);
+            settingsWindowRect.x = Mathf.Clamp(settingsWindowRect.x, SettingsWindowMargin, maxX);
+            settingsWindowRect.y = Mathf.Clamp(settingsWindowRect.y, SettingsWindowMargin, maxY);
+        }
+
+        private static void DrawSettingsWindow(int windowId)
+        {
+            Color previousColor = GUI.color;
+            Color previousBackgroundColor = GUI.backgroundColor;
+            Color previousContentColor = GUI.contentColor;
+            GUI.color = SettingsWindowBodyColor;
+            GUI.DrawTexture(new Rect(4f, 24f, Mathf.Max(1f, settingsWindowRect.width - 8f), Mathf.Max(1f, settingsWindowRect.height - 28f)), Texture2D.whiteTexture);
+            GUI.color = SettingsWindowHeaderColor;
+            GUI.DrawTexture(new Rect(1f, 1f, Mathf.Max(1f, settingsWindowRect.width - 2f), 24f), Texture2D.whiteTexture);
+            GUI.color = Color.white;
+            GUI.backgroundColor = Color.white;
+            GUI.contentColor = Color.white;
+
+            GUILayout.BeginVertical();
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("OC2MenuManager", GUILayout.ExpandWidth(true));
+            if (GUILayout.Button("关闭", GUILayout.Width(72f)))
+            {
+                settingsWindowVisible = false;
+                sceneDropdownExpanded = false;
+                capturingHotkey = false;
+            }
+            GUILayout.EndHorizontal();
+
+            GUILayout.Space(4f);
+            settingsWindowScrollPosition = GUILayout.BeginScrollView(settingsWindowScrollPosition);
+            DrawSceneAndDishSelectionSection();
+            DrawTrackingSettingsSection();
+            DrawFeatureToggleSection();
+            DrawOverlaySettingsSection();
+            DrawStandaloneUiSection();
+            GUILayout.EndScrollView();
+            GUILayout.EndVertical();
+
+            GUI.color = previousColor;
+            GUI.backgroundColor = previousBackgroundColor;
+            GUI.contentColor = previousContentColor;
+
+            GUI.DragWindow(new Rect(0f, 0f, settingsWindowRect.width, 28f));
+        }
+
+        private static void DrawStandaloneUiSection()
+        {
+            DrawSectionHeader("界面");
+            DrawIntSliderRow("MOD的UI字体大小", _MODEntry.defaultFontSize, 5, 40, "独立菜单窗口与悬浮窗共用的基础字体大小。");
+            DrawColorRow("MOD的UI字体颜色", _MODEntry.defaultFontColor, "独立菜单窗口与悬浮窗共用的基础字体颜色。");
+            DrawHotkeyRow();
+        }
+
+        private static void DrawFeatureToggleSection()
+        {
+            DrawSectionHeader("功能开关");
+            DrawToggleRow("麻团好菜单", MenuManager.IsCarnivalMenuGoodEnabled, delegate(bool value)
+            {
+                if (MenuManager.isCarnivalMenuGood != null)
+                {
+                    MenuManager.isCarnivalMenuGood.Value = value;
+                }
+            }, "第一道菜没有葱，前两道菜不是蛋糕。");
+            DrawToggleRow("麻团好蛋糕", MenuManager.IsCarnivalCakeGoodEnabled, delegate(bool value)
+            {
+                if (MenuManager.isCarnivalCakeGood != null)
+                {
+                    MenuManager.isCarnivalCakeGood.Value = value;
+                }
+            }, "提高蛋糕相关菜单出现概率。");
+            DrawToggleRow("麻团TAS菜单", MenuManager.IsCarnivalMenuFixedEnabled, delegate(bool value)
+            {
+                if (MenuManager.isCarnivalMenuFixed != null)
+                {
+                    MenuManager.isCarnivalMenuFixed.Value = value;
+                }
+            }, "固定麻团菜单为 TAS 专用路线。");
+            DrawToggleRow("无菜单", NoMenuMode.IsEnabled, delegate(bool value)
+            {
+                NoMenuMode.SetEnabled(value);
+            }, "启用无菜单模式。");
+        }
+
+        private static void DrawTrackingSettingsSection()
+        {
+            DrawSectionHeader("历史菜单追踪");
+            DrawToggleRow("启用历史菜单追踪", enabled != null && enabled.Value, delegate(bool value)
+            {
+                if (enabled != null)
+                {
+                    enabled.Value = value;
+                }
+            }, "标准关卡历史菜单追踪。");
+            DrawToggleRow("启用已备跟踪", IsPreparedTrackingEnabled(), delegate(bool value)
+            {
+                if (preparedTrackingEnabled != null)
+                {
+                    preparedTrackingEnabled.Value = value;
+                    if (!value)
+                    {
+                        ClearPreparedState();
+                        InvalidateOverlay();
+                    }
+                }
+            }, "跟踪已完成但尚未上菜的成品。");
+            DrawToggleRow("菜单颜色", IsMenuTicketTintEnabled(), delegate(bool value)
+            {
+                if (menuTicketTintEnabled != null)
+                {
+                    menuTicketTintEnabled.Value = value;
+                    InvalidateTicketWidgets();
+                }
+            }, "给关卡内真实菜单票据染色。橙色=在单未备，绿色=已备。");
+            DrawEnumCycleRow("显示语言", GetTrackerLanguageLabel(languageMode != null ? languageMode.Value : TrackerLanguage.Auto), delegate()
+            {
+                if (languageMode != null)
+                {
+                    languageMode.Value = NextLanguage(languageMode.Value);
+                    InvalidateOverlay();
+                }
+            }, "点击切换 Auto / English / Chinese。");
+            DrawInfoText("颜色说明：橙名=在单未备，绿名=已备。关卡内菜单票据也会同步使用这套颜色。");
+        }
+
+        private static void DrawOverlaySettingsSection()
+        {
+            DrawSectionHeader("悬浮窗");
+            DrawIntSliderRow("悬浮窗X", overlayX, 0, 4000, "悬浮窗左上角 X 坐标。");
+            DrawIntSliderRow("悬浮窗Y", overlayY, 0, 4000, "悬浮窗左上角 Y 坐标。");
+            DrawIntSliderRow("悬浮窗宽度", overlayWidth, 240, 1600, "历史菜单追踪悬浮窗宽度。");
+            DrawIntSliderRow("悬浮窗高度", overlayHeight, 120, 1600, "历史菜单追踪悬浮窗高度。");
+            DrawIntSliderRow("悬浮窗字体大小", overlayFontSize, 8, 48, "历史菜单追踪悬浮窗字体大小。");
+            DrawToggleRow("悬浮窗粗体", overlayBoldFont != null && overlayBoldFont.Value, delegate(bool value)
+            {
+                if (overlayBoldFont != null)
+                {
+                    overlayBoldFont.Value = value;
+                }
+            }, "是否使用粗体显示悬浮窗文字。");
+            DrawIntSliderRow("悬浮窗最大显示菜品数", overlayMaxDisplayDishes, 1, 40, "悬浮窗最多显示多少道菜。");
+            DrawEnumCycleRow("悬浮窗文本对齐", GetOverlayAlignmentLabel(overlayTextAlignment != null ? overlayTextAlignment.Value : OverlayTextAlignment.Left), delegate()
+            {
+                if (overlayTextAlignment != null)
+                {
+                    overlayTextAlignment.Value = NextAlignment(overlayTextAlignment.Value);
+                    InvalidateOverlay();
+                }
+            }, "点击切换 Left / Right / Center。");
+            DrawColorRow("悬浮窗字体颜色", overlayFontColor, "悬浮窗普通文字颜色。");
+            DrawColorRow("悬浮窗上单数量颜色", overlayServedValueColor, "悬浮窗中“上单数量”数值颜色。");
+            DrawColorRow("悬浮窗概率颜色", overlayProbabilityValueColor, "悬浮窗中“概率”数值颜色。");
+            DrawColorRow("悬浮窗已备颜色", overlayPreparedValueColor, "悬浮窗中“已备”数值颜色。");
+        }
+
+        private static void DrawSceneAndDishSelectionSection()
+        {
+            DrawSectionHeader("菜单追踪");
+            SceneInfo scene = SyncSceneSelectorConfigEntry();
+            List<SceneInfo> selectableScenes = GetSelectableScenes();
+            bool locked = IsLockedToCurrentScene();
+
+            DrawSceneSelectorRow(scene, selectableScenes, locked);
+            DrawTrackingPanel(null);
+        }
+
+        private static void DrawSceneSelectorRow(SceneInfo selectedSceneInfo, List<SceneInfo> selectableScenes, bool locked)
+        {
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(SceneSelectorKey, GUILayout.Width(SettingsLabelWidth));
+            if (locked)
+            {
+                GUILayout.Label(GetSceneSelectorValue(selectedSceneInfo), GUI.skin.textField, GUILayout.ExpandWidth(true));
+            }
+            else
+            {
+                string buttonText = GetSceneSelectorValue(selectedSceneInfo);
+                if (GUILayout.Button(buttonText, GUILayout.ExpandWidth(true)))
+                {
+                    sceneDropdownExpanded = !sceneDropdownExpanded;
+                }
+            }
+            GUILayout.EndHorizontal();
+
+            if (locked)
+            {
+                DrawInfoText("当前在关卡内，关卡选择已自动锁定为本局关卡。");
+            }
+            else if (sceneDropdownExpanded)
+            {
+                sceneDropdownScrollPosition = GUILayout.BeginScrollView(sceneDropdownScrollPosition, GUILayout.MinHeight(88f), GUILayout.MaxHeight(SceneDropdownMaxHeight));
+                if (selectableScenes == null || selectableScenes.Count == 0)
+                {
+                    GUILayout.Label(NoSceneSelectorValue);
+                }
+                else
+                {
+                    for (int i = 0; i < selectableScenes.Count; i++)
+                    {
+                        SceneInfo selectableScene = selectableScenes[i];
+                        if (selectableScene == null)
+                        {
+                            continue;
+                        }
+
+                        bool isCurrent = string.Equals(selectedSceneName, selectableScene.SceneName, StringComparison.OrdinalIgnoreCase);
+                        string label = GetSceneSelectorValue(selectableScene);
+                        if (GUILayout.Button((isCurrent ? "✓ " : string.Empty) + label, GUILayout.ExpandWidth(true)))
+                        {
+                            if (!isCurrent)
+                            {
+                                selectedSceneName = selectableScene.SceneName;
+                                preferredSceneName = selectableScene.SceneName;
+                                SyncSceneSelectorConfigEntry();
+                            }
+
+                            sceneDropdownExpanded = false;
+                        }
+                    }
+                }
+                GUILayout.EndScrollView();
+            }
+
+            GUILayout.EndVertical();
+        }
+
+        private static void DrawSectionHeader(string title)
+        {
+            GUILayout.Space(6f);
+            GUILayout.Label(title, GUI.skin.box, GUILayout.ExpandWidth(true));
+        }
+
+        private static void DrawInfoText(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return;
+            }
+
+            GUILayout.Label(text, GUILayout.Width(SettingsDescriptionWidth), GUILayout.ExpandWidth(true));
+        }
+
+        private static void DrawToggleRow(string label, bool value, Action<bool> setter, string description)
+        {
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(SettingsLabelWidth));
+            bool nextValue = GUILayout.Toggle(value, value ? "启用" : "关闭", GUILayout.Width(88f));
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            if (nextValue != value && setter != null)
+            {
+                setter(nextValue);
+            }
+
+            DrawInfoText(description);
+            GUILayout.EndVertical();
+        }
+
+        private static void DrawEnumCycleRow(string label, string valueText, Action onCycle, string description)
+        {
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(SettingsLabelWidth));
+            if (GUILayout.Button(valueText, GUILayout.Width(220f)) && onCycle != null)
+            {
+                onCycle();
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            DrawInfoText(description);
+            GUILayout.EndVertical();
+        }
+
+        private static void DrawIntSliderRow(string label, ConfigEntry<int> entry, int minValue, int maxValue, string description)
+        {
+            if (entry == null)
+            {
+                return;
+            }
+
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(SettingsLabelWidth));
+            int nextValue = Mathf.RoundToInt(GUILayout.HorizontalSlider(entry.Value, minValue, maxValue, GUILayout.Width(260f)));
+            GUILayout.Label(nextValue.ToString(), GUILayout.Width(56f));
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            if (nextValue != entry.Value)
+            {
+                entry.Value = nextValue;
+                InvalidateOverlay();
+            }
+
+            DrawInfoText(description);
+            GUILayout.EndVertical();
+        }
+
+        private static void DrawColorRow(string label, ConfigEntry<Color> entry, string description)
+        {
+            if (entry == null)
+            {
+                return;
+            }
+
+            Color value = entry.Value;
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(SettingsLabelWidth));
+            Color previousColor = GUI.color;
+            GUI.color = value;
+            GUILayout.Box(string.Empty, GUILayout.Width(42f), GUILayout.Height(18f));
+            GUI.color = previousColor;
+            GUILayout.Label(ColorUtility.ToHtmlStringRGBA(value), GUILayout.Width(96f));
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+
+            value.r = DrawColorChannelSlider("R", value.r);
+            value.g = DrawColorChannelSlider("G", value.g);
+            value.b = DrawColorChannelSlider("B", value.b);
+            value.a = DrawColorChannelSlider("A", value.a);
+            if (value != entry.Value)
+            {
+                entry.Value = value;
+                InvalidateOverlay();
+            }
+
+            DrawInfoText(description);
+            GUILayout.EndVertical();
+        }
+
+        private static float DrawColorChannelSlider(string label, float value)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(18f));
+            float nextValue = GUILayout.HorizontalSlider(value, 0f, 1f, GUILayout.Width(240f));
+            GUILayout.Label(Mathf.RoundToInt(nextValue * 255f).ToString(), GUILayout.Width(36f));
+            GUILayout.EndHorizontal();
+            return nextValue;
+        }
+
+        private static void DrawHotkeyRow()
+        {
+            GUILayout.BeginVertical(GUI.skin.box);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("打开菜单管理窗口", GUILayout.Width(SettingsLabelWidth));
+            string hotkeyText = capturingHotkey
+                ? "按任意键..."
+                : (settingsWindowHotkey != null ? settingsWindowHotkey.Value.ToString() : KeyCode.None.ToString());
+            if (GUILayout.Button(hotkeyText, GUILayout.Width(140f)))
+            {
+                capturingHotkey = !capturingHotkey;
+            }
+            if (GUILayout.Button("重置", GUILayout.Width(SettingsActionButtonWidth)) && settingsWindowHotkey != null)
+            {
+                settingsWindowHotkey.Value = KeyCode.F6;
+                capturingHotkey = false;
+            }
+            GUILayout.FlexibleSpace();
+            GUILayout.EndHorizontal();
+            DrawInfoText("点击当前热键后可重新绑定；独立窗口默认使用 F6 打开。");
+            GUILayout.EndVertical();
+        }
+
+        private static TrackerLanguage NextLanguage(TrackerLanguage value)
+        {
+            if (value == TrackerLanguage.Auto)
+            {
+                return TrackerLanguage.English;
+            }
+
+            if (value == TrackerLanguage.English)
+            {
+                return TrackerLanguage.Chinese;
+            }
+
+            return TrackerLanguage.Auto;
+        }
+
+        private static string GetTrackerLanguageLabel(TrackerLanguage value)
+        {
+            switch (value)
+            {
+                case TrackerLanguage.English:
+                    return "English";
+                case TrackerLanguage.Chinese:
+                    return "Chinese";
+                default:
+                    return "Auto";
+            }
+        }
+
+        private static OverlayTextAlignment NextAlignment(OverlayTextAlignment value)
+        {
+            if (value == OverlayTextAlignment.Left)
+            {
+                return OverlayTextAlignment.Center;
+            }
+
+            if (value == OverlayTextAlignment.Center)
+            {
+                return OverlayTextAlignment.Right;
+            }
+
+            return OverlayTextAlignment.Left;
+        }
+
+        private static string GetOverlayAlignmentLabel(OverlayTextAlignment value)
+        {
+            switch (value)
+            {
+                case OverlayTextAlignment.Center:
+                    return "Center";
+                case OverlayTextAlignment.Right:
+                    return "Right";
+                default:
+                    return "Left";
+            }
         }
 
         private static void InvalidateOverlay()
@@ -561,11 +1096,17 @@ namespace HostUtilities
         private static void InvalidateTicketWidgets()
         {
             ticketWidgetsDirty = true;
+            nextTicketWidgetRefreshFrame = 0;
         }
 
         private static bool IsPreparedTrackingEnabled()
         {
             return preparedTrackingEnabled != null && preparedTrackingEnabled.Value;
+        }
+
+        private static bool IsMenuTicketTintEnabled()
+        {
+            return menuTicketTintEnabled != null && menuTicketTintEnabled.Value;
         }
 
         private static void ClearOnMenuCounts()
@@ -599,7 +1140,9 @@ namespace HostUtilities
             PreparedSourceRefreshBuffer.Clear();
             nextPreparedSourceRefreshFrame = 0;
             nextPreparedSourcePruneFrame = 0;
+            nextPreparedBootstrapFrame = 0;
             preparedSourceBootstrapComplete = false;
+            preparedSourceBootstrapStage = 0;
             preparedSourceSceneName = string.Empty;
             if (hadPreparedState)
             {
@@ -617,6 +1160,18 @@ namespace HostUtilities
             TicketWidgetsByInstanceId.Clear();
             TicketWidgetsBuffer.Clear();
             ticketWidgetsDirty = false;
+            ticketWidgetTintActive = false;
+            nextTicketWidgetRefreshFrame = 0;
+        }
+
+        private static void RestoreAllTicketWidgetTints()
+        {
+            foreach (TicketWidgetState state in TicketWidgetsByInstanceId.Values)
+            {
+                RestoreTicketWidgetTint(state);
+            }
+
+            ticketWidgetTintActive = false;
         }
 
         private static void IncrementOnMenuCount(string sceneName, int recipeId)
@@ -701,11 +1256,21 @@ namespace HostUtilities
 
             if (!preparedSourceBootstrapComplete)
             {
-                BootstrapPreparedSources();
-                preparedSourceBootstrapComplete = true;
-                nextPreparedSourceRefreshFrame = Time.frameCount;
-                RefreshDirtyPreparedSources(int.MaxValue);
-                nextPreparedSourcePruneFrame = Time.frameCount + PreparedSourcePruneIntervalFrames;
+                if (Time.frameCount >= nextPreparedBootstrapFrame)
+                {
+                    if (RunPreparedBootstrapStep())
+                    {
+                        preparedSourceBootstrapComplete = true;
+                        RefreshDirtyPreparedSources(int.MaxValue);
+                        nextPreparedSourceRefreshFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
+                        nextPreparedSourcePruneFrame = Time.frameCount + PreparedSourcePruneIntervalFrames;
+                    }
+                    else
+                    {
+                        nextPreparedBootstrapFrame = Time.frameCount + PreparedBootstrapStepIntervalFrames;
+                    }
+                }
+
                 return;
             }
 
@@ -754,7 +1319,7 @@ namespace HostUtilities
             if (cachedClientFlowController == null || Time.frameCount >= nextClientFlowLookupFrame)
             {
                 cachedClientFlowController = UnityEngine.Object.FindObjectOfType<ClientFlowControllerBase>();
-                nextClientFlowLookupFrame = Time.frameCount + ControllerLookupIntervalFrames;
+                nextClientFlowLookupFrame = Time.frameCount + (cachedClientFlowController != null ? ControllerLookupIntervalFrames : ControllerLookupRetryIntervalFrames);
             }
 
             return cachedClientFlowController;
@@ -765,7 +1330,7 @@ namespace HostUtilities
             if (cachedKitchenFlowController == null || Time.frameCount >= nextKitchenFlowLookupFrame)
             {
                 cachedKitchenFlowController = UnityEngine.Object.FindObjectOfType<ClientKitchenFlowControllerBase>();
-                nextKitchenFlowLookupFrame = Time.frameCount + ControllerLookupIntervalFrames;
+                nextKitchenFlowLookupFrame = Time.frameCount + (cachedKitchenFlowController != null ? ControllerLookupIntervalFrames : ControllerLookupRetryIntervalFrames);
             }
 
             return cachedKitchenFlowController;
@@ -819,6 +1384,9 @@ namespace HostUtilities
             cachedKitchenFlowController = null;
             nextClientFlowLookupFrame = 0;
             nextKitchenFlowLookupFrame = 0;
+            cachedCurrentSceneInfo = null;
+            cachedCurrentSceneInfoValid = false;
+            cachedCurrentSceneInfoFrame = int.MinValue;
             ClearOnMenuCounts();
             ClearPreparedState();
             InvalidateOverlay();
@@ -966,13 +1534,41 @@ namespace HostUtilities
 
         private static void BootstrapPreparedSources()
         {
-            RegisterPreparedSources(FindObjectsSafe<ClientPlate>());
-            RegisterPreparedSources(FindObjectsSafe<ClientCookableContainer>());
-            RegisterPreparedSources(FindObjectsSafe<ClientPreparationContainer>());
-            RegisterPreparedSources(FindObjectsSafe<ClientItemContainer>());
-            RegisterPreparedSources(FindObjectsSafe<ClientLadleContainer>());
-            RegisterPreparedSources(FindObjectsSafe<ClientMixableContainer>());
-            PrunePreparedSources();
+            while (!RunPreparedBootstrapStep())
+            {
+            }
+        }
+
+        private static bool RunPreparedBootstrapStep()
+        {
+            switch (preparedSourceBootstrapStage)
+            {
+                case 0:
+                    RegisterPreparedSources(FindObjectsSafe<ClientPlate>());
+                    break;
+                case 1:
+                    RegisterPreparedSources(FindObjectsSafe<ClientCookableContainer>());
+                    break;
+                case 2:
+                    RegisterPreparedSources(FindObjectsSafe<ClientPreparationContainer>());
+                    break;
+                case 3:
+                    RegisterPreparedSources(FindObjectsSafe<ClientItemContainer>());
+                    break;
+                case 4:
+                    RegisterPreparedSources(FindObjectsSafe<ClientLadleContainer>());
+                    break;
+                case 5:
+                    RegisterPreparedSources(FindObjectsSafe<ClientMixableContainer>());
+                    break;
+                default:
+                    PrunePreparedSources();
+                    preparedSourceBootstrapStage = 0;
+                    return true;
+            }
+
+            preparedSourceBootstrapStage++;
+            return false;
         }
 
         private static T[] FindObjectsSafe<T>() where T : Component
@@ -1428,12 +2024,10 @@ namespace HostUtilities
 
             lastSceneRefreshContext = refreshContext;
             bool inActiveRound = IsInActiveRound();
-            nextSceneRefreshFrame = Time.frameCount + (inActiveRound ? SceneRefreshIntervalInRound : SceneRefreshIntervalOutOfRound);
-            if (contextChanged || forceRefresh)
-            {
-                nextConfigurationCustomizationFrame = 0;
-                lastConfigurationCustomizationSignature = 0;
-            }
+            int refreshInterval = inActiveRound
+                ? (settingsWindowVisible ? SceneRefreshIntervalInRoundWithConfigOpen : SceneRefreshIntervalInRound)
+                : SceneRefreshIntervalOutOfRound;
+            nextSceneRefreshFrame = Time.frameCount + refreshInterval;
 
             KnownScenes.Clear();
             HashSet<string> seenScenes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -1512,11 +2106,9 @@ namespace HostUtilities
             List<SceneInfo> selectableScenes = GetSelectableScenes();
             RebuildSceneSelectorMaps(selectableScenes);
             string desiredSceneName = ResolveDesiredSceneName(selectableScenes);
-            SceneInfo desiredScene = selectableScenes.FirstOrDefault(scene => string.Equals(scene.SceneName, desiredSceneName, StringComparison.OrdinalIgnoreCase));
-            string desiredSelectorValue = GetSceneSelectorValue(desiredScene);
-            if (selectedScene != null && !string.Equals(selectedScene.Value, desiredSelectorValue, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(selectedSceneName, desiredSceneName, StringComparison.OrdinalIgnoreCase))
             {
-                selectedScene.Value = desiredSelectorValue;
+                selectedSceneName = desiredSceneName;
             }
 
             SceneInfo selectedSceneInfo;
@@ -1559,8 +2151,7 @@ namespace HostUtilities
             }
 
             string selectedSceneName;
-            if (selectedScene != null
-                && TryResolveSceneNameFromSelectorValue(selectableScenes, selectedScene.Value, out selectedSceneName))
+            if (TryResolveSceneNameFromSelectorValue(selectableScenes, ServedDishTracker.selectedSceneName, out selectedSceneName))
             {
                 return selectedSceneName;
             }
@@ -1577,16 +2168,18 @@ namespace HostUtilities
         private static bool TryResolveSelectedScene(List<SceneInfo> selectableScenes, out SceneInfo selectedSceneInfo)
         {
             selectedSceneInfo = null;
-            if (selectableScenes == null || selectableScenes.Count == 0 || selectedScene == null)
+            if (selectableScenes == null || selectableScenes.Count == 0)
             {
                 return false;
             }
 
             string selectedSceneName;
-            if (!TryResolveSceneNameFromSelectorValue(selectableScenes, selectedScene.Value, out selectedSceneName))
+            if (!TryResolveSceneNameFromSelectorValue(selectableScenes, ServedDishTracker.selectedSceneName, out selectedSceneName))
             {
                 selectedSceneName = selectableScenes[0].SceneName;
             }
+
+            ServedDishTracker.selectedSceneName = selectedSceneName;
 
             for (int i = 0; i < selectableScenes.Count; i++)
             {
@@ -1685,23 +2278,6 @@ namespace HostUtilities
             }
         }
 
-        private static object[] BuildSceneSelectorAcceptableValues()
-        {
-            List<string> selectorValues = new List<string>(OrderedSceneSelectorValues);
-            if (selectorValues.Count == 0)
-            {
-                selectorValues.Add(NoSceneSelectorValue);
-            }
-
-            object[] values = new object[selectorValues.Count];
-            for (int i = 0; i < selectorValues.Count; i++)
-            {
-                values[i] = selectorValues[i];
-            }
-
-            return values;
-        }
-
         private static string GetRecipeConfigName(RecipeInfo recipe)
         {
             if (!string.IsNullOrEmpty(recipe.ChineseName) && !string.IsNullOrEmpty(recipe.EnglishName))
@@ -1762,7 +2338,7 @@ namespace HostUtilities
 
             if (scene.OrderedRecipes.Count == 0)
             {
-                GUILayout.Label("这个 DIY 关卡的菜谱还没有被读取。请先进入一次该关卡，然后回到 F1 再勾选要追踪的菜品。");
+                GUILayout.Label("这个 DIY 关卡的菜谱还没有被读取。请先进入一次该关卡，然后再打开菜单窗口勾选要追踪的菜品。");
                 GUILayout.EndVertical();
                 return;
             }
@@ -1866,10 +2442,10 @@ namespace HostUtilities
             state.TopDisplayConfig = topDisplayConfig;
             state.OriginalDisplayTint = displayConfig.m_tint;
             state.OriginalTopTint = topDisplayConfig.m_tint;
-            state.CachedImages = widget.gameObject.RequestComponentsRecursive<Image>();
+            state.CachedImages = null;
             state.AppliedDisplayTint = state.OriginalDisplayTint;
             state.AppliedTopTint = state.OriginalTopTint;
-            state.HasAppliedTint = true;
+            state.HasAppliedTint = false;
             TicketWidgetsByInstanceId[instanceId] = state;
             InvalidateTicketWidgets();
         }
@@ -1903,16 +2479,11 @@ namespace HostUtilities
             ApplyTicketWidgetTint(state, state.OriginalDisplayTint, state.OriginalTopTint);
         }
 
-        private static void ApplyTicketWidgetTint(TicketWidgetState state, Color displayTint, Color topTint)
+        private static bool ApplyTicketWidgetTint(TicketWidgetState state, Color displayTint, Color topTint)
         {
             if (state == null)
             {
-                return;
-            }
-
-            if (state.HasAppliedTint && state.AppliedDisplayTint == displayTint && state.AppliedTopTint == topTint)
-            {
-                return;
+                return false;
             }
 
             if (state.DisplayConfig != null)
@@ -1927,20 +2498,23 @@ namespace HostUtilities
 
             if (state.Widget == null)
             {
-                return;
+                state.HasAppliedTint = false;
+                return false;
             }
 
-            Image[] images = state.CachedImages;
-            if (images == null)
+            Image[] images = ResolveTicketWidgetImages(state);
+            if (images == null || images.Length == 0)
             {
-                images = state.Widget.gameObject.RequestComponentsRecursive<Image>();
-                state.CachedImages = images;
-                if (images == null)
-                {
-                    return;
-                }
+                state.HasAppliedTint = false;
+                return false;
             }
 
+            if (state.HasAppliedTint && state.AppliedDisplayTint == displayTint && state.AppliedTopTint == topTint)
+            {
+                return true;
+            }
+
+            bool appliedAny = false;
             for (int i = 0; i < images.Length; i++)
             {
                 Image image = images[i];
@@ -1969,18 +2543,77 @@ namespace HostUtilities
                 }
 
                 image.color = imageTint;
+                appliedAny = true;
+            }
+
+            if (!appliedAny)
+            {
+                state.HasAppliedTint = false;
+                return false;
             }
 
             state.AppliedDisplayTint = displayTint;
             state.AppliedTopTint = topTint;
             state.HasAppliedTint = true;
+            return true;
+        }
+
+        private static Image[] ResolveTicketWidgetImages(TicketWidgetState state)
+        {
+            if (state == null || state.Widget == null)
+            {
+                return null;
+            }
+
+            Image[] images = state.CachedImages;
+            if (HasUsableTicketImages(images))
+            {
+                return images;
+            }
+
+            images = state.Widget.gameObject.RequestComponentsRecursive<Image>();
+            if (!HasUsableTicketImages(images))
+            {
+                try
+                {
+                    state.Widget.RefreshSubElements();
+                }
+                catch
+                {
+                }
+
+                images = state.Widget.gameObject.RequestComponentsRecursive<Image>();
+            }
+
+            state.CachedImages = images;
+            return images;
+        }
+
+        private static bool HasUsableTicketImages(Image[] images)
+        {
+            if (images == null || images.Length == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < images.Length; i++)
+            {
+                if (images[i] != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void RefreshTicketWidgetTints()
         {
-            ticketWidgetsDirty = false;
             if (TicketWidgetsByInstanceId.Count == 0)
             {
+                ticketWidgetsDirty = false;
+                ticketWidgetTintActive = false;
+                nextTicketWidgetRefreshFrame = 0;
                 return;
             }
 
@@ -1988,6 +2621,18 @@ namespace HostUtilities
             if (!TryGetCurrentSceneInfo(out scene) || scene == null)
             {
                 ClearTicketWidgetState();
+                return;
+            }
+
+            if (!HasAnyTrackedRecipes(scene))
+            {
+                if (ticketWidgetTintActive)
+                {
+                    RestoreAllTicketWidgetTints();
+                }
+
+                ticketWidgetsDirty = false;
+                nextTicketWidgetRefreshFrame = 0;
                 return;
             }
 
@@ -2025,12 +2670,17 @@ namespace HostUtilities
                 return a.Order.CompareTo(b.Order);
             });
 
+            bool needsRetry = false;
+            bool appliedTint = false;
             for (int i = 0; i < TicketWidgetsBuffer.Count; i++)
             {
                 TicketWidgetState state = TicketWidgetsBuffer[i];
                 if (!IsTracked(scene, state.RecipeId))
                 {
-                    RestoreTicketWidgetTint(state);
+                    if (!ApplyTicketWidgetTint(state, state.OriginalDisplayTint, state.OriginalTopTint))
+                    {
+                        needsRetry = true;
+                    }
                     continue;
                 }
 
@@ -2048,8 +2698,19 @@ namespace HostUtilities
                 Color tint = hasPreparedAssignment
                     ? new Color(0.86f, 0.98f, 0.86f, 1f)
                     : new Color(1f, 0.76f, 0.34f, 1f);
-                ApplyTicketWidgetTint(state, tint, tint);
+                if (!ApplyTicketWidgetTint(state, tint, tint))
+                {
+                    needsRetry = true;
+                }
+                else
+                {
+                    appliedTint = true;
+                }
             }
+
+            ticketWidgetsDirty = needsRetry;
+            ticketWidgetTintActive = appliedTint;
+            nextTicketWidgetRefreshFrame = needsRetry ? Time.frameCount + TicketWidgetRetryIntervalFrames : 0;
         }
 
         private static void SetAllTracked(SceneInfo scene, bool shouldTrack)
@@ -2065,300 +2726,6 @@ namespace HostUtilities
             }
 
             SaveSelections();
-        }
-
-        private static void TryCustomizeConfigurationManagerSettings()
-        {
-            try
-            {
-                if (!EnsureConfigurationManagerReflection())
-                {
-                    return;
-                }
-
-                object configurationManager = GetConfigurationManagerInstance();
-                if (configurationManager == null)
-                {
-                    return;
-                }
-
-                IList settings = configurationManagerAllSettingsField.GetValue(configurationManager) as IList;
-                if (settings == null)
-                {
-                    return;
-                }
-
-                for (int j = 0; j < settings.Count; j++)
-                {
-                    object settingEntry = settings[j];
-                    ConfigEntryBase entry = configSettingEntryEntryProperty.GetValue(settingEntry, null) as ConfigEntryBase;
-                    if (entry == null)
-                    {
-                        continue;
-                    }
-
-                    try
-                    {
-                        if (IsSameDefinition(entry.Definition, TrackerPanelDefinition))
-                        {
-                            CustomizeTrackerPanelSetting(settingEntry);
-                        }
-                        else if (IsSameDefinition(entry.Definition, SceneSelectorDefinition))
-                        {
-                            CustomizeSceneSelectorSetting(settingEntry);
-                        }
-                        else if (IsSameDefinition(entry.Definition, LegacySelectedSceneStateDefinition)
-                            || IsLegacyTrackerDefinition(entry.Definition)
-                            || IsStaleDishSelectionDefinition(entry.Definition))
-                        {
-                            HideSetting(settingEntry);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        ConfigDefinition definition = entry.Definition;
-                        _MODEntry.LogWarning("[ServedDishTracker] Skipped one ConfigurationManager entry customization: "
-                            + (definition != null ? definition.Section : "(unknown)") + "/"
-                            + (definition != null ? definition.Key : "(unknown)") + " -> "
-                            + ex.GetType().Name + ": " + ex.Message);
-                    }
-                }
-
-                int instanceId = ((UnityEngine.Object)configurationManager).GetInstanceID();
-                lastConfigurationManagerInstanceId = instanceId;
-                lastConfigurationCustomizationSignature = ComputeConfigurationCustomizationSignature(instanceId, settings.Count);
-            }
-            catch (Exception ex)
-            {
-                string errorText = ex.GetType().Name + ": " + ex.Message;
-                if (!string.Equals(lastConfigurationManagerIntegrationError, errorText, StringComparison.Ordinal))
-                {
-                    lastConfigurationManagerIntegrationError = errorText;
-                    _MODEntry.LogError("[ServedDishTracker] Failed to customize ConfigurationManager entries: " + ex);
-                }
-            }
-        }
-
-        private static bool EnsureConfigurationManagerReflection()
-        {
-            if (configurationManagerReflectionInitialized)
-            {
-                return configurationManagerType != null
-                    && configSettingEntryType != null
-                    && configurationManagerAllSettingsField != null
-                    && configSettingEntryEntryProperty != null;
-            }
-
-            configurationManagerAssembly = AppDomain.CurrentDomain.GetAssemblies()
-                .FirstOrDefault(assembly => string.Equals(assembly.GetName().Name, "ConfigurationManager", StringComparison.Ordinal));
-            if (configurationManagerAssembly == null)
-            {
-                return false;
-            }
-
-            configurationManagerType = configurationManagerAssembly.GetType("ConfigurationManager.ConfigurationManager");
-            configSettingEntryType = configurationManagerAssembly.GetType("ConfigurationManager.ConfigSettingEntry");
-            if (configurationManagerType == null || configSettingEntryType == null)
-            {
-                return false;
-            }
-
-            configurationManagerAllSettingsField = configurationManagerType.GetField("_allSettings", BindingFlags.NonPublic | BindingFlags.Instance);
-            configurationManagerDisplayingWindowProperty = configurationManagerType.GetProperty("DisplayingWindow", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            configurationManagerDisplayingWindowField = configurationManagerType.GetField("_displayingWindow", BindingFlags.NonPublic | BindingFlags.Instance);
-            configSettingEntryEntryProperty = configSettingEntryType.GetProperty("Entry", BindingFlags.Public | BindingFlags.Instance);
-            configurationManagerReflectionInitialized = true;
-            return configurationManagerAllSettingsField != null && configSettingEntryEntryProperty != null;
-        }
-
-        private static object GetConfigurationManagerInstance()
-        {
-            if (cachedConfigurationManagerObject == null)
-            {
-                if (configurationManagerType == null)
-                {
-                    return null;
-                }
-
-                UnityEngine.Object[] configurationManagers = Resources.FindObjectsOfTypeAll(configurationManagerType);
-                cachedConfigurationManagerObject = configurationManagers != null && configurationManagers.Length > 0
-                    ? configurationManagers[0]
-                    : null;
-            }
-
-            return cachedConfigurationManagerObject;
-        }
-
-        private static bool IsConfigurationManagerWindowOpen()
-        {
-            if (!EnsureConfigurationManagerReflection())
-            {
-                return false;
-            }
-
-            object configurationManager = GetConfigurationManagerInstance();
-            if (configurationManager == null)
-            {
-                return false;
-            }
-
-            try
-            {
-                if (configurationManagerDisplayingWindowProperty != null)
-                {
-                    object value = configurationManagerDisplayingWindowProperty.GetValue(configurationManager, null);
-                    if (value is bool)
-                    {
-                        return (bool)value;
-                    }
-                }
-
-                if (configurationManagerDisplayingWindowField != null)
-                {
-                    object value = configurationManagerDisplayingWindowField.GetValue(configurationManager);
-                    if (value is bool)
-                    {
-                        return (bool)value;
-                    }
-                }
-            }
-            catch
-            {
-            }
-
-            return false;
-        }
-
-        private static bool IsConfigurationManagerWindowOpenCached()
-        {
-            if (Time.frameCount < nextConfigurationWindowPollFrame)
-            {
-                return configurationWindowOpenCached;
-            }
-
-            configurationWindowOpenCached = IsConfigurationManagerWindowOpen();
-            nextConfigurationWindowPollFrame = Time.frameCount + ConfigurationWindowPollIntervalFrames;
-            return configurationWindowOpenCached;
-        }
-
-        private static int ComputeConfigurationCustomizationSignature(int instanceId, int settingsCount)
-        {
-            unchecked
-            {
-                int hash = 17;
-                hash = (hash * 31) + instanceId;
-                hash = (hash * 31) + settingsCount;
-                hash = (hash * 31) + (selectedScene != null && selectedScene.Value != null ? selectedScene.Value.GetHashCode() : 0);
-                hash = (hash * 31) + OrderedSceneSelectorValues.Count;
-                hash = (hash * 31) + (enabled != null && enabled.Value ? 1 : 0);
-                for (int i = 0; i < OrderedSceneSelectorValues.Count; i++)
-                {
-                    string value = OrderedSceneSelectorValues[i];
-                    hash = (hash * 31) + (value != null ? value.GetHashCode() : 0);
-                }
-
-                return hash;
-            }
-        }
-
-        private static void CustomizeTrackerPanelSetting(object settingEntry)
-        {
-            TrySetRuntimeMember(settingEntry, "Browsable", true);
-            TrySetRuntimeMember(settingEntry, "HideSettingName", false);
-            TrySetRuntimeMember(settingEntry, "HideDefaultButton", true);
-            TrySetRuntimeMember(settingEntry, "DispName", "当前关卡菜品");
-            TrySetRuntimeMember(settingEntry, "Order", -100);
-            TrySetRuntimeMember(settingEntry, "CustomDrawer", new Action<ConfigEntryBase>(DrawTrackingPanel));
-        }
-
-        private static void CustomizeSceneSelectorSetting(object settingEntry)
-        {
-            object[] acceptableValues = BuildSceneSelectorAcceptableValues();
-            TrySetRuntimeMember(settingEntry, "Browsable", true);
-            TrySetRuntimeMember(settingEntry, "HideDefaultButton", false);
-            TrySetRuntimeMember(settingEntry, "HideSettingName", false);
-            TrySetRuntimeMember(settingEntry, "DispName", SceneSelectorKey);
-            TrySetRuntimeMember(settingEntry, "Order", -110);
-            TrySetRuntimeMember(settingEntry, "AcceptableValues", acceptableValues);
-        }
-
-        private static void HideSetting(object settingEntry)
-        {
-            TrySetRuntimeMember(settingEntry, "Browsable", false);
-            TrySetRuntimeMember(settingEntry, "HideDefaultButton", true);
-            TrySetRuntimeMember(settingEntry, "HideSettingName", true);
-        }
-
-        private static bool IsLegacyTrackerDefinition(ConfigDefinition definition)
-        {
-            if (definition == null)
-            {
-                return false;
-            }
-
-            if (string.Equals(definition.Section, "03-已送菜品追踪", StringComparison.Ordinal))
-            {
-                return true;
-            }
-
-            for (int i = 0; i < LegacyConfigDefinitions.Length; i++)
-            {
-                if (IsSameDefinition(definition, LegacyConfigDefinitions[i]))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool IsStaleDishSelectionDefinition(ConfigDefinition definition)
-        {
-            if (definition == null || string.IsNullOrEmpty(definition.Section))
-            {
-                return false;
-            }
-
-            return string.Equals(definition.Section, DishSelectionSection, StringComparison.Ordinal)
-                && !IsSameDefinition(definition, TrackerPanelDefinition);
-        }
-
-        private static bool IsSameDefinition(ConfigDefinition left, ConfigDefinition right)
-        {
-            return left != null
-                && right != null
-                && string.Equals(left.Section, right.Section, StringComparison.Ordinal)
-                && string.Equals(left.Key, right.Key, StringComparison.Ordinal);
-        }
-
-        private static void TrySetRuntimeMember(object target, string memberName, object value)
-        {
-            if (target == null)
-            {
-                return;
-            }
-
-            Type type = target.GetType();
-            PropertyInfo property = type.GetProperty(memberName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            if (property != null)
-            {
-                MethodInfo setter = property.GetSetMethod(true);
-                if (setter != null)
-                {
-                    setter.Invoke(target, new object[] { value });
-                    return;
-                }
-            }
-
-            FieldInfo field = type.GetField("<" + memberName + ">k__BackingField", BindingFlags.NonPublic | BindingFlags.Instance);
-            if (field == null)
-            {
-                field = type.GetField(memberName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            }
-            if (field != null)
-            {
-                field.SetValue(target, value);
-            }
         }
 
         private static void ApplyTrackedState(string sceneName, int recipeId, bool shouldTrack, bool save)
@@ -2980,10 +3347,19 @@ namespace HostUtilities
 
         private static bool TryGetCurrentSceneInfo(out SceneInfo scene)
         {
+            if (Time.frameCount == cachedCurrentSceneInfoFrame)
+            {
+                scene = cachedCurrentSceneInfo;
+                return cachedCurrentSceneInfoValid;
+            }
+
             scene = null;
             SceneDirectoryData.PerPlayerCountDirectoryEntry sceneVariant;
             if (!TryGetCurrentSceneVariant(out sceneVariant))
             {
+                cachedCurrentSceneInfoFrame = Time.frameCount;
+                cachedCurrentSceneInfo = null;
+                cachedCurrentSceneInfoValid = false;
                 return false;
             }
 
@@ -2993,11 +3369,17 @@ namespace HostUtilities
                 && scene != null
                 && (scene.OrderedRecipes.Count > 0 || levelConfig == null))
             {
+                cachedCurrentSceneInfoFrame = Time.frameCount;
+                cachedCurrentSceneInfo = scene;
+                cachedCurrentSceneInfoValid = true;
                 return true;
             }
 
             if (levelConfig == null || IsHordeLevel(levelConfig))
             {
+                cachedCurrentSceneInfoFrame = Time.frameCount;
+                cachedCurrentSceneInfo = null;
+                cachedCurrentSceneInfoValid = false;
                 return false;
             }
 
@@ -3008,7 +3390,10 @@ namespace HostUtilities
                 SceneCache[scene.SceneName] = scene;
             }
 
-            return scene != null;
+            cachedCurrentSceneInfoFrame = Time.frameCount;
+            cachedCurrentSceneInfo = scene;
+            cachedCurrentSceneInfoValid = scene != null;
+            return cachedCurrentSceneInfoValid;
         }
 
         private static RunInfo EnsureRun(SceneInfo scene)
@@ -3058,6 +3443,12 @@ namespace HostUtilities
             return counts != null && counts.TryGetValue(recipeId, out value) ? value : 0;
         }
 
+        private static int GetMenuOrder(Dictionary<int, int> menuOrders, int recipeId)
+        {
+            int value;
+            return menuOrders != null && menuOrders.TryGetValue(recipeId, out value) ? value : int.MaxValue;
+        }
+
         private static OverlayRow GetOrCreateOverlayRow(int index)
         {
             while (OverlayRowsBuffer.Count <= index)
@@ -3096,6 +3487,25 @@ namespace HostUtilities
             InvalidateOverlay();
         }
 
+        private static int ComputeOverlayContentSignature()
+        {
+            unchecked
+            {
+                int hash = 17;
+                hash = (hash * 31) + (enabled != null && enabled.Value ? 1 : 0);
+                hash = (hash * 31) + (preparedTrackingEnabled != null && preparedTrackingEnabled.Value ? 1 : 0);
+                hash = (hash * 31) + (overlayMaxDisplayDishes != null ? overlayMaxDisplayDishes.Value : 0);
+                hash = (hash * 31) + (int)(languageMode != null ? languageMode.Value : TrackerLanguage.Auto);
+                hash = (hash * 31) + (currentRun != null ? currentRun.TotalAdded : 0);
+                hash = (hash * 31) + (currentRun != null ? currentRun.CurrentPhaseIndex : 0);
+                hash = (hash * 31) + PreparedCountsByRecipe.Count;
+                hash = (hash * 31) + CurrentOnMenuCounts.Count;
+                hash = (hash * 31) + TicketWidgetsByInstanceId.Count;
+                hash = (hash * 31) + DirtyPreparedSourceIds.Count;
+                return hash;
+            }
+        }
+
         private static string BuildOverlayText()
         {
             overlayHeaderText = string.Empty;
@@ -3115,6 +3525,7 @@ namespace HostUtilities
             bool showPrepared = IsPreparedTrackingEnabled();
             RunInfo run = EnsureRun(scene);
             Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene);
+            Dictionary<int, int> menuOrderByRecipeId = BuildMenuOrderMap(scene);
             Dictionary<int, double> probabilityByRecipeId = BuildProbabilityMap(scene, run);
             List<OverlayRow> rows = OverlayRowsBuffer;
             int rowCount = 0;
@@ -3132,6 +3543,7 @@ namespace HostUtilities
                 row.Served = GetCount(run.ServedCounts, recipe.Id);
                 row.Prepared = showPrepared ? GetCount(PreparedCountsByRecipe, recipe.Id) : 0;
                 row.OnMenu = GetCount(currentMenuCounts, recipe.Id);
+                row.EarliestMenuOrder = GetMenuOrder(menuOrderByRecipeId, recipe.Id);
                 rowCount++;
             }
 
@@ -3150,8 +3562,8 @@ namespace HostUtilities
             {
                 OverlayRenderRowsBuffer.Clear();
                 return chinese
-                    ? "历史菜单追踪\n当前关卡没有勾选任何追踪菜品。\n请在 F1 配置窗口的 OC2MenuManager 标签页里勾选需要追踪的菜品。"
-                    : "Menu History Tracker\nNo dishes are tracked for this scene.\nUse the OC2MenuManager tab in the F1 config window to choose tracked dishes.";
+                ? "历史菜单追踪\n当前关卡没有勾选任何追踪菜品。\n请打开 OC2MenuManager 独立窗口勾选需要追踪的菜品。"
+                : "Menu History Tracker\nNo dishes are tracked for this scene.\nOpen the standalone OC2MenuManager window to choose tracked dishes.";
             }
 
             rows.Sort(delegate(OverlayRow a, OverlayRow b)
@@ -3177,6 +3589,17 @@ namespace HostUtilities
                     return onMenuCompare;
                 }
 
+                bool aOnMenuAndUnprepared = a.OnMenu > 0 && (!showPrepared || a.Prepared <= 0);
+                bool bOnMenuAndUnprepared = b.OnMenu > 0 && (!showPrepared || b.Prepared <= 0);
+                if (aOnMenuAndUnprepared && bOnMenuAndUnprepared)
+                {
+                    int menuOrderCompare = a.EarliestMenuOrder.CompareTo(b.EarliestMenuOrder);
+                    if (menuOrderCompare != 0)
+                    {
+                        return menuOrderCompare;
+                    }
+                }
+
                 int probabilityCompare = b.Probability.CompareTo(a.Probability);
                 if (probabilityCompare != 0)
                 {
@@ -3198,8 +3621,8 @@ namespace HostUtilities
             builder.Append(chinese ? "已追踪 " : "Tracking ");
             builder.Append(rows.Count).Append('/').Append(scene.OrderedRecipes.Count).Append('\n');
             builder.Append(showPrepared
-                ? (chinese ? "排序: 未备优先 > 在单 > 概率 > 上单" : "Rank: Not-ready first > Menu > Prob > Served")
-                : (chinese ? "排序: 在单 > 概率 > 上单" : "Rank: Menu > Prob > Served")).Append('\n');
+                ? (chinese ? "排序: 未备优先 > 在单按菜单顺序 > 概率 > 上单" : "Rank: Not-ready first > Menu by ticket order > Prob > Served")
+                : (chinese ? "排序: 在单按菜单顺序 > 概率 > 上单" : "Rank: Menu by ticket order > Prob > Served")).Append('\n');
             builder.Append(WrapRichValue(chinese ? "蓝=上单" : "Blue=Served", overlayServedValueColor != null ? overlayServedValueColor.Value : new Color(0.58f, 0.84f, 1f, 1f)));
             builder.Append(" | ");
             builder.Append(WrapRichValue(chinese ? "金=概率" : "Gold=Prob", overlayProbabilityValueColor != null ? overlayProbabilityValueColor.Value : new Color(1f, 0.84f, 0.40f, 1f)));
@@ -3440,6 +3863,32 @@ namespace HostUtilities
             }
 
             return CurrentOnMenuCounts;
+        }
+
+        private static Dictionary<int, int> BuildMenuOrderMap(SceneInfo scene)
+        {
+            MenuOrderByRecipeBuffer.Clear();
+            if (scene == null || TicketWidgetsByInstanceId.Count == 0)
+            {
+                return MenuOrderByRecipeBuffer;
+            }
+
+            foreach (KeyValuePair<int, TicketWidgetState> pair in TicketWidgetsByInstanceId)
+            {
+                TicketWidgetState state = pair.Value;
+                if (state == null || state.Widget == null || state.Order < 0 || !IsTracked(scene, state.RecipeId))
+                {
+                    continue;
+                }
+
+                int existingOrder;
+                if (!MenuOrderByRecipeBuffer.TryGetValue(state.RecipeId, out existingOrder) || state.Order < existingOrder)
+                {
+                    MenuOrderByRecipeBuffer[state.RecipeId] = state.Order;
+                }
+            }
+
+            return MenuOrderByRecipeBuffer;
         }
 
         private static void RebuildCurrentOnMenuCounts(string sceneName)
@@ -3706,7 +4155,7 @@ namespace HostUtilities
         private static void RemoveLegacyConfigEntries()
         {
             bool removedAny = false;
-            ConfigFile config = _MODEntry.Instance.Config;
+            ConfigFile config = _MODEntry.SettingsConfig;
 
             if (config.Remove(LegacySelectedSceneStateDefinition))
             {
@@ -3730,7 +4179,12 @@ namespace HostUtilities
         private static void RemoveGeneratedConfigEntries()
         {
             bool removedAny = false;
-            ConfigFile config = _MODEntry.Instance.Config;
+            ConfigFile config = _MODEntry.SettingsConfig;
+            if (config.Remove(new ConfigDefinition(TrackerSection, SceneSelectorKey)))
+            {
+                removedAny = true;
+            }
+
             List<ConfigDefinition> definitions = config.Keys.ToList();
             for (int i = 0; i < definitions.Count; i++)
             {
@@ -3759,7 +4213,7 @@ namespace HostUtilities
 
         private static T? TryGetLegacyValue<T>(ConfigDefinition definition) where T : struct
         {
-            ConfigFile config = _MODEntry.Instance.Config;
+            ConfigFile config = _MODEntry.SettingsConfig;
             if (!config.Keys.Contains(definition))
             {
                 return null;

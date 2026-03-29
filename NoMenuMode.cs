@@ -33,11 +33,11 @@ namespace HostUtilities
 
         public static void Awake()
         {
-            if (_MODEntry.Instance.Config.Remove(LegacyToggleKeyDefinition))
+            if (_MODEntry.SettingsConfig.Remove(LegacyToggleKeyDefinition))
             {
-                _MODEntry.Instance.Config.Save();
+                _MODEntry.SettingsConfig.Save();
             }
-            enabled = _MODEntry.Instance.Config.Bind<bool>("00-菜单管理", "无菜单", false, "启用内置无菜单模式，不依赖外部 OC2NoMenu.dll。");
+            enabled = _MODEntry.SettingsConfig.Bind<bool>("00-菜单管理", "无菜单", false, "启用内置无菜单模式，不依赖外部 OC2NoMenu.dll。");
             ModuleUtility.RegisterHarmony(typeof(NoMenuMode));
         }
 
@@ -46,6 +46,14 @@ namespace HostUtilities
             if (enabled != null)
             {
                 enabled.Value = !enabled.Value;
+            }
+        }
+
+        public static void SetEnabled(bool value)
+        {
+            if (enabled != null)
+            {
+                enabled.Value = value;
             }
         }
 

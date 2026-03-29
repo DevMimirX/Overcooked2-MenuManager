@@ -41,9 +41,9 @@ namespace HostUtilities
 
         public static void Awake()
         {
-            isCarnivalMenuGood = _MODEntry.Instance.Config.Bind<bool>("00-功能开关", "麻团好菜单", true, "第一道菜没有葱，前两道菜不是蛋糕");
-            isCarnivalCakeGood = _MODEntry.Instance.Config.Bind<bool>("00-功能开关", "麻团好蛋糕", true, "出蛋糕概率提高20%；47单前必出11蛋糕，50单前必出12蛋糕；55单前必出13蛋糕，56单前必出14蛋糕");
-            isCarnivalMenuFixed = _MODEntry.Instance.Config.Bind<bool>("00-功能开关", "麻团TAS菜单", false, "固定麻团菜单为TAS专用菜单");
+            isCarnivalMenuGood = _MODEntry.SettingsConfig.Bind<bool>("00-功能开关", "麻团好菜单", true, "第一道菜没有葱，前两道菜不是蛋糕");
+            isCarnivalCakeGood = _MODEntry.SettingsConfig.Bind<bool>("00-功能开关", "麻团好蛋糕", true, "出蛋糕概率提高20%；47单前必出11蛋糕，50单前必出12蛋糕；55单前必出13蛋糕，56单前必出14蛋糕");
+            isCarnivalMenuFixed = _MODEntry.SettingsConfig.Bind<bool>("00-功能开关", "麻团TAS菜单", false, "固定麻团菜单为TAS专用菜单");
             carnivalMenu = new int[1][];
             carnivalMenu[0] = new int[] {
                 3,5,7,8,1,4,6,0,2,5,6,2,1,4,8,7,3,0,7,3,1,4,0,6,2,8,5,8,
