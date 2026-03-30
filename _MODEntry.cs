@@ -43,6 +43,7 @@ namespace HostUtilities
         public static string modName;
         public static _MODEntry Instance;
         public static ConfigFile SettingsConfig { get; private set; }
+        public static string HotkeyConfigPath { get; private set; }
         public static float dpiScaleFactor = 1f;
         public static ConfigEntry<int> defaultFontSize;
         public static ConfigEntry<Color> defaultFontColor;
@@ -150,6 +151,7 @@ namespace HostUtilities
         {
             string standaloneConfigPath = Path.Combine(Paths.ConfigPath, PluginGuid + ".standalone.cfg");
             string legacyConfigPath = Path.Combine(Paths.ConfigPath, PluginGuid + ".cfg");
+            HotkeyConfigPath = Path.Combine(Paths.ConfigPath, "OC2MenuManager.hotkey.txt");
             if (!File.Exists(standaloneConfigPath) && File.Exists(legacyConfigPath))
             {
                 File.Copy(legacyConfigPath, standaloneConfigPath, true);

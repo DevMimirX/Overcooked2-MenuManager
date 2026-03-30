@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
@@ -16,6 +17,7 @@ namespace HostUtilities
         public static ConfigEntry<bool> isCarnivalMenuGood;
         public static ConfigEntry<bool> isCarnivalCakeGood;
         public static ConfigEntry<bool> isCarnivalMenuFixed;
+        private static readonly FieldInfo RoundInstanceCumulativeFrequenciesField = ResolveRoundInstanceCumulativeFrequenciesField();
 
         public static int[][] carnivalMenu;
 
@@ -112,16 +114,22 @@ namespace HostUtilities
 
         [HarmonyPrefix]
         [HarmonyPatch(typeof(RoundData), "GetWeight")]
-        public static bool RoundDataGetWeightPatch(ref float __result, RoundData __instance, RoundData.RoundInstanceData _instance, int _recipeIndex)
+        public static bool RoundDataGetWeightPatch(ref float __result, RoundData __instance, object _instance, int _recipeIndex)
         {
             LevelConfigBase kitchenLevelConfigBase = GameUtils.GetLevelConfig();
             if (kitchenLevelConfigBase.name.StartsWith("Day_3_4") && isCarnivalMenuGood.Value && !isCarnivalMenuFixed.Value)
             {
+                int[] cumulativeFrequencies = GetRoundInstanceCumulativeFrequencies(_instance);
+                if (cumulativeFrequencies == null || cumulativeFrequencies.Length == 0)
+                {
+                    return true;
+                }
+
                 int recipe_len = __instance.m_recipes.m_recipes.Length;
-                int num = _instance.CumulativeFrequencies.Collapse((int f, int total) => total + f);
-                float theo_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)_instance.CumulativeFrequencies[_recipeIndex], 0f);
-                float berry_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)_instance.CumulativeFrequencies[0], 0f);
-                float choco_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)_instance.CumulativeFrequencies[1], 0f);
+                int num = cumulativeFrequencies.Collapse((int f, int total) => total + f);
+                float theo_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)cumulativeFrequencies[_recipeIndex], 0f);
+                float berry_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)cumulativeFrequencies[0], 0f);
+                float choco_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)cumulativeFrequencies[1], 0f);
 
                 __result = theo_prob;
                 if (num == 0 && (_recipeIndex <= 1 || (_recipeIndex >= 5 && _recipeIndex <= 7)))
@@ -205,6 +213,22 @@ namespace HostUtilities
                 return false;
             }
             return true;
+        }
+
+        private static FieldInfo ResolveRoundInstanceCumulativeFrequenciesField()
+        {
+            Type nestedType = typeof(RoundData).GetNestedType("RoundInstanceData", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            return nestedType != null ? nestedType.GetField("CumulativeFrequencies", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic) : null;
+        }
+
+        private static int[] GetRoundInstanceCumulativeFrequencies(object roundInstance)
+        {
+            if (roundInstance == null || RoundInstanceCumulativeFrequenciesField == null)
+            {
+                return null;
+            }
+
+            return RoundInstanceCumulativeFrequenciesField.GetValue(roundInstance) as int[];
         }
     }
 }

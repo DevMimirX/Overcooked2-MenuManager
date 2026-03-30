@@ -78,7 +78,6 @@ namespace HostUtilities
             private const float PanelPadding = 10f;
             private readonly GUIStyle textStyle = new GUIStyle();
             private string cachedText = string.Empty;
-            private int lastOverlaySignature = int.MinValue;
 
             public override void OnSetUp()
             {
@@ -86,15 +85,14 @@ namespace HostUtilities
 
             public override void OnUpdate()
             {
-                int overlaySignature = ComputeOverlayContentSignature();
-                if (!overlayDirty && overlaySignature == lastOverlaySignature)
+                if (!overlayDirty || Time.frameCount < nextOverlayRefreshFrame)
                 {
                     return;
                 }
 
                 cachedText = BuildOverlayText();
                 overlayDirty = false;
-                lastOverlaySignature = overlaySignature;
+                nextOverlayRefreshFrame = 0;
                 lastOverlayBuildFrame = Time.frameCount;
             }
 
@@ -245,14 +243,16 @@ namespace HostUtilities
         private const int SceneRefreshIntervalInRoundWithConfigOpen = 30;
         private const int SceneRefreshIntervalOutOfRound = 20;
         private const int DiscoveryFlushIntervalFrames = 900;
-        private const int ControllerLookupIntervalFrames = 120;
-        private const int ControllerLookupRetryIntervalFrames = 15;
-        private const int PreparedSourceRefreshIntervalFrames = 8;
-        private const int MaxPreparedSourceRefreshesPerBatch = 2;
-        private const int PreparedSourcePruneIntervalFrames = 900;
-        private const int PreparedBootstrapStepIntervalFrames = 8;
-        private const int TicketWidgetRetryIntervalFrames = 12;
-        private const int HotkeyFilePollIntervalFrames = 600;
+        private const int ControllerLookupIntervalFrames = 180;
+        private const int ControllerLookupRetryIntervalFrames = 20;
+        private const int OverlayRefreshIntervalFrames = 15;
+        private const int PreparedSourceRefreshIntervalFrames = 18;
+        private const int MaxPreparedSourceRefreshesPerBatch = 1;
+        private const int PreparedSourcePruneIntervalFrames = 2400;
+        private const int PreparedBootstrapStepIntervalFrames = 30;
+        private const int TicketWidgetRefreshDelayFrames = 18;
+        private const int TicketWidgetRetryIntervalFrames = 40;
+        private const int HotkeyFilePollIntervalFrames = 3600;
         private const KeyCode DefaultSettingsWindowHotkey = KeyCode.F6;
 
         private static readonly Dictionary<string, HashSet<int>> TrackedIdsByScene = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
@@ -277,6 +277,7 @@ namespace HostUtilities
         private static readonly Dictionary<int, double> ProbabilityWeightsByRecipeBuffer = new Dictionary<int, double>();
         private static readonly Dictionary<int, int> PreparedRemainingByRecipeBuffer = new Dictionary<int, int>();
         private static readonly Dictionary<int, int> MenuOrderByRecipeBuffer = new Dictionary<int, int>();
+        private static readonly List<int> PreparedCandidateRecipeIdsBuffer = new List<int>();
         private static readonly StringBuilder OverlayTextBuilder = new StringBuilder(768);
         private static readonly TeamID[] TeamIds = (TeamID[])Enum.GetValues(typeof(TeamID));
 
@@ -311,6 +312,8 @@ namespace HostUtilities
         private static ConfigEntry<Color> overlayServedValueColor;
         private static ConfigEntry<Color> overlayProbabilityValueColor;
         private static ConfigEntry<Color> overlayPreparedValueColor;
+        private static ConfigEntry<Color> menuTicketOnMenuTintColor;
+        private static ConfigEntry<Color> menuTicketPreparedTintColor;
         private static ConfigEntry<bool> overlayBoldFont;
         private static ConfigEntry<int> overlayMaxDisplayDishes;
         private static ConfigEntry<OverlayTextAlignment> overlayTextAlignment;
@@ -349,6 +352,7 @@ namespace HostUtilities
         private static int nextPreparedBootstrapFrame;
         private static int nextTicketWidgetRefreshFrame;
         private static int nextHotkeyFilePollFrame;
+        private static int nextOverlayRefreshFrame;
         private static int lastOverlayBuildFrame = int.MinValue;
         private static int cachedCurrentSceneInfoFrame = int.MinValue;
         private static bool overlayVisible;
@@ -369,9 +373,11 @@ namespace HostUtilities
         private static string overlayHeaderText = string.Empty;
         private static string overlayFooterText = string.Empty;
         private static string preparedSourceSceneName = string.Empty;
+        private static string preparedCandidateSceneName = string.Empty;
         private static Rect settingsWindowRect = new Rect(140f, 90f, SettingsWindowDefaultWidth, SettingsWindowDefaultHeight);
         private static Vector2 settingsWindowScrollPosition = Vector2.zero;
         private static Vector2 sceneDropdownScrollPosition = Vector2.zero;
+        private static bool preparedCandidateRecipeIdsDirty = true;
 
         public static void Awake()
         {
@@ -395,7 +401,17 @@ namespace HostUtilities
                 TrackerSection,
                 "菜单颜色",
                 true,
-                "是否给关卡内真实菜单票据染色。橙色=在单未备，绿色=已备。关闭后可以进一步降低运行开销。");
+                "是否给关卡内真实菜单票据染色。关闭后可以进一步降低运行开销。");
+            menuTicketOnMenuTintColor = _MODEntry.SettingsConfig.Bind<Color>(
+                TrackerSection,
+                "菜单票据在单颜色",
+                new Color(1f, 0.76f, 0.34f, 1f),
+                "关卡内真实菜单票据中“在单未备”票据的背景色。");
+            menuTicketPreparedTintColor = _MODEntry.SettingsConfig.Bind<Color>(
+                TrackerSection,
+                "菜单票据已备颜色",
+                new Color(0.86f, 0.98f, 0.86f, 1f),
+                "关卡内真实菜单票据中“已备”票据的背景色。");
             languageMode = _MODEntry.SettingsConfig.Bind<TrackerLanguage>(
                 TrackerSection,
                 "显示语言",
@@ -537,7 +553,7 @@ namespace HostUtilities
             }
 
             overlayVisible = ShouldShowOverlay(inActiveRound);
-            if (overlayVisible)
+            if (overlayVisible && overlayDirty && Time.frameCount >= nextOverlayRefreshFrame)
             {
                 overlayHost.Update();
             }
@@ -944,7 +960,15 @@ namespace HostUtilities
                     menuTicketTintEnabled.Value = value;
                     InvalidateTicketWidgets();
                 }
-            }, "给关卡内真实菜单票据染色。橙色=在单未备，绿色=已备。");
+            }, "给关卡内真实菜单票据染色。");
+            DrawColorRow("在单颜色", menuTicketOnMenuTintColor, "真实菜单票据中“在单未备”票据的背景色。", delegate
+            {
+                InvalidateTicketWidgets();
+            });
+            DrawColorRow("已备颜色", menuTicketPreparedTintColor, "真实菜单票据中“已备”票据的背景色。", delegate
+            {
+                InvalidateTicketWidgets();
+            });
             DrawEnumCycleRow("显示语言", GetTrackerLanguageLabel(languageMode != null ? languageMode.Value : TrackerLanguage.Auto), delegate()
             {
                 if (languageMode != null)
@@ -953,7 +977,7 @@ namespace HostUtilities
                     InvalidateOverlay();
                 }
             }, "点击切换 Auto / English / Chinese。");
-            DrawInfoText("颜色说明：橙名=在单未备，绿名=已备。关卡内菜单票据也会同步使用这套颜色。");
+            DrawInfoText("颜色说明：橙名=在单未备，绿名=已备。菜单票据背景色可在上面单独调整。");
         }
 
         private static void DrawOverlaySettingsSection()
@@ -1130,7 +1154,7 @@ namespace HostUtilities
             GUILayout.EndVertical();
         }
 
-        private static void DrawColorRow(string label, ConfigEntry<Color> entry, string description)
+        private static void DrawColorRow(string label, ConfigEntry<Color> entry, string description, Action onChanged = null)
         {
             if (entry == null)
             {
@@ -1157,6 +1181,10 @@ namespace HostUtilities
             {
                 entry.Value = value;
                 InvalidateOverlay();
+                if (onChanged != null)
+                {
+                    onChanged();
+                }
             }
 
             DrawInfoText(description);
@@ -1256,12 +1284,28 @@ namespace HostUtilities
         private static void InvalidateOverlay()
         {
             overlayDirty = true;
+            int targetFrame = Time.frameCount + (IsInActiveRound() ? OverlayRefreshIntervalFrames : 0);
+            if (nextOverlayRefreshFrame == 0 || targetFrame < nextOverlayRefreshFrame)
+            {
+                nextOverlayRefreshFrame = targetFrame;
+            }
         }
 
         private static void InvalidateTicketWidgets()
         {
+            if (!IsMenuTicketTintEnabled() && !ticketWidgetTintActive)
+            {
+                ticketWidgetsDirty = false;
+                nextTicketWidgetRefreshFrame = 0;
+                return;
+            }
+
             ticketWidgetsDirty = true;
-            nextTicketWidgetRefreshFrame = 0;
+            int targetFrame = Time.frameCount + (IsInActiveRound() ? TicketWidgetRefreshDelayFrames : 0);
+            if (nextTicketWidgetRefreshFrame == 0 || targetFrame < nextTicketWidgetRefreshFrame)
+            {
+                nextTicketWidgetRefreshFrame = targetFrame;
+            }
         }
 
         private static bool IsPreparedTrackingEnabled()
@@ -1279,6 +1323,7 @@ namespace HostUtilities
             CurrentOnMenuCounts.Clear();
             currentOnMenuCountsSceneName = string.Empty;
             currentOnMenuCountsDirty = true;
+            InvalidatePreparedCandidates(false);
         }
 
         private static void ClearPreparedState()
@@ -1303,12 +1348,15 @@ namespace HostUtilities
             PreparedCountsByRecipe.Clear();
             DirtyPreparedSourceIds.Clear();
             PreparedSourceRefreshBuffer.Clear();
+            PreparedCandidateRecipeIdsBuffer.Clear();
             nextPreparedSourceRefreshFrame = 0;
             nextPreparedSourcePruneFrame = 0;
             nextPreparedBootstrapFrame = 0;
             preparedSourceBootstrapComplete = false;
             preparedSourceBootstrapStage = 0;
             preparedSourceSceneName = string.Empty;
+            preparedCandidateSceneName = string.Empty;
+            preparedCandidateRecipeIdsDirty = true;
             if (hadPreparedState)
             {
                 InvalidateTicketWidgets();
@@ -1344,6 +1392,7 @@ namespace HostUtilities
             EnsureOnMenuCountScene(sceneName);
             CurrentOnMenuCounts[recipeId] = GetCount(CurrentOnMenuCounts, recipeId) + 1;
             currentOnMenuCountsDirty = false;
+            InvalidatePreparedCandidates(true);
         }
 
         private static void DecrementOnMenuCount(string sceneName, int recipeId)
@@ -1360,6 +1409,25 @@ namespace HostUtilities
             }
 
             currentOnMenuCountsDirty = false;
+            InvalidatePreparedCandidates(true);
+        }
+
+        private static void InvalidatePreparedCandidates(bool queueAllPreparedSources)
+        {
+            preparedCandidateRecipeIdsDirty = true;
+            if (queueAllPreparedSources && PreparedSourcesByInstanceId.Count > 0)
+            {
+                foreach (int instanceId in PreparedSourcesByInstanceId.Keys)
+                {
+                    DirtyPreparedSourceIds.Add(instanceId);
+                }
+
+                int targetFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
+                if (nextPreparedSourceRefreshFrame == 0 || targetFrame < nextPreparedSourceRefreshFrame)
+                {
+                    nextPreparedSourceRefreshFrame = targetFrame;
+                }
+            }
         }
 
         private static void EnsureOnMenuCountScene(string sceneName)
@@ -1426,7 +1494,7 @@ namespace HostUtilities
                     if (RunPreparedBootstrapStep())
                     {
                         preparedSourceBootstrapComplete = true;
-                        nextPreparedSourceRefreshFrame = Time.frameCount;
+                        nextPreparedSourceRefreshFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
                         nextPreparedSourcePruneFrame = Time.frameCount + PreparedSourcePruneIntervalFrames;
                     }
                     else
@@ -1725,6 +1793,9 @@ namespace HostUtilities
                 case 5:
                     RegisterPreparedSources(FindObjectsSafe<ClientMixableContainer>());
                     break;
+                case 6:
+                    RegisterPreparedSourcesFromCarriers(FindObjectsSafe<ClientPlayerAttachmentCarrier>());
+                    break;
                 default:
                     PrunePreparedSources();
                     preparedSourceBootstrapStage = 0;
@@ -1760,6 +1831,19 @@ namespace HostUtilities
             }
         }
 
+        private static void RegisterPreparedSourcesFromCarriers(ClientPlayerAttachmentCarrier[] carriers)
+        {
+            if (carriers == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < carriers.Length; i++)
+            {
+                TryRegisterPreparedSourcesFromCarrier(carriers[i]);
+            }
+        }
+
         private static void TryRegisterPreparedSource(Component component)
         {
             if (!IsPreparedTrackingEnabled() || enabled == null || !enabled.Value || component == null || !IsInActiveRound())
@@ -1780,6 +1864,62 @@ namespace HostUtilities
             }
 
             RegisterPreparedSource(component);
+        }
+
+        private static void TryRegisterPreparedSourceFromGameObject(GameObject gameObject)
+        {
+            if (gameObject == null)
+            {
+                return;
+            }
+
+            Component bestSource = null;
+            int bestPriority = int.MaxValue;
+            IClientOrderDefinition[] recursiveProviders = gameObject.RequestInterfacesRecursive<IClientOrderDefinition>();
+            for (int i = 0; i < recursiveProviders.Length; i++)
+            {
+                ConsiderPreparedSourceCandidate(recursiveProviders[i] as Component, ref bestSource, ref bestPriority);
+            }
+
+            Transform parent = gameObject.transform.parent;
+            while (parent != null)
+            {
+                ConsiderPreparedSourceCandidate(parent.gameObject.RequestInterface<IClientOrderDefinition>() as Component, ref bestSource, ref bestPriority);
+                parent = parent.parent;
+            }
+
+            if (bestSource != null)
+            {
+                TryRegisterPreparedSource(bestSource);
+            }
+        }
+
+        private static void ConsiderPreparedSourceCandidate(Component component, ref Component bestSource, ref int bestPriority)
+        {
+            if (component == null || !(component is IClientOrderDefinition))
+            {
+                return;
+            }
+
+            int priority = GetPreparedSourcePriority(component);
+            if (priority >= bestPriority)
+            {
+                return;
+            }
+
+            bestPriority = priority;
+            bestSource = component;
+        }
+
+        private static void TryRegisterPreparedSourcesFromCarrier(ClientPlayerAttachmentCarrier carrier)
+        {
+            if (carrier == null)
+            {
+                return;
+            }
+
+            TryRegisterPreparedSourceFromGameObject(carrier.InspectCarriedItem());
+            TryRegisterPreparedSourceFromGameObject(carrier.InspectCarriedItem(PlayerAttachTarget.Back));
         }
 
         private static void RegisterPreparedSource(Component component)
@@ -1865,6 +2005,18 @@ namespace HostUtilities
             {
                 return 5;
             }
+            if (component is AssignableOrderDefinition)
+            {
+                return 6;
+            }
+            if (component is ItemPropertiesComponent)
+            {
+                return 7;
+            }
+            if (component is IngredientPropertiesComponent)
+            {
+                return 8;
+            }
 
             return 100;
         }
@@ -1892,6 +2044,11 @@ namespace HostUtilities
             if (instanceId != 0)
             {
                 DirtyPreparedSourceIds.Add(instanceId);
+                int targetFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
+                if (nextPreparedSourceRefreshFrame == 0 || targetFrame < nextPreparedSourceRefreshFrame)
+                {
+                    nextPreparedSourceRefreshFrame = targetFrame;
+                }
             }
         }
 
@@ -1960,22 +2117,16 @@ namespace HostUtilities
                 return 0;
             }
 
-            HashSet<int> trackedIds;
-            bool hasExplicitTrackedIds = TrackedIdsByScene.TryGetValue(scene.SceneName, out trackedIds) && trackedIds != null;
-            if (hasExplicitTrackedIds && trackedIds.Count == 0)
+            List<int> candidateRecipeIds = GetPreparedCandidateRecipeIds(scene);
+            if (candidateRecipeIds == null || candidateRecipeIds.Count == 0)
             {
                 return 0;
             }
 
-            for (int i = 0; i < scene.OrderedRecipes.Count; i++)
+            for (int i = 0; i < candidateRecipeIds.Count; i++)
             {
-                RecipeInfo recipe = scene.OrderedRecipes[i];
-                if (recipe == null || recipe.Definition == null)
-                {
-                    continue;
-                }
-
-                if (hasExplicitTrackedIds && !trackedIds.Contains(recipe.Id))
+                RecipeInfo recipe;
+                if (!scene.RecipesById.TryGetValue(candidateRecipeIds[i], out recipe) || recipe == null || recipe.Definition == null)
                 {
                     continue;
                 }
@@ -1987,6 +2138,55 @@ namespace HostUtilities
             }
 
             return 0;
+        }
+
+        private static List<int> GetPreparedCandidateRecipeIds(SceneInfo scene)
+        {
+            if (scene == null)
+            {
+                PreparedCandidateRecipeIdsBuffer.Clear();
+                return PreparedCandidateRecipeIdsBuffer;
+            }
+
+            if (!preparedCandidateRecipeIdsDirty
+                && string.Equals(preparedCandidateSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+            {
+                return PreparedCandidateRecipeIdsBuffer;
+            }
+
+            preparedCandidateSceneName = scene.SceneName;
+            preparedCandidateRecipeIdsDirty = false;
+            PreparedCandidateRecipeIdsBuffer.Clear();
+
+            HashSet<int> trackedIds;
+            bool hasExplicitTrackedIds = TrackedIdsByScene.TryGetValue(scene.SceneName, out trackedIds) && trackedIds != null;
+            if (hasExplicitTrackedIds && trackedIds.Count == 0)
+            {
+                return PreparedCandidateRecipeIdsBuffer;
+            }
+
+            Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene);
+            Dictionary<int, double> probabilityByRecipeId = BuildProbabilityMap(scene, EnsureRun(scene));
+            for (int i = 0; i < scene.OrderedRecipes.Count; i++)
+            {
+                RecipeInfo recipe = scene.OrderedRecipes[i];
+                if (recipe == null)
+                {
+                    continue;
+                }
+
+                if (hasExplicitTrackedIds && !trackedIds.Contains(recipe.Id))
+                {
+                    continue;
+                }
+
+                if (GetCount(currentMenuCounts, recipe.Id) > 0 || GetProbability(probabilityByRecipeId, recipe.Id) > 0d)
+                {
+                    PreparedCandidateRecipeIdsBuffer.Add(recipe.Id);
+                }
+            }
+
+            return PreparedCandidateRecipeIdsBuffer;
         }
 
         private static void SetPreparedSourceMatch(PreparedSourceState source, int matchedRecipeId)
@@ -2116,6 +2316,27 @@ namespace HostUtilities
         private static void ClientMixableContainer_StartSynchronising_Postfix(ClientMixableContainer __instance)
         {
             TryRegisterPreparedSource(__instance);
+        }
+
+        [HarmonyPatch(typeof(ClientPlayerAttachmentCarrier), "StartSynchronising")]
+        [HarmonyPostfix]
+        private static void ClientPlayerAttachmentCarrier_StartSynchronising_Postfix(ClientPlayerAttachmentCarrier __instance)
+        {
+            TryRegisterPreparedSourcesFromCarrier(__instance);
+        }
+
+        [HarmonyPatch(typeof(ClientPlayerAttachmentCarrier), "CarryItem")]
+        [HarmonyPostfix]
+        private static void ClientPlayerAttachmentCarrier_CarryItem_Postfix(GameObject _object)
+        {
+            TryRegisterPreparedSourceFromGameObject(_object);
+        }
+
+        [HarmonyPatch(typeof(ClientPlayerAttachmentCarrier), "ApplyServerEvent")]
+        [HarmonyPostfix]
+        private static void ClientPlayerAttachmentCarrier_ApplyServerEvent_Postfix(ClientPlayerAttachmentCarrier __instance)
+        {
+            TryRegisterPreparedSourcesFromCarrier(__instance);
         }
 
         [HarmonyPatch(typeof(ClientSynchroniserBase), "OnDestroy")]
@@ -2771,6 +2992,16 @@ namespace HostUtilities
             return false;
         }
 
+        private static Color GetMenuTicketOnMenuTintColor()
+        {
+            return menuTicketOnMenuTintColor != null ? menuTicketOnMenuTintColor.Value : new Color(1f, 0.76f, 0.34f, 1f);
+        }
+
+        private static Color GetMenuTicketPreparedTintColor()
+        {
+            return menuTicketPreparedTintColor != null ? menuTicketPreparedTintColor.Value : new Color(0.86f, 0.98f, 0.86f, 1f);
+        }
+
         private static void RefreshTicketWidgetTints()
         {
             if (TicketWidgetsByInstanceId.Count == 0)
@@ -2860,8 +3091,8 @@ namespace HostUtilities
                 }
 
                 Color tint = hasPreparedAssignment
-                    ? new Color(0.86f, 0.98f, 0.86f, 1f)
-                    : new Color(1f, 0.76f, 0.34f, 1f);
+                    ? GetMenuTicketPreparedTintColor()
+                    : GetMenuTicketOnMenuTintColor();
                 if (!ApplyTicketWidgetTint(state, tint, tint))
                 {
                     needsRetry = true;
@@ -2915,6 +3146,7 @@ namespace HostUtilities
 
             if (changed)
             {
+                InvalidatePreparedCandidates(true);
                 InvalidateOverlay();
                 InvalidateTicketWidgets();
             }
@@ -3650,6 +3882,7 @@ namespace HostUtilities
             currentRun.CurrentPhaseIndex = Math.Max(0, phaseIndex);
             currentRun.TotalAdded = 0;
             currentRun.AddedCounts.Clear();
+            InvalidatePreparedCandidates(true);
             InvalidateOverlay();
         }
 
@@ -3664,10 +3897,6 @@ namespace HostUtilities
                 hash = (hash * 31) + (int)(languageMode != null ? languageMode.Value : TrackerLanguage.Auto);
                 hash = (hash * 31) + (currentRun != null ? currentRun.TotalAdded : 0);
                 hash = (hash * 31) + (currentRun != null ? currentRun.CurrentPhaseIndex : 0);
-                hash = (hash * 31) + PreparedCountsByRecipe.Count;
-                hash = (hash * 31) + CurrentOnMenuCounts.Count;
-                hash = (hash * 31) + TicketWidgetsByInstanceId.Count;
-                hash = (hash * 31) + DirtyPreparedSourceIds.Count;
                 return hash;
             }
         }
@@ -3734,31 +3963,31 @@ namespace HostUtilities
 
             rows.Sort(delegate(OverlayRow a, OverlayRow b)
             {
-                if (showPrepared)
-                {
-                    int preparedBucketCompare = (a.Prepared > 0 ? 1 : 0).CompareTo(b.Prepared > 0 ? 1 : 0);
-                    if (preparedBucketCompare != 0)
-                    {
-                        return preparedBucketCompare;
-                    }
-
-                    int preparedCompare = a.Prepared.CompareTo(b.Prepared);
-                    if (preparedCompare != 0)
-                    {
-                        return preparedCompare;
-                    }
-                }
-
-                int onMenuCompare = b.OnMenu.CompareTo(a.OnMenu);
-                if (onMenuCompare != 0)
-                {
-                    return onMenuCompare;
-                }
-
                 bool aOnMenuAndUnprepared = a.OnMenu > 0 && (!showPrepared || a.Prepared <= 0);
                 bool bOnMenuAndUnprepared = b.OnMenu > 0 && (!showPrepared || b.Prepared <= 0);
-                if (aOnMenuAndUnprepared && bOnMenuAndUnprepared)
+                bool aPrepared = showPrepared && a.Prepared > 0;
+                bool bPrepared = showPrepared && b.Prepared > 0;
+                bool aOffMenuUnpreparedPositiveProbability = !aOnMenuAndUnprepared && !aPrepared && a.Probability > 0d;
+                bool bOffMenuUnpreparedPositiveProbability = !bOnMenuAndUnprepared && !bPrepared && b.Probability > 0d;
+                bool aOffMenuUnpreparedZeroProbability = !aOnMenuAndUnprepared && !aPrepared && a.Probability <= 0d;
+                bool bOffMenuUnpreparedZeroProbability = !bOnMenuAndUnprepared && !bPrepared && b.Probability <= 0d;
+
+                int aBucket = aOnMenuAndUnprepared ? 0 : (aOffMenuUnpreparedPositiveProbability ? 1 : (aOffMenuUnpreparedZeroProbability ? 2 : 3));
+                int bBucket = bOnMenuAndUnprepared ? 0 : (bOffMenuUnpreparedPositiveProbability ? 1 : (bOffMenuUnpreparedZeroProbability ? 2 : 3));
+                int bucketCompare = aBucket.CompareTo(bBucket);
+                if (bucketCompare != 0)
                 {
+                    return bucketCompare;
+                }
+
+                if (aBucket == 0 && bBucket == 0)
+                {
+                    int categoryCompare = a.Recipe.CategoryTier.CompareTo(b.Recipe.CategoryTier);
+                    if (categoryCompare != 0)
+                    {
+                        return categoryCompare;
+                    }
+
                     int menuOrderCompare = a.EarliestMenuOrder.CompareTo(b.EarliestMenuOrder);
                     if (menuOrderCompare != 0)
                     {
@@ -3766,13 +3995,7 @@ namespace HostUtilities
                     }
                 }
 
-                int positiveProbabilityCompare = (b.Probability > 0d ? 1 : 0).CompareTo(a.Probability > 0d ? 1 : 0);
-                if (positiveProbabilityCompare != 0)
-                {
-                    return positiveProbabilityCompare;
-                }
-
-                if (a.Probability > 0d && b.Probability > 0d)
+                if (aBucket == 1 && bBucket == 1)
                 {
                     int categoryCompare = a.Recipe.CategoryTier.CompareTo(b.Recipe.CategoryTier);
                     if (categoryCompare != 0)
@@ -3802,8 +4025,8 @@ namespace HostUtilities
             builder.Append(chinese ? "已追踪 " : "Tracking ");
             builder.Append(rows.Count).Append('/').Append(scene.OrderedRecipes.Count).Append('\n');
             builder.Append(showPrepared
-                ? (chinese ? "排序: 未备优先 > 在单按菜单顺序 > 正概率优先 > 类别(仅正概率) > 概率 > 上单" : "Rank: Not-ready first > Menu by ticket order > Positive prob first > Category (positive only) > Prob > Served")
-                : (chinese ? "排序: 在单按菜单顺序 > 正概率优先 > 类别(仅正概率) > 概率 > 上单" : "Rank: Menu by ticket order > Positive prob first > Category (positive only) > Prob > Served")).Append('\n');
+                ? (chinese ? "排序: 在单未备(类别>菜单顺序) > 不在单未备(类别>概率) > 不在单0概率 > 已备" : "Rank: On-menu not-ready (Category > Ticket order) > Off-menu not-ready (Category > Prob) > Off-menu 0 prob > Prepared")
+                : (chinese ? "排序: 在单(类别>菜单顺序) > 不在单正概率(类别>概率) > 不在单0概率" : "Rank: On-menu (Category > Ticket order) > Off-menu positive prob (Category > Prob) > Off-menu 0 prob")).Append('\n');
             builder.Append(WrapRichValue(chinese ? "蓝=上单" : "Blue=Served", overlayServedValueColor != null ? overlayServedValueColor.Value : new Color(0.58f, 0.84f, 1f, 1f)));
             builder.Append(" | ");
             builder.Append(WrapRichValue(chinese ? "金=概率" : "Gold=Prob", overlayProbabilityValueColor != null ? overlayProbabilityValueColor.Value : new Color(1f, 0.84f, 0.40f, 1f)));
