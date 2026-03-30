@@ -261,6 +261,8 @@ namespace HostUtilities
         private static readonly Dictionary<int, int> PreparedCountsByRecipe = new Dictionary<int, int>();
         private static readonly Dictionary<int, PreparedSourceState> PreparedSourcesByInstanceId = new Dictionary<int, PreparedSourceState>();
         private static readonly Dictionary<int, int> PreparedSourceIdsByGameObjectId = new Dictionary<int, int>();
+        private static readonly Dictionary<int, CookedCompositeOrderNode.CookingProgress> PreparedCookStateBySourceId = new Dictionary<int, CookedCompositeOrderNode.CookingProgress>();
+        private static readonly Dictionary<int, ClientCookableContainer> PreparedCookableByHandlerId = new Dictionary<int, ClientCookableContainer>();
         private static readonly Dictionary<int, TicketWidgetState> TicketWidgetsByInstanceId = new Dictionary<int, TicketWidgetState>();
         private static readonly List<SceneInfo> KnownScenes = new List<SceneInfo>();
         private static readonly List<SceneInfo> CachedDIYScenes = new List<SceneInfo>();
@@ -401,17 +403,17 @@ namespace HostUtilities
                 TrackerSection,
                 "菜单颜色",
                 true,
-                "是否给关卡内真实菜单票据染色。关闭后可以进一步降低运行开销。");
+                "是否给关卡里的菜单栏上色。关闭后可以进一步降低运行开销。");
             menuTicketOnMenuTintColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "菜单票据在单颜色",
                 new Color(1f, 0.76f, 0.34f, 1f),
-                "关卡内真实菜单票据中“在单未备”票据的背景色。");
+                "菜单栏里“在单未备”的底色。");
             menuTicketPreparedTintColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "菜单票据已备颜色",
                 new Color(0.86f, 0.98f, 0.86f, 1f),
-                "关卡内真实菜单票据中“已备”票据的背景色。");
+                "菜单栏里“已备”的底色。");
             languageMode = _MODEntry.SettingsConfig.Bind<TrackerLanguage>(
                 TrackerSection,
                 "显示语言",
@@ -924,7 +926,7 @@ namespace HostUtilities
                 {
                     MenuManager.isCarnivalMenuFixed.Value = value;
                 }
-            }, "固定麻团菜单为 TAS 专用路线。");
+            }, "固定麻团菜单为 TAS 用配置。");
             DrawToggleRow("无菜单", NoMenuMode.IsEnabled, delegate(bool value)
             {
                 NoMenuMode.SetEnabled(value);
@@ -960,12 +962,12 @@ namespace HostUtilities
                     menuTicketTintEnabled.Value = value;
                     InvalidateTicketWidgets();
                 }
-            }, "给关卡内真实菜单票据染色。");
-            DrawColorRow("在单颜色", menuTicketOnMenuTintColor, "真实菜单票据中“在单未备”票据的背景色。", delegate
+            }, "给关卡里的菜单栏上色。");
+            DrawColorRow("在单颜色", menuTicketOnMenuTintColor, "菜单栏里“在单未备”的底色。", delegate
             {
                 InvalidateTicketWidgets();
             });
-            DrawColorRow("已备颜色", menuTicketPreparedTintColor, "真实菜单票据中“已备”票据的背景色。", delegate
+            DrawColorRow("已备颜色", menuTicketPreparedTintColor, "菜单栏里“已备”的底色。", delegate
             {
                 InvalidateTicketWidgets();
             });
@@ -977,7 +979,7 @@ namespace HostUtilities
                     InvalidateOverlay();
                 }
             }, "点击切换 Auto / English / Chinese。");
-            DrawInfoText("颜色说明：橙名=在单未备，绿名=已备。菜单票据背景色可在上面单独调整。");
+            DrawInfoText("橙名=在单未备，绿名=已备。");
         }
 
         private static void DrawOverlaySettingsSection()
@@ -1345,6 +1347,8 @@ namespace HostUtilities
 
             PreparedSourcesByInstanceId.Clear();
             PreparedSourceIdsByGameObjectId.Clear();
+            PreparedCookStateBySourceId.Clear();
+            PreparedCookableByHandlerId.Clear();
             PreparedCountsByRecipe.Clear();
             DirtyPreparedSourceIds.Clear();
             PreparedSourceRefreshBuffer.Clear();
@@ -2041,15 +2045,71 @@ namespace HostUtilities
 
         private static void QueuePreparedSourceRefresh(int instanceId)
         {
+            QueuePreparedSourceRefresh(instanceId, PreparedSourceRefreshIntervalFrames);
+        }
+
+        private static void QueuePreparedSourceRefresh(int instanceId, int delayFrames)
+        {
             if (instanceId != 0)
             {
                 DirtyPreparedSourceIds.Add(instanceId);
-                int targetFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
+                int safeDelayFrames = Math.Max(0, delayFrames);
+                int targetFrame = Time.frameCount + safeDelayFrames;
                 if (nextPreparedSourceRefreshFrame == 0 || targetFrame < nextPreparedSourceRefreshFrame)
                 {
                     nextPreparedSourceRefreshFrame = targetFrame;
                 }
             }
+        }
+
+        private static void RegisterCookableHandler(ClientCookableContainer cookableContainer)
+        {
+            if (cookableContainer == null)
+            {
+                return;
+            }
+
+            ClientCookingHandler cookingHandler = cookableContainer.GetCookingHandler();
+            if (cookingHandler == null)
+            {
+                return;
+            }
+
+            PreparedCookableByHandlerId[cookingHandler.GetInstanceID()] = cookableContainer;
+        }
+
+        private static void QueueCookablePreparedSourceRefresh(ClientCookableContainer cookableContainer)
+        {
+            if (cookableContainer == null || !enabled.Value || !IsPreparedTrackingEnabled())
+            {
+                return;
+            }
+
+            int instanceId = cookableContainer.GetInstanceID();
+            ClientCookingHandler cookingHandler = cookableContainer.GetCookingHandler();
+            if (cookingHandler == null)
+            {
+                TryRegisterPreparedSource(cookableContainer);
+                QueuePreparedSourceRefresh(instanceId, 2);
+                return;
+            }
+
+            CookedCompositeOrderNode.CookingProgress nextState = cookingHandler.GetCookedOrderState();
+            CookedCompositeOrderNode.CookingProgress previousState;
+            bool hasPreviousState = PreparedCookStateBySourceId.TryGetValue(instanceId, out previousState);
+            if (hasPreviousState && previousState == nextState)
+            {
+                return;
+            }
+
+            PreparedCookStateBySourceId[instanceId] = nextState;
+            if (!hasPreviousState && nextState == CookedCompositeOrderNode.CookingProgress.Raw)
+            {
+                return;
+            }
+
+            TryRegisterPreparedSource(cookableContainer);
+            QueuePreparedSourceRefresh(instanceId, 2);
         }
 
         private static void RefreshDirtyPreparedSources(int maxCount)
@@ -2232,6 +2292,8 @@ namespace HostUtilities
                 return;
             }
 
+            PreparedCookStateBySourceId.Remove(instanceId);
+
             if (source.Provider != null && source.Callback != null)
             {
                 try
@@ -2287,7 +2349,38 @@ namespace HostUtilities
         [HarmonyPostfix]
         private static void ClientCookableContainer_StartSynchronising_Postfix(ClientCookableContainer __instance)
         {
+            RegisterCookableHandler(__instance);
             TryRegisterPreparedSource(__instance);
+            QueueCookablePreparedSourceRefresh(__instance);
+        }
+
+        [HarmonyPatch(typeof(ClientCookingHandler), "ApplyServerUpdate")]
+        [HarmonyPostfix]
+        private static void ClientCookingHandler_ApplyServerUpdate_Postfix(ClientCookingHandler __instance)
+        {
+            if (__instance == null)
+            {
+                return;
+            }
+
+            ClientCookableContainer cookableContainer;
+            if (!PreparedCookableByHandlerId.TryGetValue(__instance.GetInstanceID(), out cookableContainer) || cookableContainer == null)
+            {
+                if (__instance.gameObject == null)
+                {
+                    return;
+                }
+
+                cookableContainer = __instance.gameObject.GetComponent<ClientCookableContainer>();
+                if (cookableContainer == null)
+                {
+                    return;
+                }
+
+                RegisterCookableHandler(cookableContainer);
+            }
+
+            QueueCookablePreparedSourceRefresh(cookableContainer);
         }
 
         [HarmonyPatch(typeof(ClientPreparationContainer), "StartSynchronising")]
@@ -2347,6 +2440,22 @@ namespace HostUtilities
             if (component == null)
             {
                 return;
+            }
+
+            ClientCookingHandler cookingHandler = component as ClientCookingHandler;
+            if (cookingHandler != null)
+            {
+                PreparedCookableByHandlerId.Remove(cookingHandler.GetInstanceID());
+            }
+
+            ClientCookableContainer cookableContainer = component as ClientCookableContainer;
+            if (cookableContainer != null)
+            {
+                ClientCookingHandler linkedCookingHandler = cookableContainer.GetCookingHandler();
+                if (linkedCookingHandler != null)
+                {
+                    PreparedCookableByHandlerId.Remove(linkedCookingHandler.GetInstanceID());
+                }
             }
 
             int instanceId = component.GetInstanceID();
@@ -2702,7 +2811,7 @@ namespace HostUtilities
             GUILayout.Label(isLockedToCurrentScene
                 ? "当前在关卡内，关卡选择已自动锁定为本局关卡，但你仍然可以修改本关的追踪菜品。"
                 : "请先在上方“选择关卡”下拉框中切换关卡，再勾选要追踪的菜品。");
-            GUILayout.Label("颜色说明：橙名=在单未备，绿名=已备。关卡内菜单票据也会同步使用这套颜色。");
+            GUILayout.Label("橙名=在单未备，绿名=已备。");
 
             GUILayout.BeginHorizontal();
             GUILayout.Label("已追踪 " + GetTrackedCount(scene) + "/" + scene.OrderedRecipes.Count, GUILayout.ExpandWidth(true));
