@@ -155,7 +155,16 @@ namespace HostUtilities
                         GUI.color = previousColor;
                     }
 
+                    Color previousTextColor = GUI.color;
+                    GUI.color = row.TextTint;
                     GUI.Label(rowRect, row.Text, textStyle);
+                    if (row.HasStrikeThrough)
+                    {
+                        float strikeY = rowRect.y + Mathf.Floor(rowRect.height * 0.56f);
+                        Rect strikeRect = new Rect(rowRect.x + 34f, strikeY, Mathf.Max(8f, rowRect.width - 40f), 2f);
+                        GUI.DrawTexture(strikeRect, Texture2D.whiteTexture);
+                    }
+                    GUI.color = previousTextColor;
                     y += rowHeight + 1f;
                 }
 
@@ -195,13 +204,24 @@ namespace HostUtilities
             public string Text;
             public Color BackgroundColor;
             public bool HasBackground;
+            public Color TextTint = Color.white;
+            public bool HasStrikeThrough;
 
             public void Reset()
             {
                 Text = string.Empty;
                 BackgroundColor = Color.clear;
                 HasBackground = false;
+                TextTint = Color.white;
+                HasStrikeThrough = false;
             }
+        }
+
+        private sealed class CategorySelectionGroup
+        {
+            public string CategoryName;
+            public int CategoryTier;
+            public readonly List<int> RecipeIds = new List<int>();
         }
 
         private sealed class TicketWidgetState
@@ -245,14 +265,16 @@ namespace HostUtilities
         private const int DiscoveryFlushIntervalFrames = 900;
         private const int ControllerLookupIntervalFrames = 180;
         private const int ControllerLookupRetryIntervalFrames = 20;
-        private const int OverlayRefreshIntervalFrames = 15;
-        private const int PreparedSourceRefreshIntervalFrames = 18;
+        private const int OverlayRefreshIntervalFrames = 24;
+        private const int PreparedSourceRefreshIntervalFrames = 30;
         private const int MaxPreparedSourceRefreshesPerBatch = 1;
-        private const int PreparedSourcePruneIntervalFrames = 2400;
-        private const int PreparedBootstrapStepIntervalFrames = 30;
-        private const int TicketWidgetRefreshDelayFrames = 18;
-        private const int TicketWidgetRetryIntervalFrames = 40;
-        private const int HotkeyFilePollIntervalFrames = 3600;
+        private const int PreparedSourcePruneIntervalFrames = 3600;
+        private const int PreparedBootstrapStepIntervalFrames = 60;
+        private const int PreparedBootstrapFallbackDelayFrames = 240;
+        private const int PreparedBootstrapFallbackIntervalFrames = 900;
+        private const int TicketWidgetRefreshDelayFrames = 24;
+        private const int TicketWidgetRetryIntervalFrames = 60;
+        private const int HotkeyFilePollIntervalFrames = 7200;
         private const KeyCode DefaultSettingsWindowHotkey = KeyCode.F6;
 
         private static readonly Dictionary<string, HashSet<int>> TrackedIdsByScene = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
@@ -269,6 +291,7 @@ namespace HostUtilities
         private static readonly List<string> OrderedSceneSelectorValues = new List<string>();
         private static readonly List<OverlayRow> OverlayRowsBuffer = new List<OverlayRow>();
         private static readonly List<OverlayRenderRow> OverlayRenderRowsBuffer = new List<OverlayRenderRow>();
+        private static readonly List<CategorySelectionGroup> CategorySelectionGroupsBuffer = new List<CategorySelectionGroup>();
         private static readonly List<TicketWidgetState> TicketWidgetsBuffer = new List<TicketWidgetState>();
         private static readonly HashSet<int> DirtyPreparedSourceIds = new HashSet<int>();
         private static readonly List<int> PreparedSourceRefreshBuffer = new List<int>();
@@ -352,6 +375,7 @@ namespace HostUtilities
         private static int nextPreparedSourceRefreshFrame;
         private static int nextPreparedSourcePruneFrame;
         private static int nextPreparedBootstrapFrame;
+        private static int nextPreparedBootstrapFallbackFrame;
         private static int nextTicketWidgetRefreshFrame;
         private static int nextHotkeyFilePollFrame;
         private static int nextOverlayRefreshFrame;
@@ -948,7 +972,14 @@ namespace HostUtilities
                 if (preparedTrackingEnabled != null)
                 {
                     preparedTrackingEnabled.Value = value;
-                    if (!value)
+                    if (value)
+                    {
+                        if (IsInActiveRound())
+                        {
+                            SchedulePreparedBootstrap(0);
+                        }
+                    }
+                    else
                     {
                         ClearPreparedState();
                         InvalidateOverlay();
@@ -1356,7 +1387,8 @@ namespace HostUtilities
             nextPreparedSourceRefreshFrame = 0;
             nextPreparedSourcePruneFrame = 0;
             nextPreparedBootstrapFrame = 0;
-            preparedSourceBootstrapComplete = false;
+            nextPreparedBootstrapFallbackFrame = Time.frameCount + PreparedBootstrapFallbackDelayFrames;
+            preparedSourceBootstrapComplete = true;
             preparedSourceBootstrapStage = 0;
             preparedSourceSceneName = string.Empty;
             preparedCandidateSceneName = string.Empty;
@@ -1491,6 +1523,14 @@ namespace HostUtilities
                 preparedSourceSceneName = scene.SceneName;
             }
 
+            if (preparedSourceBootstrapComplete
+                && PreparedSourcesByInstanceId.Count == 0
+                && Time.frameCount >= nextPreparedBootstrapFallbackFrame)
+            {
+                SchedulePreparedBootstrap(0);
+                nextPreparedBootstrapFallbackFrame = Time.frameCount + PreparedBootstrapFallbackIntervalFrames;
+            }
+
             if (!preparedSourceBootstrapComplete)
             {
                 if (Time.frameCount >= nextPreparedBootstrapFrame)
@@ -1500,6 +1540,7 @@ namespace HostUtilities
                         preparedSourceBootstrapComplete = true;
                         nextPreparedSourceRefreshFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
                         nextPreparedSourcePruneFrame = Time.frameCount + PreparedSourcePruneIntervalFrames;
+                        nextPreparedBootstrapFallbackFrame = Time.frameCount + PreparedBootstrapFallbackIntervalFrames;
                     }
                     else
                     {
@@ -1773,6 +1814,13 @@ namespace HostUtilities
             while (!RunPreparedBootstrapStep())
             {
             }
+        }
+
+        private static void SchedulePreparedBootstrap(int delayFrames)
+        {
+            preparedSourceBootstrapComplete = false;
+            preparedSourceBootstrapStage = 0;
+            nextPreparedBootstrapFrame = Time.frameCount + Math.Max(0, delayFrames);
         }
 
         private static bool RunPreparedBootstrapStep()
@@ -2837,6 +2885,7 @@ namespace HostUtilities
                 return;
             }
 
+            DrawCategorySelectionToggles(scene);
             GUILayout.Space(2f);
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
             {
@@ -2856,6 +2905,33 @@ namespace HostUtilities
             }
 
             GUILayout.EndVertical();
+        }
+
+        private static void DrawCategorySelectionToggles(SceneInfo scene)
+        {
+            List<CategorySelectionGroup> groups = BuildCategorySelectionGroups(scene);
+            if (groups.Count == 0)
+            {
+                return;
+            }
+
+            GUILayout.Space(4f);
+            GUILayout.Label("按类别批量勾选：");
+            for (int i = 0; i < groups.Count;)
+            {
+                GUILayout.BeginHorizontal();
+                for (int column = 0; column < 2 && i < groups.Count; column++, i++)
+                {
+                    CategorySelectionGroup group = groups[i];
+                    bool allTracked = AreAllCategoryRecipesTracked(scene, group);
+                    bool nextTracked = GUILayout.Toggle(allTracked, "全部" + group.CategoryName, GUILayout.MinWidth(160f), GUILayout.ExpandWidth(true));
+                    if (nextTracked != allTracked)
+                    {
+                        SetTrackedForCategory(scene, group, nextTracked);
+                    }
+                }
+                GUILayout.EndHorizontal();
+            }
         }
 
         private static bool IsLockedToCurrentScene()
@@ -2881,6 +2957,94 @@ namespace HostUtilities
             }
 
             return count;
+        }
+
+        private static List<CategorySelectionGroup> BuildCategorySelectionGroups(SceneInfo scene)
+        {
+            CategorySelectionGroupsBuffer.Clear();
+            if (scene == null || scene.OrderedRecipes.Count == 0)
+            {
+                return CategorySelectionGroupsBuffer;
+            }
+
+            Dictionary<string, CategorySelectionGroup> groupsByName = new Dictionary<string, CategorySelectionGroup>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < scene.OrderedRecipes.Count; i++)
+            {
+                RecipeInfo recipe = scene.OrderedRecipes[i];
+                if (recipe == null)
+                {
+                    continue;
+                }
+
+                string categoryName = string.IsNullOrEmpty(recipe.CategoryName) ? "其他" : recipe.CategoryName;
+                CategorySelectionGroup group;
+                if (!groupsByName.TryGetValue(categoryName, out group))
+                {
+                    group = new CategorySelectionGroup();
+                    group.CategoryName = categoryName;
+                    group.CategoryTier = recipe.CategoryTier;
+                    groupsByName.Add(categoryName, group);
+                    CategorySelectionGroupsBuffer.Add(group);
+                }
+                else
+                {
+                    group.CategoryTier = Math.Min(group.CategoryTier, recipe.CategoryTier);
+                }
+
+                group.RecipeIds.Add(recipe.Id);
+            }
+
+            CategorySelectionGroupsBuffer.Sort(delegate(CategorySelectionGroup a, CategorySelectionGroup b)
+            {
+                int tierCompare = a.CategoryTier.CompareTo(b.CategoryTier);
+                if (tierCompare != 0)
+                {
+                    return tierCompare;
+                }
+
+                return string.Compare(a.CategoryName, b.CategoryName, StringComparison.OrdinalIgnoreCase);
+            });
+            return CategorySelectionGroupsBuffer;
+        }
+
+        private static bool AreAllCategoryRecipesTracked(SceneInfo scene, CategorySelectionGroup group)
+        {
+            if (scene == null || group == null || group.RecipeIds.Count == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < group.RecipeIds.Count; i++)
+            {
+                if (!IsTracked(scene, group.RecipeIds[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static void SetTrackedForCategory(SceneInfo scene, CategorySelectionGroup group, bool shouldTrack)
+        {
+            if (scene == null || group == null)
+            {
+                return;
+            }
+
+            bool changed = false;
+            for (int i = 0; i < group.RecipeIds.Count; i++)
+            {
+                changed |= ApplyTrackedStateCore(scene.SceneName, group.RecipeIds[i], shouldTrack);
+            }
+
+            if (changed)
+            {
+                SaveSelections();
+                InvalidatePreparedCandidates(true);
+                InvalidateOverlay();
+                InvalidateTicketWidgets();
+            }
         }
 
         private static bool HasAnyTrackedRecipes(SceneInfo scene)
@@ -3224,30 +3388,24 @@ namespace HostUtilities
                 return;
             }
 
+            bool changed = false;
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
             {
-                ApplyTrackedState(scene.SceneName, scene.OrderedRecipes[i].Id, shouldTrack, false);
+                changed |= ApplyTrackedStateCore(scene.SceneName, scene.OrderedRecipes[i].Id, shouldTrack);
             }
 
-            SaveSelections();
+            if (changed)
+            {
+                SaveSelections();
+                InvalidatePreparedCandidates(true);
+                InvalidateOverlay();
+                InvalidateTicketWidgets();
+            }
         }
 
         private static void ApplyTrackedState(string sceneName, int recipeId, bool shouldTrack, bool save)
         {
-            SceneInfo scene;
-            if (!SceneCache.TryGetValue(sceneName, out scene) || scene == null)
-            {
-                return;
-            }
-
-            HashSet<int> trackedIds;
-            if (!TrackedIdsByScene.TryGetValue(scene.SceneName, out trackedIds))
-            {
-                trackedIds = new HashSet<int>(scene.OrderedRecipes.Select(x => x.Id));
-                TrackedIdsByScene[scene.SceneName] = trackedIds;
-            }
-
-            bool changed = shouldTrack ? trackedIds.Add(recipeId) : trackedIds.Remove(recipeId);
+            bool changed = ApplyTrackedStateCore(sceneName, recipeId, shouldTrack);
             if (changed && save)
             {
                 SaveSelections();
@@ -3259,6 +3417,24 @@ namespace HostUtilities
                 InvalidateOverlay();
                 InvalidateTicketWidgets();
             }
+        }
+
+        private static bool ApplyTrackedStateCore(string sceneName, int recipeId, bool shouldTrack)
+        {
+            SceneInfo scene;
+            if (!SceneCache.TryGetValue(sceneName, out scene) || scene == null)
+            {
+                return false;
+            }
+
+            HashSet<int> trackedIds;
+            if (!TrackedIdsByScene.TryGetValue(scene.SceneName, out trackedIds))
+            {
+                trackedIds = new HashSet<int>(scene.OrderedRecipes.Select(x => x.Id));
+                TrackedIdsByScene[scene.SceneName] = trackedIds;
+            }
+
+            return shouldTrack ? trackedIds.Add(recipeId) : trackedIds.Remove(recipeId);
         }
 
         private static List<SceneDirectoryData.SceneDirectoryEntry> GetAvailableSceneEntries()
@@ -4133,9 +4309,12 @@ namespace HostUtilities
             builder.Append(TruncateWithEllipsis(GetOverlaySceneLabel(scene), MaxOverlaySceneDisplayLength)).Append(" | ");
             builder.Append(chinese ? "已追踪 " : "Tracking ");
             builder.Append(rows.Count).Append('/').Append(scene.OrderedRecipes.Count).Append('\n');
+            builder.Append(chinese
+                ? "按下单出现概率排序，复杂的菜优先"
+                : "Sorted by next-order probability; harder dishes first").Append('\n');
             builder.Append(showPrepared
-                ? (chinese ? "排序: 在单未备(类别>菜单顺序) > 不在单未备(类别>概率) > 不在单0概率 > 已备" : "Rank: On-menu not-ready (Category > Ticket order) > Off-menu not-ready (Category > Prob) > Off-menu 0 prob > Prepared")
-                : (chinese ? "排序: 在单(类别>菜单顺序) > 不在单正概率(类别>概率) > 不在单0概率" : "Rank: On-menu (Category > Ticket order) > Off-menu positive prob (Category > Prob) > Off-menu 0 prob")).Append('\n');
+                ? (chinese ? "[   ]在单  [ - ]未备  [ x ]已上  [ v ]已备" : "[   ] On menu  [ - ] Unprepared  [ x ] Served  [ v ] Prepared")
+                : (chinese ? "[   ]在单  [ - ]未备  [ x ]已上" : "[   ] On menu  [ - ] Unprepared  [ x ] Served")).Append('\n');
             builder.Append(WrapRichValue(chinese ? "蓝=上单" : "Blue=Served", overlayServedValueColor != null ? overlayServedValueColor.Value : new Color(0.58f, 0.84f, 1f, 1f)));
             builder.Append(" | ");
             builder.Append(WrapRichValue(chinese ? "金=概率" : "Gold=Prob", overlayProbabilityValueColor != null ? overlayProbabilityValueColor.Value : new Color(1f, 0.84f, 0.40f, 1f)));
@@ -4147,16 +4326,19 @@ namespace HostUtilities
             for (int i = 0; i < maxRows; i++)
             {
                 OverlayRow row = rows[i];
-                builder.Append(i + 1).Append(". ");
+                bool isDeferredTodo = row.Probability <= 0d && row.OnMenu <= 0 && (!showPrepared || row.Prepared <= 0);
+                builder.Append(GetOverlayTodoPrefix(row, showPrepared)).Append(' ');
                 builder.Append(GetOverlayDishNameText(row, showPrepared));
-                builder.Append("  ");
+                builder.Append("  |  ");
                 builder.Append(WrapRichValue(row.Served.ToString(), overlayServedValueColor != null ? overlayServedValueColor.Value : new Color(0.58f, 0.84f, 1f, 1f)));
-                builder.Append("   ");
+                builder.Append("  |  ");
                 builder.Append(WrapRichValue((row.Probability * 100d).ToString("0.0") + "%", overlayProbabilityValueColor != null ? overlayProbabilityValueColor.Value : new Color(1f, 0.84f, 0.40f, 1f)));
                 OverlayRenderRow renderRow = GetOrCreateOverlayRenderRow(i);
                 renderRow.Text = builder.ToString();
                 renderRow.BackgroundColor = GetOverlayRowBackgroundColor(row, showPrepared);
                 renderRow.HasBackground = renderRow.BackgroundColor.a > 0f;
+                renderRow.TextTint = GetOverlayRowTextTint(row, showPrepared);
+                renderRow.HasStrikeThrough = isDeferredTodo;
                 builder.Length = 0;
             }
 
@@ -4319,6 +4501,26 @@ namespace HostUtilities
             return "<color=#" + ColorUtility.ToHtmlStringRGBA(color) + ">" + value + "</color>";
         }
 
+        private static string GetOverlayTodoPrefix(OverlayRow row, bool showPrepared)
+        {
+            if (row == null)
+            {
+                return "[   ]";
+            }
+
+            if (showPrepared && row.Prepared > 0)
+            {
+                return "[ v ]";
+            }
+
+            if (row.OnMenu > 0)
+            {
+                return "[   ]";
+            }
+
+            return row.Probability > 0d ? "[ - ]" : "[ x ]";
+        }
+
         private static string GetOverlayDishNameText(OverlayRow row, bool showPrepared)
         {
             string name = TruncateWithEllipsis(GetRecipeDisplayName(row.Recipe), MaxOverlayDishDisplayLength);
@@ -4352,6 +4554,31 @@ namespace HostUtilities
             }
 
             return Color.clear;
+        }
+
+        private static Color GetOverlayRowTextTint(OverlayRow row, bool showPrepared)
+        {
+            if (row == null)
+            {
+                return Color.white;
+            }
+
+            if (showPrepared && row.Prepared > 0)
+            {
+                return new Color(1f, 1f, 1f, 0.88f);
+            }
+
+            if (row.Probability <= 0d && row.OnMenu <= 0)
+            {
+                return new Color(1f, 1f, 1f, 0.42f);
+            }
+
+            if (row.OnMenu <= 0)
+            {
+                return new Color(1f, 1f, 1f, 0.90f);
+            }
+
+            return Color.white;
         }
 
         private static string WrapPreparedValue(int preparedCount)
