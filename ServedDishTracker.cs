@@ -163,7 +163,7 @@ namespace HostUtilities
                     if (row.HasStrikeThrough)
                     {
                         float strikeY = rowRect.y + Mathf.Floor(rowRect.height * 0.56f);
-                        Rect strikeRect = new Rect(rowRect.x + 30f, strikeY, Mathf.Max(12f, rowRect.width - 36f), 3f);
+                        Rect strikeRect = new Rect(rowRect.x + 8f, strikeY, Mathf.Max(12f, rowRect.width - 16f), 4f);
                         GUI.DrawTexture(strikeRect, Texture2D.whiteTexture);
                     }
                     GUI.color = previousTextColor;
@@ -287,7 +287,7 @@ namespace HostUtilities
         private static readonly Dictionary<int, PreparedSourceState> PreparedSourcesByInstanceId = new Dictionary<int, PreparedSourceState>();
         private static readonly Dictionary<int, int> PreparedSourceIdsByGameObjectId = new Dictionary<int, int>();
         private static readonly Dictionary<int, CookedCompositeOrderNode.CookingProgress> PreparedCookStateBySourceId = new Dictionary<int, CookedCompositeOrderNode.CookingProgress>();
-        private static readonly Dictionary<int, ClientCookableContainer> PreparedCookableByHandlerId = new Dictionary<int, ClientCookableContainer>();
+        private static readonly Dictionary<int, Component> PreparedSourceComponentByHandlerId = new Dictionary<int, Component>();
         private static readonly Dictionary<int, TicketWidgetState> TicketWidgetsByInstanceId = new Dictionary<int, TicketWidgetState>();
         private static readonly List<SceneInfo> KnownScenes = new List<SceneInfo>();
         private static readonly List<SceneInfo> CachedDIYScenes = new List<SceneInfo>();
@@ -1391,7 +1391,7 @@ namespace HostUtilities
             PreparedSourcesByInstanceId.Clear();
             PreparedSourceIdsByGameObjectId.Clear();
             PreparedCookStateBySourceId.Clear();
-            PreparedCookableByHandlerId.Clear();
+            PreparedSourceComponentByHandlerId.Clear();
             PreparedCountsByRecipe.Clear();
             DirtyPreparedSourceIds.Clear();
             PreparedSourceRefreshBuffer.Clear();
@@ -2057,6 +2057,10 @@ namespace HostUtilities
             {
                 return 0;
             }
+            if (component is ClientCookablePreparationContainer)
+            {
+                return 1;
+            }
             if (component is ClientCookableContainer)
             {
                 return 1;
@@ -2130,34 +2134,36 @@ namespace HostUtilities
             }
         }
 
-        private static void RegisterCookableHandler(ClientCookableContainer cookableContainer)
+        private static void RegisterPreparedCookingHandler(Component sourceComponent)
         {
-            if (cookableContainer == null)
+            if (sourceComponent == null || sourceComponent.gameObject == null)
             {
                 return;
             }
 
-            ClientCookingHandler cookingHandler = cookableContainer.GetCookingHandler();
+            ClientCookingHandler cookingHandler = sourceComponent.gameObject.GetComponent<ClientCookingHandler>();
             if (cookingHandler == null)
             {
                 return;
             }
 
-            PreparedCookableByHandlerId[cookingHandler.GetInstanceID()] = cookableContainer;
+            PreparedSourceComponentByHandlerId[cookingHandler.GetInstanceID()] = sourceComponent;
         }
 
-        private static void QueueCookablePreparedSourceRefresh(ClientCookableContainer cookableContainer)
+        private static void QueueCookablePreparedSourceRefresh(Component sourceComponent)
         {
-            if (cookableContainer == null || !enabled.Value || !IsPreparedTrackingEnabled())
+            if (sourceComponent == null || !enabled.Value || !IsPreparedTrackingEnabled())
             {
                 return;
             }
 
-            int instanceId = cookableContainer.GetInstanceID();
-            ClientCookingHandler cookingHandler = cookableContainer.GetCookingHandler();
+            int instanceId = sourceComponent.GetInstanceID();
+            ClientCookingHandler cookingHandler = sourceComponent.gameObject != null
+                ? sourceComponent.gameObject.GetComponent<ClientCookingHandler>()
+                : null;
             if (cookingHandler == null)
             {
-                TryRegisterPreparedSource(cookableContainer);
+                TryRegisterPreparedSource(sourceComponent);
                 QueuePreparedSourceRefresh(instanceId, 2);
                 return;
             }
@@ -2176,8 +2182,30 @@ namespace HostUtilities
                 return;
             }
 
-            TryRegisterPreparedSource(cookableContainer);
+            TryRegisterPreparedSource(sourceComponent);
             QueuePreparedSourceRefresh(instanceId, 2);
+        }
+
+        private static Component GetPreparedCookingSource(GameObject gameObject)
+        {
+            if (gameObject == null)
+            {
+                return null;
+            }
+
+            ClientCookablePreparationContainer cookablePreparationContainer = gameObject.GetComponent<ClientCookablePreparationContainer>();
+            if (cookablePreparationContainer != null)
+            {
+                return cookablePreparationContainer;
+            }
+
+            ClientCookableContainer cookableContainer = gameObject.GetComponent<ClientCookableContainer>();
+            if (cookableContainer != null)
+            {
+                return cookableContainer;
+            }
+
+            return null;
         }
 
         private static void RefreshDirtyPreparedSources(int maxCount)
@@ -2232,7 +2260,14 @@ namespace HostUtilities
             try
             {
                 AssembledDefinitionNode composition = source.Provider.GetOrderComposition();
-                int matchedRecipeId = MatchPreparedRecipe(scene, composition);
+                bool isCookedSource = RequiresCookedPreparedState(source.Component);
+                if (isCookedSource && !IsPreparedCookingSourceCooked(source.Component, composition))
+                {
+                    SetPreparedSourceMatch(source, 0);
+                    return;
+                }
+
+                int matchedRecipeId = MatchPreparedRecipe(scene, composition, isCookedSource);
                 SetPreparedSourceMatch(source, matchedRecipeId);
             }
             catch
@@ -2241,7 +2276,32 @@ namespace HostUtilities
             }
         }
 
-        private static int MatchPreparedRecipe(SceneInfo scene, AssembledDefinitionNode composition)
+        private static bool RequiresCookedPreparedState(Component component)
+        {
+            return component != null
+                && component.gameObject != null
+                && component.gameObject.GetComponent<ClientCookingHandler>() != null;
+        }
+
+        private static bool IsPreparedCookingSourceCooked(Component component, AssembledDefinitionNode composition)
+        {
+            if (component == null)
+            {
+                return false;
+            }
+
+            GameObject gameObject = component.gameObject;
+            ClientCookingHandler cookingHandler = gameObject != null ? gameObject.GetComponent<ClientCookingHandler>() : null;
+            if (cookingHandler != null)
+            {
+                return cookingHandler.GetCookedOrderState() == CookedCompositeOrderNode.CookingProgress.Cooked;
+            }
+
+            CookedCompositeAssembledNode cookedNode = composition as CookedCompositeAssembledNode;
+            return cookedNode != null && cookedNode.m_progress == CookedCompositeOrderNode.CookingProgress.Cooked;
+        }
+
+        private static int MatchPreparedRecipe(SceneInfo scene, AssembledDefinitionNode composition, bool allowCookedFallback)
         {
             if (scene == null || composition == null)
             {
@@ -2262,13 +2322,93 @@ namespace HostUtilities
                     continue;
                 }
 
-                if (AssembledDefinitionNode.Matching(composition, recipe.Definition))
+                if (MatchesPreparedRecipe(composition, recipe.Definition, allowCookedFallback))
                 {
                     return recipe.Id;
                 }
             }
 
             return 0;
+        }
+
+        private static bool MatchesPreparedRecipe(AssembledDefinitionNode composition, OrderDefinitionNode definition, bool allowCookedFallback)
+        {
+            if (composition == null || definition == null)
+            {
+                return false;
+            }
+
+            if (AssembledDefinitionNode.Matching(composition, definition))
+            {
+                return true;
+            }
+
+            AssembledDefinitionNode simplifiedComposition = SafeSimplifyNode(composition);
+            AssembledDefinitionNode simplifiedDefinition = SafeSimplifyNode(definition);
+            if (simplifiedComposition == null || simplifiedDefinition == null)
+            {
+                return false;
+            }
+
+            if (!allowCookedFallback)
+            {
+                return false;
+            }
+
+            AssembledDefinitionNode unwrappedComposition = UnwrapCookedCompositeNode(simplifiedComposition);
+            if (ReferenceEquals(unwrappedComposition, simplifiedComposition))
+            {
+                return false;
+            }
+
+            if (AssembledDefinitionNode.MatchingAlreadySimple(unwrappedComposition, simplifiedDefinition))
+            {
+                return true;
+            }
+
+            AssembledDefinitionNode unwrappedDefinition = UnwrapCookedCompositeNode(simplifiedDefinition);
+            return !ReferenceEquals(unwrappedDefinition, simplifiedDefinition)
+                && AssembledDefinitionNode.MatchingAlreadySimple(unwrappedComposition, unwrappedDefinition);
+        }
+
+        private static AssembledDefinitionNode SafeSimplifyNode(object node)
+        {
+            if (node == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                OrderDefinitionNode definition = node as OrderDefinitionNode;
+                if (definition != null)
+                {
+                    return definition.Simpilfy();
+                }
+
+                AssembledDefinitionNode assembledNode = node as AssembledDefinitionNode;
+                return assembledNode != null ? assembledNode.Simpilfy() : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static AssembledDefinitionNode UnwrapCookedCompositeNode(AssembledDefinitionNode node)
+        {
+            CookedCompositeAssembledNode cookedNode = node as CookedCompositeAssembledNode;
+            if (cookedNode == null || cookedNode.m_progress != CookedCompositeOrderNode.CookingProgress.Cooked)
+            {
+                return node;
+            }
+
+            CompositeAssembledNode unwrappedNode = new CompositeAssembledNode();
+            unwrappedNode.m_freeObject = cookedNode.m_freeObject;
+            unwrappedNode.m_permittedEntries = cookedNode.m_permittedEntries;
+            unwrappedNode.m_composition = cookedNode.m_composition ?? new AssembledDefinitionNode[0];
+            unwrappedNode.m_optional = cookedNode.m_optional ?? new AssembledDefinitionNode[0];
+            return unwrappedNode.Simpilfy();
         }
 
         private static List<int> GetPreparedCandidateRecipeIds(SceneInfo scene)
@@ -2504,7 +2644,16 @@ namespace HostUtilities
         [HarmonyPostfix]
         private static void ClientCookableContainer_StartSynchronising_Postfix(ClientCookableContainer __instance)
         {
-            RegisterCookableHandler(__instance);
+            RegisterPreparedCookingHandler(__instance);
+            TryRegisterPreparedSource(__instance);
+            QueueCookablePreparedSourceRefresh(__instance);
+        }
+
+        [HarmonyPatch(typeof(ClientCookablePreparationContainer), "StartSynchronising")]
+        [HarmonyPostfix]
+        private static void ClientCookablePreparationContainer_StartSynchronising_Postfix(ClientCookablePreparationContainer __instance)
+        {
+            RegisterPreparedCookingHandler(__instance);
             TryRegisterPreparedSource(__instance);
             QueueCookablePreparedSourceRefresh(__instance);
         }
@@ -2518,24 +2667,24 @@ namespace HostUtilities
                 return;
             }
 
-            ClientCookableContainer cookableContainer;
-            if (!PreparedCookableByHandlerId.TryGetValue(__instance.GetInstanceID(), out cookableContainer) || cookableContainer == null)
+            Component sourceComponent;
+            if (!PreparedSourceComponentByHandlerId.TryGetValue(__instance.GetInstanceID(), out sourceComponent) || sourceComponent == null)
             {
                 if (__instance.gameObject == null)
                 {
                     return;
                 }
 
-                cookableContainer = __instance.gameObject.GetComponent<ClientCookableContainer>();
-                if (cookableContainer == null)
+                sourceComponent = GetPreparedCookingSource(__instance.gameObject);
+                if (sourceComponent == null)
                 {
                     return;
                 }
 
-                RegisterCookableHandler(cookableContainer);
+                RegisterPreparedCookingHandler(sourceComponent);
             }
 
-            QueueCookablePreparedSourceRefresh(cookableContainer);
+            QueueCookablePreparedSourceRefresh(sourceComponent);
         }
 
         [HarmonyPatch(typeof(ClientPreparationContainer), "StartSynchronising")]
@@ -2600,7 +2749,7 @@ namespace HostUtilities
             ClientCookingHandler cookingHandler = component as ClientCookingHandler;
             if (cookingHandler != null)
             {
-                PreparedCookableByHandlerId.Remove(cookingHandler.GetInstanceID());
+                PreparedSourceComponentByHandlerId.Remove(cookingHandler.GetInstanceID());
             }
 
             ClientCookableContainer cookableContainer = component as ClientCookableContainer;
@@ -2609,7 +2758,17 @@ namespace HostUtilities
                 ClientCookingHandler linkedCookingHandler = cookableContainer.GetCookingHandler();
                 if (linkedCookingHandler != null)
                 {
-                    PreparedCookableByHandlerId.Remove(linkedCookingHandler.GetInstanceID());
+                    PreparedSourceComponentByHandlerId.Remove(linkedCookingHandler.GetInstanceID());
+                }
+            }
+
+            ClientCookablePreparationContainer cookablePreparationContainer = component as ClientCookablePreparationContainer;
+            if (cookablePreparationContainer != null && component.gameObject != null)
+            {
+                ClientCookingHandler linkedCookingHandler = component.gameObject.GetComponent<ClientCookingHandler>();
+                if (linkedCookingHandler != null)
+                {
+                    PreparedSourceComponentByHandlerId.Remove(linkedCookingHandler.GetInstanceID());
                 }
             }
 
@@ -4440,9 +4599,9 @@ namespace HostUtilities
                 builder.Append(GetOverlayTodoPrefix(row, showPrepared)).Append(' ');
                 builder.Append(GetOverlayDishNameText(row, showPrepared));
                 builder.Append("  |  ");
-                builder.Append(WrapRichValue(row.Served.ToString(), overlayServedValueColor != null ? overlayServedValueColor.Value : new Color(0.58f, 0.84f, 1f, 1f)));
+                builder.Append(WrapRichValue(row.Served.ToString(), GetOverlayServedValueColor(row, showPrepared)));
                 builder.Append("  |  ");
-                builder.Append(WrapRichValue((row.Probability * 100d).ToString("0.0") + "%", overlayProbabilityValueColor != null ? overlayProbabilityValueColor.Value : new Color(1f, 0.84f, 0.40f, 1f)));
+                builder.Append(WrapRichValue((row.Probability * 100d).ToString("0.0") + "%", GetOverlayProbabilityValueColor(row, showPrepared)));
                 OverlayRenderRow renderRow = GetOrCreateOverlayRenderRow(i);
                 renderRow.Text = builder.ToString();
                 renderRow.BackgroundColor = GetOverlayRowBackgroundColor(row, showPrepared);
@@ -4669,6 +4828,34 @@ namespace HostUtilities
             }
 
             return name;
+        }
+
+        private static Color GetOverlayServedValueColor(OverlayRow row, bool showPrepared)
+        {
+            Color baseColor = overlayServedValueColor != null ? overlayServedValueColor.Value : new Color(0.58f, 0.84f, 1f, 1f);
+            return AdjustOverlayValueColor(baseColor, row, showPrepared);
+        }
+
+        private static Color GetOverlayProbabilityValueColor(OverlayRow row, bool showPrepared)
+        {
+            Color baseColor = overlayProbabilityValueColor != null ? overlayProbabilityValueColor.Value : new Color(1f, 0.84f, 0.40f, 1f);
+            return AdjustOverlayValueColor(baseColor, row, showPrepared);
+        }
+
+        private static Color AdjustOverlayValueColor(Color baseColor, OverlayRow row, bool showPrepared)
+        {
+            if (row == null)
+            {
+                return baseColor;
+            }
+
+            bool isDeferredTodo = row.Probability <= 0d && row.OnMenu <= 0 && (!showPrepared || row.Prepared <= 0);
+            if (!isDeferredTodo)
+            {
+                return baseColor;
+            }
+
+            return new Color(baseColor.r, baseColor.g, baseColor.b, baseColor.a * 0.38f);
         }
 
         private static Color GetOverlayRowBackgroundColor(OverlayRow row, bool showPrepared)
