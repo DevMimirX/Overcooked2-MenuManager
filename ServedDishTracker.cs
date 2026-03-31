@@ -70,6 +70,8 @@ namespace HostUtilities
             public IClientOrderDefinition Provider;
             public OrderCompositionChangedCallback Callback;
             public int MatchedRecipeId;
+            public bool PendingRemoval;
+            public int RemovalGraceUntilFrame;
         }
 
         private sealed class OverlayDisplay : DebugDisplay
@@ -161,7 +163,7 @@ namespace HostUtilities
                     if (row.HasStrikeThrough)
                     {
                         float strikeY = rowRect.y + Mathf.Floor(rowRect.height * 0.56f);
-                        Rect strikeRect = new Rect(rowRect.x + 34f, strikeY, Mathf.Max(8f, rowRect.width - 40f), 2f);
+                        Rect strikeRect = new Rect(rowRect.x + 30f, strikeY, Mathf.Max(12f, rowRect.width - 36f), 3f);
                         GUI.DrawTexture(strikeRect, Texture2D.whiteTexture);
                     }
                     GUI.color = previousTextColor;
@@ -263,17 +265,18 @@ namespace HostUtilities
         private const int SceneRefreshIntervalInRoundWithConfigOpen = 30;
         private const int SceneRefreshIntervalOutOfRound = 20;
         private const int DiscoveryFlushIntervalFrames = 900;
-        private const int ControllerLookupIntervalFrames = 180;
-        private const int ControllerLookupRetryIntervalFrames = 20;
+        private const int ControllerLookupIntervalFrames = 300;
+        private const int ControllerLookupRetryIntervalFrames = 30;
         private const int OverlayRefreshIntervalFrames = 24;
-        private const int PreparedSourceRefreshIntervalFrames = 30;
+        private const int PreparedSourceRefreshIntervalFrames = 45;
         private const int MaxPreparedSourceRefreshesPerBatch = 1;
-        private const int PreparedSourcePruneIntervalFrames = 3600;
+        private const int PreparedSourcePruneIntervalFrames = 5400;
+        private const int PreparedSourceRemovalGraceFrames = 18;
         private const int PreparedBootstrapStepIntervalFrames = 60;
-        private const int PreparedBootstrapFallbackDelayFrames = 240;
-        private const int PreparedBootstrapFallbackIntervalFrames = 900;
-        private const int TicketWidgetRefreshDelayFrames = 24;
-        private const int TicketWidgetRetryIntervalFrames = 60;
+        private const int PreparedBootstrapFallbackDelayFrames = 900;
+        private const int PreparedBootstrapFallbackIntervalFrames = 3600;
+        private const int TicketWidgetRefreshDelayFrames = 30;
+        private const int TicketWidgetRetryIntervalFrames = 90;
         private const int HotkeyFilePollIntervalFrames = 7200;
         private const KeyCode DefaultSettingsWindowHotkey = KeyCode.F6;
 
@@ -369,7 +372,9 @@ namespace HostUtilities
         private static ClientKitchenFlowControllerBase cachedKitchenFlowController;
         private static int nextKitchenFlowLookupFrame;
         private static string currentOnMenuCountsSceneName = string.Empty;
+        private static string probabilityMapSceneName = string.Empty;
         private static bool currentOnMenuCountsDirty = true;
+        private static bool probabilityMapDirty = true;
         private static int nextTrackedSceneRefreshPollFrame;
         private static int nextDiscoveryFlushFrame;
         private static int nextPreparedSourceRefreshFrame;
@@ -1324,6 +1329,12 @@ namespace HostUtilities
             }
         }
 
+        private static void InvalidateProbabilityMap()
+        {
+            probabilityMapDirty = true;
+            probabilityMapSceneName = string.Empty;
+        }
+
         private static void InvalidateTicketWidgets()
         {
             if (!IsMenuTicketTintEnabled() && !ticketWidgetTintActive)
@@ -1356,6 +1367,7 @@ namespace HostUtilities
             CurrentOnMenuCounts.Clear();
             currentOnMenuCountsSceneName = string.Empty;
             currentOnMenuCountsDirty = true;
+            InvalidateProbabilityMap();
             InvalidatePreparedCandidates(false);
         }
 
@@ -1426,15 +1438,17 @@ namespace HostUtilities
         private static void IncrementOnMenuCount(string sceneName, int recipeId)
         {
             EnsureOnMenuCountScene(sceneName);
-            CurrentOnMenuCounts[recipeId] = GetCount(CurrentOnMenuCounts, recipeId) + 1;
+            int previousCount = GetCount(CurrentOnMenuCounts, recipeId);
+            CurrentOnMenuCounts[recipeId] = previousCount + 1;
             currentOnMenuCountsDirty = false;
-            InvalidatePreparedCandidates(true);
+            InvalidatePreparedCandidates(previousCount == 0);
         }
 
         private static void DecrementOnMenuCount(string sceneName, int recipeId)
         {
             EnsureOnMenuCountScene(sceneName);
-            int nextValue = Math.Max(0, GetCount(CurrentOnMenuCounts, recipeId) - 1);
+            int previousCount = GetCount(CurrentOnMenuCounts, recipeId);
+            int nextValue = Math.Max(0, previousCount - 1);
             if (nextValue > 0)
             {
                 CurrentOnMenuCounts[recipeId] = nextValue;
@@ -1445,7 +1459,7 @@ namespace HostUtilities
             }
 
             currentOnMenuCountsDirty = false;
-            InvalidatePreparedCandidates(true);
+            InvalidatePreparedCandidates(previousCount > 0 && nextValue == 0);
         }
 
         private static void InvalidatePreparedCandidates(bool queueAllPreparedSources)
@@ -1478,6 +1492,7 @@ namespace HostUtilities
                 CurrentOnMenuCounts.Clear();
                 currentOnMenuCountsSceneName = sceneName;
                 currentOnMenuCountsDirty = false;
+                InvalidateProbabilityMap();
             }
         }
 
@@ -1525,6 +1540,7 @@ namespace HostUtilities
 
             if (preparedSourceBootstrapComplete
                 && PreparedSourcesByInstanceId.Count == 0
+                && GetPreparedCandidateRecipeIds(scene).Count > 0
                 && Time.frameCount >= nextPreparedBootstrapFallbackFrame)
             {
                 SchedulePreparedBootstrap(0);
@@ -1657,6 +1673,7 @@ namespace HostUtilities
         private static void LoadingScreenFlow_NextScene_Prefix()
         {
             currentRun = null;
+            InvalidateProbabilityMap();
             cachedClientFlowController = null;
             cachedKitchenFlowController = null;
             nextClientFlowLookupFrame = 0;
@@ -1695,6 +1712,7 @@ namespace HostUtilities
             int recipeId = orderData.RecipeListEntry.m_order.m_uID;
             run.TotalAdded++;
             run.AddedCounts[recipeId] = GetCount(run.AddedCounts, recipeId) + 1;
+            InvalidateProbabilityMap();
             IncrementOnMenuCount(scene.SceneName, recipeId);
             InvalidateOverlay();
         }
@@ -2012,6 +2030,8 @@ namespace HostUtilities
             source.GameObjectInstanceId = gameObjectInstanceId;
             source.Component = component;
             source.Provider = provider;
+            source.PendingRemoval = false;
+            source.RemovalGraceUntilFrame = 0;
             source.Callback = delegate
             {
                 QueuePreparedSourceRefresh(instanceId);
@@ -2193,6 +2213,9 @@ namespace HostUtilities
                 return;
             }
 
+            source.PendingRemoval = false;
+            source.RemovalGraceUntilFrame = 0;
+
             if (source.Component == null || source.Provider == null || source.Component.gameObject == null || !source.Component.gameObject.activeInHierarchy)
             {
                 RemovePreparedSource(instanceId);
@@ -2274,7 +2297,7 @@ namespace HostUtilities
             }
 
             Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene);
-            Dictionary<int, double> probabilityByRecipeId = BuildProbabilityMap(scene, EnsureRun(scene));
+            Dictionary<int, double> probabilityByRecipeId = GetProbabilityMap(scene, EnsureRun(scene));
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
             {
                 RecipeInfo recipe = scene.OrderedRecipes[i];
@@ -2312,11 +2335,67 @@ namespace HostUtilities
             source.MatchedRecipeId = matchedRecipeId;
             if (matchedRecipeId != 0)
             {
-                AdjustPreparedCount(matchedRecipeId, 1);
+                bool consumedPendingTransfer = ConsumePendingPreparedTransfer(matchedRecipeId, source.InstanceId);
+                if (!consumedPendingTransfer)
+                {
+                    AdjustPreparedCount(matchedRecipeId, 1);
+                }
             }
 
             InvalidateOverlay();
             InvalidateTicketWidgets();
+        }
+
+        private static bool ConsumePendingPreparedTransfer(int matchedRecipeId, int targetInstanceId)
+        {
+            if (matchedRecipeId == 0)
+            {
+                return false;
+            }
+
+            int pendingSourceId = 0;
+            PreparedSourceState pendingSourceState = null;
+            foreach (KeyValuePair<int, PreparedSourceState> pair in PreparedSourcesByInstanceId)
+            {
+                PreparedSourceState pendingSource = pair.Value;
+                if (pendingSource == null
+                    || pair.Key == targetInstanceId
+                    || !pendingSource.PendingRemoval
+                    || pendingSource.MatchedRecipeId != matchedRecipeId)
+                {
+                    continue;
+                }
+
+                pendingSourceId = pair.Key;
+                pendingSourceState = pendingSource;
+                break;
+            }
+
+            if (pendingSourceState == null)
+            {
+                return false;
+            }
+
+            PreparedCookStateBySourceId.Remove(pendingSourceId);
+            DirtyPreparedSourceIds.Remove(pendingSourceId);
+            if (pendingSourceState.GameObjectInstanceId != 0)
+            {
+                PreparedSourceIdsByGameObjectId.Remove(pendingSourceState.GameObjectInstanceId);
+            }
+
+            if (pendingSourceState.Provider != null && pendingSourceState.Callback != null)
+            {
+                try
+                {
+                    pendingSourceState.Provider.UnregisterOrderCompositionChangedCallback(pendingSourceState.Callback);
+                }
+                catch
+                {
+                }
+            }
+
+            PreparedSourcesByInstanceId.Remove(pendingSourceId);
+            return true;
         }
 
         private static void AdjustPreparedCount(int recipeId, int delta)
@@ -2337,6 +2416,18 @@ namespace HostUtilities
             PreparedSourceState source;
             if (!PreparedSourcesByInstanceId.TryGetValue(instanceId, out source) || source == null)
             {
+                return;
+            }
+
+            if (source.MatchedRecipeId != 0 && !source.PendingRemoval)
+            {
+                source.PendingRemoval = true;
+                source.RemovalGraceUntilFrame = Time.frameCount + PreparedSourceRemovalGraceFrames;
+                int targetFrame = source.RemovalGraceUntilFrame;
+                if (nextPreparedSourcePruneFrame == 0 || targetFrame < nextPreparedSourcePruneFrame)
+                {
+                    nextPreparedSourcePruneFrame = targetFrame;
+                }
                 return;
             }
 
@@ -2374,7 +2465,23 @@ namespace HostUtilities
             foreach (KeyValuePair<int, PreparedSourceState> pair in PreparedSourcesByInstanceId)
             {
                 PreparedSourceState source = pair.Value;
-                if (source == null || source.Component == null || source.Component.gameObject == null || !source.Component.gameObject.activeInHierarchy)
+                if (source == null)
+                {
+                    PreparedSourceRemovalBuffer.Add(pair.Key);
+                    continue;
+                }
+
+                if (source.PendingRemoval)
+                {
+                    if (Time.frameCount >= source.RemovalGraceUntilFrame)
+                    {
+                        PreparedSourceRemovalBuffer.Add(pair.Key);
+                    }
+
+                    continue;
+                }
+
+                if (source.Component == null || source.Component.gameObject == null || !source.Component.gameObject.activeInHierarchy)
                 {
                     PreparedSourceRemovalBuffer.Add(pair.Key);
                 }
@@ -4087,12 +4194,14 @@ namespace HostUtilities
                 currentRun.SceneName = scene.SceneName;
                 currentRun.CurrentPhaseIndex = 0;
                 InitializeRunCounts(currentRun, scene);
+                InvalidateProbabilityMap();
                 return currentRun;
             }
 
             if (currentRun.AddedCounts.Count < scene.OrderedRecipes.Count || currentRun.ServedCounts.Count < scene.OrderedRecipes.Count)
             {
                 InitializeRunCounts(currentRun, scene);
+                InvalidateProbabilityMap();
             }
 
             return currentRun;
@@ -4167,6 +4276,7 @@ namespace HostUtilities
             currentRun.CurrentPhaseIndex = Math.Max(0, phaseIndex);
             currentRun.TotalAdded = 0;
             currentRun.AddedCounts.Clear();
+            InvalidateProbabilityMap();
             InvalidatePreparedCandidates(true);
             InvalidateOverlay();
         }
@@ -4206,7 +4316,7 @@ namespace HostUtilities
             RunInfo run = EnsureRun(scene);
             Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene);
             Dictionary<int, int> menuOrderByRecipeId = BuildMenuOrderMap(scene);
-            Dictionary<int, double> probabilityByRecipeId = BuildProbabilityMap(scene, run);
+            Dictionary<int, double> probabilityByRecipeId = GetProbabilityMap(scene, run);
             List<OverlayRow> rows = OverlayRowsBuffer;
             int rowCount = 0;
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
@@ -4390,6 +4500,27 @@ namespace HostUtilities
             return builder.ToString().TrimEnd();
         }
 
+        private static Dictionary<int, double> GetProbabilityMap(SceneInfo scene, RunInfo run)
+        {
+            if (scene == null || run == null)
+            {
+                ProbabilityByRecipeBuffer.Clear();
+                probabilityMapDirty = true;
+                probabilityMapSceneName = string.Empty;
+                return ProbabilityByRecipeBuffer;
+            }
+
+            if (!probabilityMapDirty
+                && string.Equals(probabilityMapSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+            {
+                return ProbabilityByRecipeBuffer;
+            }
+
+            probabilityMapSceneName = scene.SceneName;
+            probabilityMapDirty = false;
+            return BuildProbabilityMap(scene, run);
+        }
+
         private static Dictionary<int, double> BuildProbabilityMap(SceneInfo scene, RunInfo run)
         {
             Dictionary<int, double> probabilityByRecipeId = ProbabilityByRecipeBuffer;
@@ -4551,6 +4682,11 @@ namespace HostUtilities
             if (isPrepared)
             {
                 return new Color(0.22f, 0.58f, 0.22f, 0.28f);
+            }
+
+            if (row.Probability <= 0d && row.OnMenu <= 0 && (!showPrepared || row.Prepared <= 0))
+            {
+                return new Color(0f, 0f, 0f, 0.22f);
             }
 
             return Color.clear;
