@@ -77,6 +77,10 @@
       <HintPath>..\..\third_party\libs\UnityEngine.IMGUIModule.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>..\..\third_party\libs\UnityEngine.UIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="UnityEngine.ParticleSystemModule">
       <HintPath>..\..\third_party\libs\UnityEngine.ParticleSystemModule.dll</HintPath>
       <Private>False</Private>
@@ -110,6 +114,14 @@
     <Compile Include="ModuleUtility.cs" />
     <Compile Include="NoMenuMode.cs" />
     <Compile Include="ServedDishTracker.cs" />
+    <Compile Include="ServedDishTracker.Settings.cs" />
+    <Compile Include="ServedDishTracker.Runtime.cs" />
+    <Compile Include="ServedDishTracker.Hooks.cs" />
+    <Compile Include="ServedDishTracker.Prepared.cs" />
+    <Compile Include="ServedDishTracker.Tickets.cs" />
+    <Compile Include="ServedDishTracker.SceneUi.cs" />
+    <Compile Include="ServedDishTracker.Overlay.cs" />
+    <Compile Include="ServedDishTracker.Persistence.cs" />
     <Compile Include="_MODEntry.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
   </ItemGroup>

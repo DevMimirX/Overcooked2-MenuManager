@@ -29,6 +29,37 @@ namespace HostUtilities
         internal static readonly Dictionary<string, string> FullChineseNames = BuildChineseMap(false);
         internal static readonly Dictionary<string, string> ShortChineseNames = BuildChineseMap(true);
 
+        private static readonly string[] OrderedCategoryKeys = new string[]
+        {
+            "pizza",
+            "cake",
+            "moonpie",
+            "fruitpie",
+            "roast",
+            "fried",
+            "pancake",
+            "dessert",
+            "sushi",
+            "steamed",
+            "soup",
+            "hotpot",
+            "breakfast",
+            "burger",
+            "burrito",
+            "kebob",
+            "donut",
+            "salad",
+            "pasta",
+            "smoothie",
+            "hotdog",
+            "smores",
+            "fruitplatter",
+            "sashimi",
+            "hotchocolate",
+            "float"
+        };
+
+        private static readonly Dictionary<string, int> CategoryTierOverrides = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, SortedDictionary<int, string>> DiscoveredRecipesByScene = new Dictionary<string, SortedDictionary<int, string>>(StringComparer.OrdinalIgnoreCase);
 
         private static string discoveryReportPath;
@@ -73,12 +104,18 @@ namespace HostUtilities
         public static string GetEnglishName(string internalName)
         {
             DishNameEntry entry;
-            if (TryGetEntry(internalName, out entry) && !string.IsNullOrEmpty(entry.English))
+            string rawValue = string.Empty;
+            if (TryGetEntry(internalName, out entry))
             {
-                return entry.English;
+                rawValue = entry.English;
             }
 
-            return HumanizeInternalName(internalName);
+            if (string.IsNullOrEmpty(rawValue))
+            {
+                rawValue = HumanizeInternalName(internalName);
+            }
+
+            return NormalizeEnglishName(internalName, rawValue);
         }
 
         private static string NormalizeChineseName(string internalName, string rawValue)
@@ -160,10 +197,95 @@ namespace HostUtilities
             }
         }
 
+        private static string NormalizeEnglishName(string internalName, string rawValue)
+        {
+            string value = (rawValue ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(value))
+            {
+                return value;
+            }
+
+            string categoryKey = GetCategoryKey(internalName);
+            string categoryName = GetEnglishCategoryName(internalName);
+            if (string.IsNullOrEmpty(categoryKey) || string.IsNullOrEmpty(categoryName) || string.Equals(categoryName, "Other", StringComparison.Ordinal))
+            {
+                return CollapseWhitespace(value);
+            }
+
+            if (value.StartsWith(categoryName + ":", StringComparison.OrdinalIgnoreCase))
+            {
+                return FormatEnglishCategoryName(categoryName, value.Substring(categoryName.Length + 1));
+            }
+
+            switch (categoryKey)
+            {
+                case "pizza":
+                    return FormatEnglishCategoryName(categoryName, NormalizePizzaEnglishSuffix(internalName, value));
+                case "cake":
+                    return FormatEnglishCategoryName(categoryName, NormalizeCakeEnglishSuffix(internalName, value));
+                case "moonpie":
+                    return FormatEnglishCategoryName(categoryName, NormalizeMoonpieEnglishSuffix(value));
+                case "fruitpie":
+                    return FormatEnglishCategoryName(categoryName, NormalizeFruitPieEnglishSuffix(value));
+                case "roast":
+                    return FormatEnglishCategoryName(categoryName, NormalizeRoastEnglishSuffix(internalName, value));
+                case "fried":
+                    return FormatEnglishCategoryName(categoryName, NormalizeFriedEnglishSuffix(internalName, value));
+                case "pancake":
+                    return FormatEnglishCategoryName(categoryName, StripEnglishCategorySuffix(value, "Pancake"));
+                case "dessert":
+                    return FormatEnglishCategoryName(categoryName, NormalizeDessertEnglishSuffix(internalName));
+                case "sushi":
+                    return FormatEnglishCategoryName(categoryName, NormalizeSushiEnglishSuffix(internalName, value));
+                case "steamed":
+                    return FormatEnglishCategoryName(categoryName, NormalizeSteamedEnglishSuffix(internalName, value));
+                case "soup":
+                    return FormatEnglishCategoryName(categoryName, NormalizeSoupEnglishSuffix(internalName, value));
+                case "hotpot":
+                    return FormatEnglishCategoryName(categoryName, NormalizeHotPotEnglishSuffix(internalName, value));
+                case "breakfast":
+                    return FormatEnglishCategoryName(categoryName, StripEnglishCategorySuffix(value, "Breakfast"));
+                case "burger":
+                    return FormatEnglishCategoryName(categoryName, NormalizeBurgerEnglishSuffix(internalName, value));
+                case "burrito":
+                    return FormatEnglishCategoryName(categoryName, NormalizeBurritoEnglishSuffix(internalName, value));
+                case "kebob":
+                    return FormatEnglishCategoryName(categoryName, NormalizeKebobEnglishSuffix(internalName, value));
+                case "donut":
+                    return FormatEnglishCategoryName(categoryName, NormalizeDonutEnglishSuffix(internalName, value));
+                case "salad":
+                    return FormatEnglishCategoryName(categoryName, NormalizeSaladEnglishSuffix(internalName, value));
+                case "pasta":
+                    return FormatEnglishCategoryName(categoryName, NormalizePastaEnglishSuffix(internalName, value));
+                case "smoothie":
+                    return FormatEnglishCategoryName(categoryName, NormalizeSmoothieEnglishSuffix(internalName, value));
+                case "hotdog":
+                    return FormatEnglishCategoryName(categoryName, NormalizeHotdogEnglishSuffix(internalName));
+                case "smores":
+                    return FormatEnglishCategoryName(categoryName, NormalizeSmoresEnglishSuffix(internalName, value));
+                case "fruitplatter":
+                    return FormatEnglishCategoryName(categoryName, NormalizeFruitPlatterEnglishSuffix(internalName, value));
+                case "sashimi":
+                    return FormatEnglishCategoryName(categoryName, NormalizeSashimiEnglishSuffix(internalName, value));
+                case "hotchocolate":
+                    return FormatEnglishCategoryName(categoryName, NormalizeHotChocolateEnglishSuffix(internalName, value));
+                case "float":
+                    return FormatEnglishCategoryName(categoryName, NormalizeFloatEnglishSuffix(internalName));
+                default:
+                    return CollapseWhitespace(value);
+            }
+        }
+
         private static string FormatCategoryName(string categoryName, string suffix)
         {
             string normalizedSuffix = CleanNormalizedSuffix(suffix);
             return categoryName + "：" + normalizedSuffix;
+        }
+
+        private static string FormatEnglishCategoryName(string categoryName, string suffix)
+        {
+            string normalizedSuffix = CleanNormalizedEnglishSuffix(suffix);
+            return categoryName + ": " + normalizedSuffix;
         }
 
         private static string CleanNormalizedSuffix(string suffix)
@@ -176,6 +298,20 @@ namespace HostUtilities
                 || string.Equals(value, "plain", StringComparison.OrdinalIgnoreCase))
             {
                 return "原味";
+            }
+
+            return value;
+        }
+
+        private static string CleanNormalizedEnglishSuffix(string suffix)
+        {
+            string value = CollapseWhitespace(StripBracketAnnotations(suffix ?? string.Empty).Trim());
+            value = value.Trim().Trim(':', '-', '+', '/', ' ');
+            if (string.IsNullOrEmpty(value)
+                || string.Equals(value, "Plain", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(value, "Veg", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Plain";
             }
 
             return value;
@@ -199,6 +335,44 @@ namespace HostUtilities
             }
 
             return normalizedValue.Trim();
+        }
+
+        private static string StripEnglishCategorySuffix(string value, params string[] categorySuffixes)
+        {
+            string normalizedValue = CollapseWhitespace(StripBracketAnnotations(value ?? string.Empty).Trim());
+            if (string.IsNullOrEmpty(normalizedValue))
+            {
+                return normalizedValue;
+            }
+
+            for (int i = 0; i < categorySuffixes.Length; i++)
+            {
+                string categorySuffix = categorySuffixes[i];
+                if (string.IsNullOrEmpty(categorySuffix))
+                {
+                    continue;
+                }
+
+                if (normalizedValue.EndsWith(categorySuffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    normalizedValue = normalizedValue.Substring(0, normalizedValue.Length - categorySuffix.Length);
+                    break;
+                }
+
+                if (normalizedValue.StartsWith(categorySuffix + ":", StringComparison.OrdinalIgnoreCase))
+                {
+                    normalizedValue = normalizedValue.Substring(categorySuffix.Length + 1);
+                    break;
+                }
+
+                if (normalizedValue.StartsWith(categorySuffix + " ", StringComparison.OrdinalIgnoreCase))
+                {
+                    normalizedValue = normalizedValue.Substring(categorySuffix.Length);
+                    break;
+                }
+            }
+
+            return CollapseWhitespace(normalizedValue.Trim().Trim(':', '-', '+', '/', ' '));
         }
 
         private static string StripBracketAnnotations(string value)
@@ -332,9 +506,427 @@ namespace HostUtilities
             return drink + flavor;
         }
 
+        private static string NormalizePizzaEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "MargheritaPizza":
+                case "Pizza_Plain":
+                    return "Plain";
+                case "PeperoniPizza":
+                case "Pizza_Peperoni":
+                    return "Pepperoni";
+                case "ChickenPizza":
+                case "Pizza_Chicken":
+                    return "Chicken";
+                case "Pizza_Olives":
+                    return "Olive";
+                default:
+                    return StripEnglishCategorySuffix(value, "Pizza");
+            }
+        }
+
+        private static string NormalizeCakeEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "Cake_Plain":
+                    return "Honey";
+                default:
+                    return StripEnglishCategorySuffix(value, "Cake");
+            }
+        }
+
+        private static string NormalizeMoonpieEnglishSuffix(string value)
+        {
+            return StripEnglishCategorySuffix(value, "Mooncake", "Moon Pie");
+        }
+
+        private static string NormalizeFruitPieEnglishSuffix(string value)
+        {
+            return StripEnglishCategorySuffix(value, "Fruit Pie", "Pie");
+        }
+
+        private static string NormalizeRoastEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "BeefPotatoCarrotRoast":
+                    return "Beef";
+                case "BeefPotatoCarrotBroccoliRoast":
+                    return "Beef Broccoli";
+                case "ChickenPotatoCarrotRoast":
+                    return "Chicken";
+                case "ChickenPotatoCarrotBroccoliRoast":
+                    return "Chicken Broccoli";
+                default:
+                    return StripEnglishCategorySuffix(value, "Roast");
+            }
+        }
+
+        private static string NormalizeFriedEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "ChickenNuggetsAndChips_All":
+                case "Fry_All":
+                    return "Chicken Chips";
+                case "ChickenNuggetsAndChips_ChickenOnly":
+                case "Fry_Chicken":
+                    return "Chicken";
+                case "ChickenNuggetsAndChips_ChipsOnly":
+                case "Fry_Chips":
+                    return "Chips";
+                default:
+                    return StripEnglishCategorySuffix(value, "Fry", "Fried");
+            }
+        }
+
+        private static string NormalizeDessertEnglishSuffix(string internalName)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "ChristmasPuddingWithOrange":
+                    return "Orange";
+                default:
+                    return "Plain";
+            }
+        }
+
+        private static string NormalizeSushiEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "Sushi_All":
+                    return "Fish Cucumber";
+                case "Sushi_Cucumber":
+                    return "Cucumber";
+                case "Sushi_Fish":
+                    return "Fish";
+                default:
+                    return StripEnglishCategorySuffix(value, "Sushi");
+            }
+        }
+
+        private static string NormalizeSteamedEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "SteamedSpecial_Carrot":
+                case "Steamed_Carrot":
+                    return "Carrot";
+                case "SteamedSpecial_Fish":
+                case "Steamed_Fish":
+                    return "Fish";
+                case "SteamedSpecial_Meat":
+                case "Steamed_Meat":
+                    return "Meat";
+                case "SteamedSpecial_Prawns":
+                case "Steamed_Prawns":
+                    return "Prawn";
+                default:
+                    return StripEnglishCategorySuffix(value, "Steamed");
+            }
+        }
+
+        private static string NormalizeSoupEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "OnionBroccoliCheeseSoup":
+                    return "Broccoli Cheese";
+                case "OnionCarrotPotatoSoup":
+                    return "Potato Carrot";
+                case "OnionPotatoSoupLeek":
+                    return "Potato Leek";
+                default:
+                    return StripEnglishCategorySuffix(value, "Soup");
+            }
+        }
+
+        private static string NormalizeHotPotEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "HotPot_DoubleMeat":
+                    return "Double Meat";
+                case "HotPot_DoublePrawn":
+                    return "Double Prawn";
+                case "HotPot_Meat":
+                    return "Meat";
+                case "HotPot_Mixed":
+                    return "Meat Prawn";
+                case "HotPot_Prawn":
+                    return "Prawn";
+                default:
+                    return StripEnglishCategorySuffix(value, "Hot Pot");
+            }
+        }
+
+        private static string NormalizeBurgerEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "BeefBurger":
+                case "Burger_Plain":
+                    return "Plain";
+                case "BeefBurgerCheese":
+                case "Burger_Cheese":
+                    return "Cheese";
+                case "BeefBurgerMax":
+                case "Burger_LettuceTomato":
+                    return "Lettuce Tomato";
+                case "BeefBurgerWithGreensNCheese":
+                case "Burger_CheeseLettuce":
+                    return "Lettuce Cheese";
+                case "HawaiianBurger":
+                    return "Pineapple Beef";
+                case "MD_Burger_CheeseSticks_Drink03":
+                    return "Beef Cheese Sticks Yellow Drink";
+                case "MD_Burger_Drink01":
+                    return "Beef Red Drink";
+                case "MD_Burger_Fries":
+                    return "Beef Fries";
+                case "MD_Burger_Fries_CheeseSticks":
+                    return "Beef Fries Cheese Sticks";
+                case "MD_Burger_Fries_Drink02":
+                    return "Beef Fries Green Drink";
+                case "MD_Burger_OnionRings":
+                    return "Beef Onion Rings";
+                case "MD_Burger_OnionRings_CheeseSticks":
+                    return "Beef Onion Rings Cheese Sticks";
+                case "MD_Burger_OnionRings_Drink01":
+                    return "Beef Onion Rings Red Drink";
+                case "MD_C_Burger_CheeseSticks":
+                    return "Chicken Cheese Sticks";
+                case "MD_C_Burger_CheeseSticks_Drink02":
+                    return "Chicken Cheese Sticks Green Drink";
+                case "MD_C_Burger_Drink03":
+                    return "Chicken Yellow Drink";
+                case "MD_C_Burger_Fries_CheeseSticks":
+                    return "Chicken Fries Cheese Sticks";
+                case "MD_C_Burger_Fries_Drink03":
+                    return "Chicken Fries Yellow Drink";
+                case "MD_C_Burger_Fries_OnionRings":
+                    return "Chicken Fries Onion Rings";
+                case "MD_C_Burger_OnionRings":
+                    return "Chicken Onion Rings";
+                case "MD_C_Burger_OnionRings_Drink01":
+                    return "Chicken Onion Rings Red Drink";
+                default:
+                    return StripEnglishCategorySuffix(value, "Burger");
+            }
+        }
+
+        private static string NormalizeBurritoEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "Chicken_Burrito":
+                case "Burrito_Chicken":
+                    return "Chicken";
+                case "Meat_Burrito":
+                case "Burrito_Meat":
+                    return "Beef";
+                case "Mushroom_Burrito":
+                case "Burrito_Mushroom":
+                    return "Mushroom";
+                default:
+                    return StripEnglishCategorySuffix(value, "Burrito");
+            }
+        }
+
+        private static string NormalizeKebobEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "ChickenTomatoKebob":
+                    return "Chicken Tomato";
+                case "ChickenMeatTomatoKebob":
+                    return "Chicken Tomato Beef";
+                case "MeatMushroomPineappleKebob":
+                    return "Pineapple Mushroom Beef";
+                case "MushroomPineappleTomatoKebob":
+                    return "Pineapple Mushroom Tomato";
+                default:
+                    return StripEnglishCategorySuffix(value, "Kebob", "Kebab", "Skewer");
+            }
+        }
+
+        private static string NormalizeDonutEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "Donut_Plain":
+                    return "Honey";
+                default:
+                    return StripEnglishCategorySuffix(value, "Donut");
+            }
+        }
+
+        private static string NormalizeSaladEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "Salad_Plain":
+                case "Salad_Plain_SO":
+                    return "Plain";
+                case "Salad_Tomato":
+                case "Salad_Tomato_Onion":
+                    return "Lettuce Tomato";
+                case "Salad_Tomato_SO":
+                    return "Tomato";
+                case "Salad_Corn_Onion":
+                    return "Lettuce Corn";
+                case "Salad_Cucumber":
+                case "Salad_Cucumber_Tomato_Onion":
+                    return "Lettuce Tomato Cucumber";
+                case "Salad_Cucumber_Onion":
+                    return "Lettuce Cucumber";
+                case "Salad_Cucumber_SO":
+                    return "Cucumber";
+                case "Tomato_Corn_Onion":
+                    return "Tomato Corn";
+                case "Tomato_Cucumber_Onion":
+                    return "Tomato Cucumber";
+                default:
+                    return StripEnglishCategorySuffix(value, "Salad");
+            }
+        }
+
+        private static string NormalizePastaEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "Pasta_Marinara":
+                    return "Seafood";
+                case "Pasta_MeatOnly":
+                    return "Beef";
+                case "Pasta_MushroomOnly":
+                    return "Mushroom";
+                case "Pasta_TomatoOnly":
+                    return "Tomato";
+                default:
+                    return StripEnglishCategorySuffix(value, "Pasta");
+            }
+        }
+
+        private static string NormalizeSmoothieEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "MegaSmoothie":
+                    return "Four Fruit";
+                case "MelonSmoothie":
+                    return "Watermelon";
+                default:
+                    return StripEnglishCategorySuffix(value, "Smoothie");
+            }
+        }
+
+        private static string NormalizeHotdogEnglishSuffix(string internalName)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "Hotdog_Plain":
+                    return "Plain";
+                case "Hotdog_Onions":
+                    return "Onion";
+                case "Hotdog_Ketchup":
+                    return "Ketchup";
+                case "Hotdog_Mustard":
+                    return "Mustard";
+                case "Hotdog_Ketchup_Mustard":
+                    return "Ketchup Mustard";
+                case "Hotdog_Onions_Ketchup":
+                    return "Onion Ketchup";
+                case "Hotdog_Onions_Mustard":
+                    return "Onion Mustard";
+                default:
+                    return "Plain";
+            }
+        }
+
+        private static string NormalizeSmoresEnglishSuffix(string internalName, string value)
+        {
+            if (string.Equals(NormalizeCategorySource(internalName), "Smores_Plain", StringComparison.OrdinalIgnoreCase))
+            {
+                return "Plain";
+            }
+
+            return StripEnglishCategorySuffix(value, "Smores", "S'more");
+        }
+
+        private static string NormalizeFruitPlatterEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "FruitPlatter_GrapesPeach":
+                    return "Peach Grape";
+                case "FruitPlatter_OrangeGrapes":
+                    return "Orange Grape";
+                case "FruitPlatter_OrangePeach":
+                    return "Orange Peach";
+                case "FruitPlatter_OrangePeachGrapes":
+                    return "Trio";
+                default:
+                    return StripEnglishCategorySuffix(value, "Fruit Platter", "Platter");
+            }
+        }
+
+        private static string NormalizeSashimiEnglishSuffix(string internalName, string value)
+        {
+            switch (NormalizeCategorySource(internalName))
+            {
+                case "Sushi_PlainFish":
+                    return "Fish";
+                case "Sushi_PlainPrawn":
+                    return "Prawn";
+                default:
+                    return StripEnglishCategorySuffix(value, "Sashimi");
+            }
+        }
+
+        private static string NormalizeHotChocolateEnglishSuffix(string internalName, string value)
+        {
+            string normalizedInternalName = NormalizeCategorySource(internalName);
+            bool hasCream = normalizedInternalName.IndexOf("Cream", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool hasMallow = normalizedInternalName.IndexOf("Mallow", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (hasCream && hasMallow)
+            {
+                return "Cream Marshmallow";
+            }
+
+            if (hasCream)
+            {
+                return "Cream";
+            }
+
+            if (hasMallow)
+            {
+                return "Marshmallow";
+            }
+
+            string normalized = StripEnglishCategorySuffix(value, "Hot Cocoa", "Hot Chocolate", "Cocoa");
+            return string.IsNullOrEmpty(normalized) ? "Plain" : normalized;
+        }
+
+        private static string NormalizeFloatEnglishSuffix(string internalName)
+        {
+            string normalizedInternalName = NormalizeCategorySource(internalName);
+            string drink = normalizedInternalName.IndexOf("OrangeSodaFloat", StringComparison.OrdinalIgnoreCase) >= 0 ? "Orange" : "Root Beer";
+            string flavor = normalizedInternalName.IndexOf("Chocolate", StringComparison.OrdinalIgnoreCase) >= 0 ? "Cocoa" : "Vanilla";
+            return drink + " " + flavor;
+        }
+
         public static string GetCategoryName(string internalName)
         {
-            switch (GetCategoryKey(internalName))
+            return GetCategoryNameByKey(GetCategoryKey(internalName));
+        }
+
+        public static string GetCategoryNameByKey(string categoryKey)
+        {
+            switch ((categoryKey ?? string.Empty).Trim())
             {
                 case "pizza":
                     return "披萨";
@@ -393,18 +985,111 @@ namespace HostUtilities
             }
         }
 
-        public static int GetCategoryTier(string internalName)
+        public static string GetEnglishCategoryName(string internalName)
         {
-            switch (GetCategoryKey(internalName))
+            return GetEnglishCategoryNameByKey(GetCategoryKey(internalName));
+        }
+
+        public static string GetEnglishCategoryNameByKey(string categoryKey)
+        {
+            switch ((categoryKey ?? string.Empty).Trim())
             {
                 case "pizza":
+                    return "Pizza";
                 case "cake":
+                    return "Cake";
+                case "moonpie":
+                    return "Mooncake";
+                case "fruitpie":
+                    return "Pie";
+                case "roast":
+                    return "Roast";
+                case "fried":
+                    return "Fry";
+                case "pancake":
+                    return "Pancake";
+                case "dessert":
+                    return "Dessert";
+                case "sushi":
+                    return "Sushi";
+                case "steamed":
+                    return "Steamed";
+                case "soup":
+                    return "Soup";
+                case "hotpot":
+                    return "Hot Pot";
+                case "breakfast":
+                    return "Breakfast";
+                case "burger":
+                    return "Burger";
+                case "burrito":
+                    return "Burrito";
+                case "kebob":
+                    return "Skewer";
+                case "donut":
+                    return "Donut";
+                case "salad":
+                    return "Salad";
+                case "pasta":
+                    return "Pasta";
+                case "smoothie":
+                    return "Smoothie";
+                case "hotdog":
+                    return "Hot Dog";
+                case "smores":
+                    return "S'more";
+                case "fruitplatter":
+                    return "Platter";
+                case "sashimi":
+                    return "Sashimi";
+                case "hotchocolate":
+                    return "Hot Cocoa";
+                case "float":
+                    return "Float";
+                default:
+                    return "Other";
+            }
+        }
+
+        public static string GetDisplayCategoryName(string internalName, bool chinese)
+        {
+            return chinese ? GetCategoryName(internalName) : GetEnglishCategoryName(internalName);
+        }
+
+        public static string GetDisplayCategoryNameByKey(string categoryKey, bool chinese)
+        {
+            return chinese ? GetCategoryNameByKey(categoryKey) : GetEnglishCategoryNameByKey(categoryKey);
+        }
+
+        public static int GetCategoryTier(string internalName)
+        {
+            return GetCategoryTierByKey(GetCategoryKey(internalName));
+        }
+
+        public static int GetCategoryTierByKey(string categoryKey)
+        {
+            string normalizedKey = (categoryKey ?? string.Empty).Trim();
+            int overrideTier;
+            if (CategoryTierOverrides.TryGetValue(normalizedKey, out overrideTier))
+            {
+                return overrideTier;
+            }
+
+            return GetDefaultCategoryTierByKey(normalizedKey);
+        }
+
+        public static int GetDefaultCategoryTierByKey(string categoryKey)
+        {
+            switch ((categoryKey ?? string.Empty).Trim())
+            {
+                case "pizza":
+                case "pancake":
                 case "moonpie":
                 case "fruitpie":
                     return 1;
                 case "roast":
                 case "fried":
-                case "pancake":
+                case "cake":
                 case "dessert":
                     return 2;
                 case "sushi":
@@ -432,6 +1117,32 @@ namespace HostUtilities
                 default:
                     return 99;
             }
+        }
+
+        public static string[] GetOrderedCategoryKeys()
+        {
+            string[] copy = new string[OrderedCategoryKeys.Length];
+            Array.Copy(OrderedCategoryKeys, copy, OrderedCategoryKeys.Length);
+            return copy;
+        }
+
+        public static void SetCategoryTierOverride(string categoryKey, int tier)
+        {
+            string normalizedKey = (categoryKey ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(normalizedKey))
+            {
+                return;
+            }
+
+            int clampedTier = Math.Max(1, Math.Min(6, tier));
+            int defaultTier = GetDefaultCategoryTierByKey(normalizedKey);
+            if (defaultTier == 99 || clampedTier == defaultTier)
+            {
+                CategoryTierOverrides.Remove(normalizedKey);
+                return;
+            }
+
+            CategoryTierOverrides[normalizedKey] = clampedTier;
         }
 
         public static void RecordRecipe(string sceneName, int recipeId, string internalName)
@@ -718,6 +1429,36 @@ namespace HostUtilities
             return !string.IsNullOrEmpty(value)
                 && !string.IsNullOrEmpty(suffix)
                 && value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string CollapseWhitespace(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            StringBuilder builder = new StringBuilder(value.Length);
+            bool previousWasWhitespace = false;
+            for (int i = 0; i < value.Length; i++)
+            {
+                char current = value[i];
+                if (char.IsWhiteSpace(current))
+                {
+                    if (builder.Length > 0 && !previousWasWhitespace)
+                    {
+                        builder.Append(' ');
+                    }
+
+                    previousWasWhitespace = true;
+                    continue;
+                }
+
+                builder.Append(current);
+                previousWasWhitespace = false;
+            }
+
+            return builder.ToString().Trim();
         }
 
         private static void EnsureDiscoveryPath()
