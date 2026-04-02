@@ -411,9 +411,11 @@ namespace HostUtilities
 
         private static bool IsIgnoredSceneEntry(SceneDirectoryData.SceneDirectoryEntry entry)
         {
-            return entry.Label.Contains("ThroneRoom")
-                || entry.Label.Contains("Tutorial")
-                || entry.Label.Contains("DLC07Battlements08");
+            string label = entry != null ? entry.Label : null;
+            return string.IsNullOrEmpty(label)
+                || label.Contains("ThroneRoom")
+                || label.Contains("Tutorial")
+                || label.Contains("DLC07Battlements08");
         }
 
         private static bool TryGetCurrentSceneVariant(out SceneDirectoryData.PerPlayerCountDirectoryEntry sceneVariant)
@@ -459,15 +461,17 @@ namespace HostUtilities
 
         private static List<GameSession> GetFrontendSessionPrefabs(GameSession.GameType gameType)
         {
-            List<GameSession> sessions = new List<GameSession>();
+            List<GameSession> sessions = FrontendSessionBuffer;
+            sessions.Clear();
             T17FrontendFlow frontendFlow = T17FrontendFlow.Instance;
             if (frontendFlow == null)
             {
                 return sessions;
             }
 
-            string fieldName = gameType == GameSession.GameType.Competitive ? "m_CompetitiveGameSessionPrefabs" : "m_CoopGameSessionPrefabs";
-            System.Reflection.FieldInfo field = AccessTools.Field(typeof(T17FrontendFlow), fieldName);
+            System.Reflection.FieldInfo field = gameType == GameSession.GameType.Competitive
+                ? FrontendCompetitiveGameSessionPrefabsField
+                : FrontendCoopGameSessionPrefabsField;
             object dataContainer = field != null ? field.GetValue(frontendFlow) : null;
             if (dataContainer == null)
             {
@@ -500,7 +504,7 @@ namespace HostUtilities
                 return session != null;
             }
 
-            DLCManager dlcManager = UnityEngine.Object.FindObjectOfType<DLCManager>();
+            DLCManager dlcManager = GetDlcManager();
             if (dlcManager == null || dlcManager.AllDlc == null)
             {
                 return true;
@@ -516,6 +520,17 @@ namespace HostUtilities
             }
 
             return true;
+        }
+
+        private static DLCManager GetDlcManager()
+        {
+            if (cachedDlcManager == null || Time.frameCount >= nextDlcManagerLookupFrame)
+            {
+                cachedDlcManager = UnityEngine.Object.FindObjectOfType<DLCManager>();
+                nextDlcManagerLookupFrame = Time.frameCount + (cachedDlcManager != null ? ControllerLookupIntervalFrames : ControllerLookupRetryIntervalFrames);
+            }
+
+            return cachedDlcManager;
         }
 
         private static SceneDirectoryData.PerPlayerCountDirectoryEntry GetSceneVarient(SceneDirectoryData.SceneDirectoryEntry entry)

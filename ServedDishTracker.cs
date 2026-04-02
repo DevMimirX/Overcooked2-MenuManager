@@ -356,9 +356,14 @@ namespace HostUtilities
         private static readonly List<ReferenceTicketState> ReferenceTicketStatesForFlowBuffer = new List<ReferenceTicketState>();
         private static readonly List<RecipeFlowGUI> ReferenceTicketFlowsBuffer = new List<RecipeFlowGUI>();
         private static readonly HashSet<int> ReferenceTicketFlowIdsBuffer = new HashSet<int>();
+        private static readonly Dictionary<int, ReferenceTicketState> ExistingReferenceTicketStatesByRecipeIdBuffer = new Dictionary<int, ReferenceTicketState>();
+        private static readonly HashSet<int> DesiredReferenceTicketRecipeIdsBuffer = new HashSet<int>();
         private static readonly List<object> LayoutReferenceWidgetDataBuffer = new List<object>();
         private static readonly List<object> LayoutDyingReferenceWidgetDataBuffer = new List<object>();
         private static readonly List<object> LayoutRealWidgetDataBuffer = new List<object>();
+        private static readonly List<GameSession> FrontendSessionBuffer = new List<GameSession>();
+        private static readonly List<int> StaleTicketWidgetIdsBuffer = new List<int>();
+        private static readonly HashSet<ClientOrderControllerBase> VisitedOrderControllersBuffer = new HashSet<ClientOrderControllerBase>();
         private static readonly Dictionary<string, ConfigEntry<int>> CategoryTierEntriesByKey = new Dictionary<string, ConfigEntry<int>>(StringComparer.OrdinalIgnoreCase);
         private static readonly StringBuilder OverlayTextBuilder = new StringBuilder(768);
         private static readonly TeamID[] TeamIds = (TeamID[])Enum.GetValues(typeof(TeamID));
@@ -449,6 +454,8 @@ namespace HostUtilities
         private static readonly FieldInfo RecipeFlowRecipeWidgetDataWidgetField = RecipeFlowRecipeWidgetDataType != null
             ? RecipeFlowRecipeWidgetDataType.GetField("m_widget", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             : null;
+        private static readonly FieldInfo FrontendCoopGameSessionPrefabsField = AccessTools.Field(typeof(T17FrontendFlow), "m_CoopGameSessionPrefabs");
+        private static readonly FieldInfo FrontendCompetitiveGameSessionPrefabsField = AccessTools.Field(typeof(T17FrontendFlow), "m_CompetitiveGameSessionPrefabs");
         private static readonly FieldInfo UISubElementContainerContainerField = typeof(UISubElementContainer).GetField("m_container", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeWidgetRecipeTreeField = typeof(RecipeWidgetUIController).GetField("m_recipeTree", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeWidgetDisplayConfigField = typeof(RecipeWidgetUIController).GetField("m_displayConfig", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -457,6 +464,8 @@ namespace HostUtilities
         private static int nextClientFlowLookupFrame;
         private static ClientKitchenFlowControllerBase cachedKitchenFlowController;
         private static int nextKitchenFlowLookupFrame;
+        private static DLCManager cachedDlcManager;
+        private static int nextDlcManagerLookupFrame;
         private static string currentOnMenuCountsSceneName = string.Empty;
         private static string probabilityMapSceneName = string.Empty;
         private static bool currentOnMenuCountsDirty = true;
@@ -497,6 +506,10 @@ namespace HostUtilities
         private static Vector2 settingsWindowScrollPosition = Vector2.zero;
         private static Vector2 sceneDropdownScrollPosition = Vector2.zero;
         private static bool preparedCandidateRecipeIdsDirty = true;
+        private static int overlayRowsVersion;
+        private static int cachedOverlayRowsVersion = -1;
+        private static string cachedOverlayRowsSceneName = string.Empty;
+        private static bool cachedOverlayRowsShowPrepared;
 
         public static void Awake()
         {
@@ -539,7 +552,7 @@ namespace HostUtilities
             menuReferenceTicketTintColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "猜单颜色",
-                migratedReferenceTicketTintColorValue ?? new Color(0.49f, 0.59f, 0.65f, 0.78f),
+                migratedReferenceTicketTintColorValue ?? new Color(0.49f, 0.59f, 0.67f, 0.62f),
                 "菜单栏里猜单的颜色。A 通道控制整张单的透明度，显示时会额外压暗一点。");
             languageMode = _MODEntry.SettingsConfig.Bind<TrackerLanguage>(
                 TrackerSection,

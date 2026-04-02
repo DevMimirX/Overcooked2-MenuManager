@@ -20,7 +20,46 @@ namespace HostUtilities
     {
         private const float ReferenceTicketColorSaturation = 0.40f;
         private const float ReferenceTicketColorBrightness = 0.88f;
-        private const float ReferenceTicketOpacityScale = 0.76f;
+        private const float ReferenceTicketOpacityScale = 0.80f;
+        private const float ReferenceTicketDestroyAnimationTintStrength = 0.18f;
+
+        private sealed class ReferenceTicketDestroyAnimation : WidgetAnimation
+        {
+            private readonly Color accentColor;
+            private float elapsedTime;
+
+            private const float TotalTime = 0.5f;
+
+            public ReferenceTicketDestroyAnimation(Color accentColor)
+            {
+                this.accentColor = accentColor;
+                this.accentColor.a = 1f;
+            }
+
+            public override void Advance(float _deltaTime)
+            {
+                elapsedTime += _deltaTime;
+            }
+
+            public override bool IsFinished()
+            {
+                return elapsedTime > TotalTime;
+            }
+
+            public override Color GetColourModifier()
+            {
+                float timeProp = Mathf.Clamp01(elapsedTime / TotalTime);
+                float tintProp = Mathf.Sin((float)Math.PI / 2f * Mathf.Clamp01(2f * timeProp));
+                Color result = Color.Lerp(Color.white, accentColor, tintProp);
+                result.a = Mathf.Lerp(1f, 0f, SmoothStep(Mathf.Clamp01(2f * timeProp - 1f)));
+                return result;
+            }
+
+            private static float SmoothStep(float value)
+            {
+                return 0.5f * (1f - Mathf.Cos((float)Math.PI * value));
+            }
+        }
 
         [HarmonyPatch(typeof(RecipeFlowGUI), "AddElement")]
         [HarmonyPostfix]
@@ -237,17 +276,37 @@ namespace HostUtilities
                 canvasGroup.blocksRaycasts = false;
             }
 
-            canvasGroup.alpha = visible ? 1f : 0f;
             TicketWidgetState state;
+            float targetAlpha = visible ? 1f : 0f;
             if (TicketWidgetsByInstanceId.TryGetValue(widget.GetInstanceID(), out state) && state != null)
             {
                 state.CanvasGroup = canvasGroup;
                 state.CanvasGroupResolved = true;
+                if (visible)
+                {
+                    if (state.HasAppliedTint)
+                    {
+                        targetAlpha = Mathf.Clamp01(state.AppliedOpacity);
+                    }
+                    else if (state.IsReferenceTicket)
+                    {
+                        Color referenceDisplayTint = GetReferenceTicketDisplayTintColor();
+                        Color referenceTopTint = GetReferenceTicketTopTintColor(referenceDisplayTint);
+                        targetAlpha = GetTicketOpacity(referenceDisplayTint, referenceTopTint);
+                    }
+                    else if (state.OriginalOpacity > 0f)
+                    {
+                        targetAlpha = Mathf.Clamp01(state.OriginalOpacity);
+                    }
+                }
+
                 if (state.OriginalOpacity <= 0f)
                 {
                     state.OriginalOpacity = 1f;
                 }
             }
+
+            canvasGroup.alpha = targetAlpha;
         }
 
         private static void RefreshKnownScenes(bool forceRefresh)
@@ -1212,7 +1271,7 @@ namespace HostUtilities
 
         private static Color GetReferenceTicketTintColor()
         {
-            return menuReferenceTicketTintColor != null ? menuReferenceTicketTintColor.Value : new Color(0.49f, 0.59f, 0.65f, 0.78f);
+            return menuReferenceTicketTintColor != null ? menuReferenceTicketTintColor.Value : new Color(0.49f, 0.59f, 0.67f, 0.62f);
         }
 
         private static Color GetReferenceTicketDisplayTintColor()
@@ -1228,6 +1287,14 @@ namespace HostUtilities
             mutedTint.b *= ReferenceTicketColorBrightness;
             mutedTint.a = Mathf.Clamp01(configuredTint.a * ReferenceTicketOpacityScale);
             return mutedTint;
+        }
+
+        private static Color GetReferenceTicketDestroyAnimationColor()
+        {
+            Color displayTint = GetReferenceTicketDisplayTintColor();
+            Color accent = Color.Lerp(Color.white, new Color(displayTint.r, displayTint.g, displayTint.b, 1f), ReferenceTicketDestroyAnimationTintStrength);
+            accent.a = 1f;
+            return accent;
         }
 
         private static Color GetReferenceTicketTopTintColor(Color displayTint)
@@ -1292,52 +1359,52 @@ namespace HostUtilities
             }
 
             TicketWidgetsBuffer.Clear();
-            List<int> staleWidgetIds = null;
+            StaleTicketWidgetIdsBuffer.Clear();
             foreach (KeyValuePair<int, TicketWidgetState> pair in TicketWidgetsByInstanceId)
             {
                 TicketWidgetState state = pair.Value;
                 if (state == null || state.Widget == null)
                 {
-                    if (staleWidgetIds == null)
-                    {
-                        staleWidgetIds = new List<int>();
-                    }
-
-                    staleWidgetIds.Add(pair.Key);
+                    StaleTicketWidgetIdsBuffer.Add(pair.Key);
                     continue;
                 }
 
                 TicketWidgetsBuffer.Add(state);
             }
 
-            if (staleWidgetIds != null)
+            if (StaleTicketWidgetIdsBuffer.Count > 0)
             {
-                for (int i = 0; i < staleWidgetIds.Count; i++)
+                for (int i = 0; i < StaleTicketWidgetIdsBuffer.Count; i++)
                 {
-                    TicketWidgetsByInstanceId.Remove(staleWidgetIds[i]);
+                    TicketWidgetsByInstanceId.Remove(StaleTicketWidgetIdsBuffer[i]);
                 }
             }
 
-            TicketWidgetsBuffer.Sort(delegate(TicketWidgetState a, TicketWidgetState b)
+            if (showPrepared)
             {
-                int recipeCompare = a.RecipeId.CompareTo(b.RecipeId);
-                if (recipeCompare != 0)
+                TicketWidgetsBuffer.Sort(delegate(TicketWidgetState a, TicketWidgetState b)
                 {
-                    return recipeCompare;
-                }
+                    int recipeCompare = a.RecipeId.CompareTo(b.RecipeId);
+                    if (recipeCompare != 0)
+                    {
+                        return recipeCompare;
+                    }
 
-                return a.Order.CompareTo(b.Order);
-            });
+                    return a.Order.CompareTo(b.Order);
+                });
+            }
 
             bool needsRetry = false;
             bool appliedTint = false;
+            Color referenceDisplayTint = GetReferenceTicketDisplayTintColor();
+            Color referenceTopTint = GetReferenceTicketTopTintColor(referenceDisplayTint);
+            Color onMenuTint = GetMenuTicketOnMenuTintColor();
+            Color preparedTint = GetMenuTicketPreparedTintColor();
             for (int i = 0; i < TicketWidgetsBuffer.Count; i++)
             {
                 TicketWidgetState state = TicketWidgetsBuffer[i];
                 if (state.IsReferenceTicket)
                 {
-                    Color referenceDisplayTint = GetReferenceTicketDisplayTintColor();
-                    Color referenceTopTint = GetReferenceTicketTopTintColor(referenceDisplayTint);
                     if (!ApplyTicketWidgetTint(state, referenceDisplayTint, referenceTopTint))
                     {
                         needsRetry = true;
@@ -1369,9 +1436,7 @@ namespace HostUtilities
                     }
                 }
 
-                Color tint = hasPreparedAssignment
-                    ? GetMenuTicketPreparedTintColor()
-                    : GetMenuTicketOnMenuTintColor();
+                Color tint = hasPreparedAssignment ? preparedTint : onMenuTint;
                 if (!ApplyTicketWidgetTint(state, tint, tint))
                 {
                     needsRetry = true;

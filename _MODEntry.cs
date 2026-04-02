@@ -14,6 +14,7 @@ namespace HostUtilities
     public class _MODEntry : BaseUnityPlugin
     {
         private const string PluginGuid = "com.ch3ngyz.plugin.OC2MenuManager";
+        private const string SettingsConfigBaseName = "OC2MenuManager";
         private static readonly Action[] ModuleAwakeActions = new Action[]
         {
             DishNameCatalog.Awake,
@@ -149,12 +150,31 @@ namespace HostUtilities
 
         private static void InitializeSettingsConfig()
         {
-            string standaloneConfigPath = Path.Combine(Paths.ConfigPath, PluginGuid + ".standalone.cfg");
-            string legacyConfigPath = Path.Combine(Paths.ConfigPath, PluginGuid + ".cfg");
+            string standaloneConfigPath = Path.Combine(Paths.ConfigPath, SettingsConfigBaseName + ".standalone.cfg");
+            string legacyConfigPath = Path.Combine(Paths.ConfigPath, SettingsConfigBaseName + ".cfg");
+            string oldStandaloneConfigPath = Path.Combine(Paths.ConfigPath, PluginGuid + ".standalone.cfg");
+            string oldLegacyConfigPath = Path.Combine(Paths.ConfigPath, PluginGuid + ".cfg");
             HotkeyConfigPath = Path.Combine(Paths.ConfigPath, "OC2MenuManager.hotkey.txt");
-            if (!File.Exists(standaloneConfigPath) && File.Exists(legacyConfigPath))
+            if (!File.Exists(standaloneConfigPath))
             {
-                File.Copy(legacyConfigPath, standaloneConfigPath, true);
+                string migrationSourcePath = null;
+                if (File.Exists(oldStandaloneConfigPath))
+                {
+                    migrationSourcePath = oldStandaloneConfigPath;
+                }
+                else if (File.Exists(legacyConfigPath))
+                {
+                    migrationSourcePath = legacyConfigPath;
+                }
+                else if (File.Exists(oldLegacyConfigPath))
+                {
+                    migrationSourcePath = oldLegacyConfigPath;
+                }
+
+                if (!string.IsNullOrEmpty(migrationSourcePath))
+                {
+                    File.Copy(migrationSourcePath, standaloneConfigPath, true);
+                }
             }
 
             SettingsConfig = new ConfigFile(standaloneConfigPath, true);

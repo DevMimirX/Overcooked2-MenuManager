@@ -26,8 +26,10 @@ namespace HostUtilities
             InvalidateProbabilityMap();
             cachedClientFlowController = null;
             cachedKitchenFlowController = null;
+            cachedDlcManager = null;
             nextClientFlowLookupFrame = 0;
             nextKitchenFlowLookupFrame = 0;
+            nextDlcManagerLookupFrame = 0;
             cachedCurrentSceneInfo = null;
             cachedCurrentSceneInfoValid = false;
             cachedCurrentSceneInfoFrame = int.MinValue;

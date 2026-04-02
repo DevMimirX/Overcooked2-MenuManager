@@ -166,12 +166,23 @@ namespace HostUtilities
         private static List<OverlayRow> BuildAndSortOverlayRows(SceneInfo scene, RunInfo run, bool showPrepared)
         {
             List<OverlayRow> rows = OverlayRowsBuffer;
-            rows.Clear();
             if (scene == null || run == null)
+            {
+                rows.Clear();
+                cachedOverlayRowsSceneName = string.Empty;
+                cachedOverlayRowsShowPrepared = showPrepared;
+                cachedOverlayRowsVersion = overlayRowsVersion;
+                return rows;
+            }
+
+            if (cachedOverlayRowsVersion == overlayRowsVersion
+                && cachedOverlayRowsShowPrepared == showPrepared
+                && string.Equals(cachedOverlayRowsSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
             {
                 return rows;
             }
 
+            rows.Clear();
             Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene);
             Dictionary<int, int> menuOrderByRecipeId = BuildMenuOrderMap(scene);
             Dictionary<int, double> probabilityByRecipeId = GetProbabilityMap(scene, run);
@@ -209,6 +220,9 @@ namespace HostUtilities
                 return CompareOverlayRows(a, b, showPrepared);
             });
 
+            cachedOverlayRowsSceneName = scene.SceneName ?? string.Empty;
+            cachedOverlayRowsShowPrepared = showPrepared;
+            cachedOverlayRowsVersion = overlayRowsVersion;
             return rows;
         }
 
@@ -637,7 +651,8 @@ namespace HostUtilities
                 return;
             }
 
-            HashSet<ClientOrderControllerBase> visitedControllers = new HashSet<ClientOrderControllerBase>();
+            HashSet<ClientOrderControllerBase> visitedControllers = VisitedOrderControllersBuffer;
+            visitedControllers.Clear();
             for (int i = 0; i < TeamIds.Length; i++)
             {
                 ClientTeamMonitor monitor;

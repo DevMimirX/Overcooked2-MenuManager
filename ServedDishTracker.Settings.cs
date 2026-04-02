@@ -122,16 +122,28 @@ namespace HostUtilities
 
         private static void WriteHotkeyConfig(string path, KeyCode hotkey)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            File.WriteAllLines(path, new string[]
+            try
             {
-                "# OC2MenuManager hotkey config",
-                "# Edit the value after Hotkey= and save the file.",
-                "# Valid values use Unity KeyCode names, for example: F6, F7, Alpha1, Keypad1, Home.",
-                "# Use Hotkey=None if you want to disable the launch hotkey.",
-                "# The mod will reload this file automatically within a few seconds.",
-                "Hotkey=" + hotkey
-            });
+                string directory = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.WriteAllLines(path, new string[]
+                {
+                    "# OC2MenuManager hotkey config",
+                    "# Edit the value after Hotkey= and save the file.",
+                    "# Valid values use Unity KeyCode names, for example: F6, F7, Alpha1, Keypad1, Home.",
+                    "# Use Hotkey=None if you want to disable the launch hotkey.",
+                    "# The mod will reload this file automatically within a few seconds.",
+                    "Hotkey=" + hotkey
+                });
+            }
+            catch (Exception ex)
+            {
+                _MODEntry.LogWarning("[ServedDishTracker] Failed to write hotkey config: " + ex.GetType().Name + ": " + ex.Message);
+            }
         }
 
         private static bool TryParseHotkeyConfig(string path, out KeyCode hotkey)
@@ -142,7 +154,17 @@ namespace HostUtilities
                 return false;
             }
 
-            string[] lines = File.ReadAllLines(path);
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(path);
+            }
+            catch (Exception ex)
+            {
+                _MODEntry.LogWarning("[ServedDishTracker] Failed to read hotkey config: " + ex.GetType().Name + ": " + ex.Message);
+                return false;
+            }
+
             for (int i = 0; i < lines.Length; i++)
             {
                 string line = lines[i];
@@ -362,6 +384,7 @@ namespace HostUtilities
                 if (languageMode != null)
                 {
                     languageMode.Value = NextLanguage(languageMode.Value);
+                    InvalidateReferenceTickets();
                     InvalidateOverlay();
                 }
             }, Ui("控制菜名和设置界面的语言。Auto 会跟随游戏语言。", "Controls both dish names and this settings window. Auto follows the game language."));

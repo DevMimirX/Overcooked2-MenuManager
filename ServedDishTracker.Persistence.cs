@@ -21,43 +21,55 @@ namespace HostUtilities
         private static void LoadSelections()
         {
             TrackedIdsByScene.Clear();
-            if (!File.Exists(selectionFilePath))
+            if (string.IsNullOrEmpty(selectionFilePath) || !File.Exists(selectionFilePath))
             {
                 return;
             }
 
-            string[] lines = File.ReadAllLines(selectionFilePath);
-            for (int i = 0; i < lines.Length; i++)
+            try
             {
-                string line = lines[i].Trim();
-                if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal))
+                string[] lines = File.ReadAllLines(selectionFilePath);
+                for (int i = 0; i < lines.Length; i++)
                 {
-                    continue;
-                }
-
-                string[] parts = line.Split(new char[] { '=' }, 2);
-                if (parts.Length != 2 || string.IsNullOrEmpty(parts[0]))
-                {
-                    continue;
-                }
-
-                HashSet<int> ids = new HashSet<int>();
-                string[] tokens = parts[1].Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
-                for (int j = 0; j < tokens.Length; j++)
-                {
-                    int id;
-                    if (int.TryParse(tokens[j].Trim(), out id))
+                    string line = lines[i].Trim();
+                    if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal))
                     {
-                        ids.Add(id);
+                        continue;
                     }
-                }
 
-                TrackedIdsByScene[parts[0].Trim()] = ids;
+                    string[] parts = line.Split(new char[] { '=' }, 2);
+                    if (parts.Length != 2 || string.IsNullOrEmpty(parts[0]))
+                    {
+                        continue;
+                    }
+
+                    HashSet<int> ids = new HashSet<int>();
+                    string[] tokens = parts[1].Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                    for (int j = 0; j < tokens.Length; j++)
+                    {
+                        int id;
+                        if (int.TryParse(tokens[j].Trim(), out id))
+                        {
+                            ids.Add(id);
+                        }
+                    }
+
+                    TrackedIdsByScene[parts[0].Trim()] = ids;
+                }
+            }
+            catch (Exception ex)
+            {
+                _MODEntry.LogWarning("[ServedDishTracker] Failed to load selection file: " + ex.GetType().Name + ": " + ex.Message);
             }
         }
 
         private static void SaveSelections()
         {
+            if (string.IsNullOrEmpty(selectionFilePath))
+            {
+                return;
+            }
+
             List<string> lines = new List<string>();
             foreach (KeyValuePair<string, HashSet<int>> pair in TrackedIdsByScene.OrderBy(x => x.Key))
             {
@@ -65,7 +77,20 @@ namespace HostUtilities
                 lines.Add(pair.Key + "=" + ids);
             }
 
-            File.WriteAllLines(selectionFilePath, lines.ToArray());
+            try
+            {
+                string directory = Path.GetDirectoryName(selectionFilePath);
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.WriteAllLines(selectionFilePath, lines.ToArray());
+            }
+            catch (Exception ex)
+            {
+                _MODEntry.LogWarning("[ServedDishTracker] Failed to save selection file: " + ex.GetType().Name + ": " + ex.Message);
+            }
         }
 
         private static void CaptureLegacyValues()

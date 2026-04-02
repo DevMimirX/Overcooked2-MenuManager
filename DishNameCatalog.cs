@@ -87,14 +87,14 @@ namespace HostUtilities
             DishNameEntry entry;
             if (TryGetEntry(internalName, out entry))
             {
-                if (!string.IsNullOrEmpty(entry.ChineseFull))
-                {
-                    return NormalizeChineseName(internalName, entry.ChineseFull);
-                }
-
                 if (!string.IsNullOrEmpty(entry.ChineseShort))
                 {
                     return NormalizeChineseName(internalName, entry.ChineseShort);
+                }
+
+                if (!string.IsNullOrEmpty(entry.ChineseFull))
+                {
+                    return NormalizeChineseName(internalName, entry.ChineseFull);
                 }
             }
 

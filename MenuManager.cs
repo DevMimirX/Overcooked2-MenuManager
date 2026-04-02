@@ -84,15 +84,38 @@ namespace HostUtilities
             {
                 log("running fixed menu RoundData");
                 RoundData.RoundInstanceData instance = _data as RoundData.RoundInstanceData;
+                if (roundData == null
+                    || instance == null
+                    || instance.CumulativeFrequencies == null
+                    || roundData.m_recipes == null
+                    || roundData.m_recipes.m_recipes == null)
+                {
+                    return null;
+                }
+
                 if (roundData is ScriptedRoundData scriptedRoundData)
-                    if (instance.RecipeCount < scriptedRoundData.m_manualOrder.Length)
+                {
+                    if (scriptedRoundData.m_manualOrder != null && instance.RecipeCount < scriptedRoundData.m_manualOrder.Length)
                     {
                         return null;
                     }
+                }
+
                 int menuCount = instance.CumulativeFrequencies.Collapse((int f, int total) => total + f);
-                if (carnivalMenu[0].Length <= menuCount)
+                if (carnivalMenu == null
+                    || carnivalMenu.Length == 0
+                    || carnivalMenu[0] == null
+                    || carnivalMenu[0].Length <= menuCount)
+                {
                     return null;
+                }
+
                 int menuIndex = carnivalMenu[0][menuCount];
+                if (menuIndex < 0 || menuIndex >= roundData.m_recipes.m_recipes.Length)
+                {
+                    return null;
+                }
+
                 instance.RecipeCount++;
                 instance.CumulativeFrequencies[menuIndex]++;
                 return new RecipeList.Entry[] { roundData.m_recipes.m_recipes[menuIndex] };
@@ -103,8 +126,7 @@ namespace HostUtilities
         [HarmonyPatch(typeof(RoundData), "GetNextRecipe")]
         public static bool RoundDataGetNextRecipePatch(RoundData __instance, ref RecipeList.Entry[] __result, RoundInstanceDataBase _data)
         {
-            LevelConfigBase kitchenLevelConfigBase = GameUtils.GetLevelConfig();
-            if (kitchenLevelConfigBase.name.StartsWith("Day_3_4") && isCarnivalMenuFixed.Value)
+            if (IsCarnivalLevel() && IsCarnivalMenuFixedEnabled)
             {
                 __result = FixedMenuRoundData.GetNextRecipeFixed(__instance, _data);
                 return __result == null;
@@ -116,16 +138,28 @@ namespace HostUtilities
         [HarmonyPatch(typeof(RoundData), "GetWeight")]
         public static bool RoundDataGetWeightPatch(ref float __result, RoundData __instance, object _instance, int _recipeIndex)
         {
-            LevelConfigBase kitchenLevelConfigBase = GameUtils.GetLevelConfig();
-            if (kitchenLevelConfigBase.name.StartsWith("Day_3_4") && isCarnivalMenuGood.Value && !isCarnivalMenuFixed.Value)
+            if (IsCarnivalLevel() && IsCarnivalMenuGoodEnabled && !IsCarnivalMenuFixedEnabled)
             {
                 int[] cumulativeFrequencies = GetRoundInstanceCumulativeFrequencies(_instance);
-                if (cumulativeFrequencies == null || cumulativeFrequencies.Length == 0)
+                if (cumulativeFrequencies == null
+                    || cumulativeFrequencies.Length == 0
+                    || __instance == null
+                    || __instance.m_recipes == null
+                    || __instance.m_recipes.m_recipes == null
+                    || _recipeIndex < 0
+                    || _recipeIndex >= cumulativeFrequencies.Length
+                    || _recipeIndex >= __instance.m_recipes.m_recipes.Length
+                    || cumulativeFrequencies.Length < 2)
                 {
                     return true;
                 }
 
                 int recipe_len = __instance.m_recipes.m_recipes.Length;
+                if (recipe_len <= 0)
+                {
+                    return true;
+                }
+
                 int num = cumulativeFrequencies.Collapse((int f, int total) => total + f);
                 float theo_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)cumulativeFrequencies[_recipeIndex], 0f);
                 float berry_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)cumulativeFrequencies[0], 0f);
@@ -141,7 +175,7 @@ namespace HostUtilities
                     __result = 0f;
                 }
 
-                if (isCarnivalCakeGood.Value)
+                if (IsCarnivalCakeGoodEnabled)
                 {
                     if (_recipeIndex <= 1)
                     {
@@ -213,6 +247,14 @@ namespace HostUtilities
                 return false;
             }
             return true;
+        }
+
+        private static bool IsCarnivalLevel()
+        {
+            LevelConfigBase levelConfig = GameUtils.GetLevelConfig();
+            return levelConfig != null
+                && !string.IsNullOrEmpty(levelConfig.name)
+                && levelConfig.name.StartsWith("Day_3_4", StringComparison.Ordinal);
         }
 
         private static FieldInfo ResolveRoundInstanceCumulativeFrequenciesField()

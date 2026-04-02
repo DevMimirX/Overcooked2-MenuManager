@@ -43,6 +43,12 @@ namespace HostUtilities
             List<SceneDirectoryData.SceneDirectoryEntry> list = new List<SceneDirectoryData.SceneDirectoryEntry>();
             for (int i = 0; i < sceneDirectories.Length; i++)
             {
+                SceneDirectoryData sceneDirectory = sceneDirectories[i];
+                if (sceneDirectory == null || sceneDirectory.Scenes == null)
+                {
+                    continue;
+                }
+
                 DLCFrontendData matchedDlc = null;
                 int dlcId = lobby.GetDLCIDFromSceneDirIndex(gameType, i);
                 for (int j = 0; j < allDlc.Count; j++)
@@ -57,15 +63,17 @@ namespace HostUtilities
 
                 if (matchedDlc == null || dlcManager.IsDLCAvailable(matchedDlc))
                 {
-                    list.AddRange(sceneDirectories[i].Scenes);
+                    list.AddRange(sceneDirectory.Scenes);
                 }
             }
 
             list.RemoveAll(delegate(SceneDirectoryData.SceneDirectoryEntry entry)
             {
-                return entry.Label.Contains("ThroneRoom")
-                    || entry.Label.Contains("Tutorial")
-                    || entry.Label.Contains("DLC07Battlements08");
+                string label = entry != null ? entry.Label : null;
+                return string.IsNullOrEmpty(label)
+                    || label.Contains("ThroneRoom")
+                    || label.Contains("Tutorial")
+                    || label.Contains("DLC07Battlements08");
             });
             return list;
         }
@@ -103,6 +111,11 @@ namespace HostUtilities
 
         public static LevelNameInfo GetLevelNameInfo(LobbyFlowController lobbyFlow, SceneDirectoryData.SceneDirectoryEntry entry)
         {
+            if (entry == null)
+            {
+                return new LevelNameInfo("Other", "Unknown", "Other", string.Empty);
+            }
+
             string themeLabel;
             string themeName;
             if (lobbyFlow != null)

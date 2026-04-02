@@ -156,6 +156,7 @@ namespace HostUtilities
 
         private static void InvalidateOverlay()
         {
+            InvalidateOverlayRowsCache();
             overlayDirty = true;
             int targetFrame = Time.frameCount + (IsInActiveRound() ? OverlayRefreshIntervalFrames : 0);
             if (nextOverlayRefreshFrame == 0 || targetFrame < nextOverlayRefreshFrame)
@@ -166,6 +167,7 @@ namespace HostUtilities
 
         private static void InvalidateProbabilityMap()
         {
+            InvalidateOverlayRowsCache();
             probabilityMapDirty = true;
             probabilityMapSceneName = string.Empty;
             InvalidateReferenceTickets();
@@ -190,11 +192,20 @@ namespace HostUtilities
 
         private static void InvalidateReferenceTickets()
         {
+            InvalidateOverlayRowsCache();
             referenceTicketsDirty = true;
             int targetFrame = IsInActiveRound() ? Time.frameCount : 0;
             if (nextReferenceTicketSyncFrame == 0 || targetFrame < nextReferenceTicketSyncFrame)
             {
                 nextReferenceTicketSyncFrame = targetFrame;
+            }
+        }
+
+        private static void InvalidateOverlayRowsCache()
+        {
+            unchecked
+            {
+                overlayRowsVersion++;
             }
         }
 
@@ -328,7 +339,7 @@ namespace HostUtilities
                             ticketState.IsDyingReferenceTicket = true;
                         }
 
-                        state.Flow.RemoveElement(state.Token, new RecipeSuccessAnimation());
+                        state.Flow.RemoveElement(state.Token, new ReferenceTicketDestroyAnimation(GetReferenceTicketDestroyAnimationColor()));
                         return;
                     }
 
@@ -782,8 +793,10 @@ namespace HostUtilities
 
             ReferenceTicketStatesForFlowBuffer.Sort(CompareReferenceTicketStates);
             int desiredCount = desiredCandidates != null ? desiredCandidates.Count : 0;
-            Dictionary<int, ReferenceTicketState> existingStatesByRecipeId = new Dictionary<int, ReferenceTicketState>();
-            HashSet<int> desiredRecipeIds = new HashSet<int>();
+            Dictionary<int, ReferenceTicketState> existingStatesByRecipeId = ExistingReferenceTicketStatesByRecipeIdBuffer;
+            existingStatesByRecipeId.Clear();
+            HashSet<int> desiredRecipeIds = DesiredReferenceTicketRecipeIdsBuffer;
+            desiredRecipeIds.Clear();
             for (int i = 0; i < desiredCount; i++)
             {
                 ReferenceTicketCandidate candidate = desiredCandidates[i];
@@ -851,6 +864,9 @@ namespace HostUtilities
 
                 AddReferenceTicket(flow, candidate, i, silentAdds);
             }
+
+            existingStatesByRecipeId.Clear();
+            desiredRecipeIds.Clear();
         }
 
         private static int CompareReferenceTicketStates(ReferenceTicketState a, ReferenceTicketState b)

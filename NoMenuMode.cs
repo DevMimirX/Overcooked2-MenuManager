@@ -115,14 +115,16 @@ namespace HostUtilities
         [HarmonyPatch(typeof(ServerKitchenFlowControllerBase), "OnFoodDelivered")]
         private static bool ServerKitchenFlowControllerBase_OnFoodDelivered_Prefix(ServerKitchenFlowControllerBase __instance, AssembledDefinitionNode _definition, PlatingStepData _plateType, ServerPlateStation _station)
         {
-            if (!IsEnabled)
+            if (!IsEnabled || !CanUseManualDeliveryFlow())
             {
                 return true;
             }
 
             LevelConfigBase levelConfig = GameUtils.GetLevelConfig();
             KitchenLevelConfigBase kitchenLevelConfig = levelConfig as KitchenLevelConfigBase;
-            if (kitchenLevelConfig == null || levelConfig is BossCampaignLevelConfig || levelConfig.name.StartsWith("Tutorial"))
+            if (kitchenLevelConfig == null
+                || levelConfig is BossCampaignLevelConfig
+                || (!string.IsNullOrEmpty(levelConfig.name) && levelConfig.name.StartsWith("Tutorial", System.StringComparison.Ordinal)))
             {
                 return true;
             }
@@ -273,12 +275,27 @@ namespace HostUtilities
 
         private static bool GetAutoProgress(ServerOrderControllerBase controller)
         {
-            return AutoProgressField != null && (bool)AutoProgressField.GetValue(controller);
+            if (controller == null || AutoProgressField == null)
+            {
+                return true;
+            }
+
+            return (bool)AutoProgressField.GetValue(controller);
         }
 
         private static bool MatchesOrder(ServerOrderControllerBase controller, OrderDefinitionNode required, AssembledDefinitionNode provided, PlatingStepData plateType)
         {
-            return MatchesMethod != null && (bool)MatchesMethod.Invoke(controller, new object[] { required, provided, plateType });
+            return controller != null
+                && MatchesMethod != null
+                && (bool)MatchesMethod.Invoke(controller, new object[] { required, provided, plateType });
+        }
+
+        private static bool CanUseManualDeliveryFlow()
+        {
+            return AutoProgressField != null
+                && MatchesMethod != null
+                && KitchenFlowControllerField != null
+                && KitchenFlowMessageField != null;
         }
 
         private static List<RecipeList.Entry> GetAvailableRecipes(KitchenLevelConfigBase levelConfig)
