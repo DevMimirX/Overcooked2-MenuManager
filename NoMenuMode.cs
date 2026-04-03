@@ -19,6 +19,9 @@ namespace HostUtilities
         private static readonly FieldInfo PlateReturnControllerField = AccessTools.Field(typeof(ServerKitchenFlowControllerBase), "m_plateReturnController");
         private static readonly FieldInfo AutoProgressField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_autoProgress");
         private static readonly FieldInfo NextOrderIdField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_nextOrderID");
+        private static readonly FieldInfo RoundDataField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_roundData");
+        private static readonly FieldInfo RoundInstanceDataField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_roundInstanceData");
+        private static readonly FieldInfo DynamicRoundInstanceCurrentPhaseField = ResolveDynamicRoundPhaseField();
         private static readonly MethodInfo AddSpecificOrderMethod = AccessTools.Method(typeof(ServerOrderControllerBase), "AddNewOrder", new[] { typeof(RecipeList.Entry) });
         private static readonly Dictionary<System.Type, MethodInfo> SuccessfulDeliveryMethodCache = new Dictionary<System.Type, MethodInfo>();
         private static readonly HashSet<uint> SyntheticOrderIds = new HashSet<uint>();
@@ -393,7 +396,7 @@ namespace HostUtilities
                 return false;
             }
 
-            List<RecipeList.Entry> entries = GetAllRecipesForCurrentLevel();
+            List<RecipeList.Entry> entries = GetRecipesForCurrentLevel(monitor);
             for (int i = 0; i < entries.Count; i++)
             {
                 RecipeList.Entry candidate = entries[i];
@@ -407,46 +410,81 @@ namespace HostUtilities
             return false;
         }
 
-        private static List<RecipeList.Entry> GetAllRecipesForCurrentLevel()
+        private static List<RecipeList.Entry> GetRecipesForCurrentLevel(ServerTeamMonitor monitor)
         {
             List<RecipeList.Entry> entries = new List<RecipeList.Entry>();
-            KitchenLevelConfigBase levelConfig = GameUtils.GetLevelConfig() as KitchenLevelConfigBase;
-            if (levelConfig == null)
+            RoundDataBase roundData = null;
+            ServerOrderControllerBase orderController = monitor != null ? monitor.OrdersController : null;
+            if (orderController != null && RoundDataField != null)
             {
-                return entries;
+                roundData = RoundDataField.GetValue(orderController) as RoundDataBase;
             }
 
-            RoundDataBase roundData = levelConfig.GetRoundData();
+            if (roundData == null)
+            {
+                KitchenLevelConfigBase levelConfig = GameUtils.GetLevelConfig() as KitchenLevelConfigBase;
+                if (levelConfig == null)
+                {
+                    return entries;
+                }
+
+                roundData = levelConfig.GetRoundData();
+            }
+
             DynamicRoundData dynamicRoundData = roundData as DynamicRoundData;
             if (dynamicRoundData != null && dynamicRoundData.Phases != null)
             {
-                for (int i = 0; i < dynamicRoundData.Phases.Length; i++)
-                {
-                    RecipeList phaseRecipes = dynamicRoundData.Phases[i].Recipes;
-                    if (phaseRecipes == null || phaseRecipes.m_recipes == null)
-                    {
-                        continue;
-                    }
-
-                    for (int j = 0; j < phaseRecipes.m_recipes.Length; j++)
-                    {
-                        entries.Add(phaseRecipes.m_recipes[j]);
-                    }
-                }
-
+                int currentPhase = GetCurrentDynamicPhaseIndex(orderController, dynamicRoundData);
+                AddRecipeEntries(entries, currentPhase >= 0 && currentPhase < dynamicRoundData.Phases.Length
+                    ? dynamicRoundData.Phases[currentPhase].Recipes
+                    : null);
                 return entries;
             }
 
             RoundData standardRoundData = roundData as RoundData;
             if (standardRoundData != null && standardRoundData.m_recipes != null && standardRoundData.m_recipes.m_recipes != null)
             {
-                for (int i = 0; i < standardRoundData.m_recipes.m_recipes.Length; i++)
-                {
-                    entries.Add(standardRoundData.m_recipes.m_recipes[i]);
-                }
+                AddRecipeEntries(entries, standardRoundData.m_recipes);
             }
 
             return entries;
+        }
+
+        private static void AddRecipeEntries(List<RecipeList.Entry> entries, RecipeList recipeList)
+        {
+            if (entries == null || recipeList == null || recipeList.m_recipes == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < recipeList.m_recipes.Length; i++)
+            {
+                entries.Add(recipeList.m_recipes[i]);
+            }
+        }
+
+        private static int GetCurrentDynamicPhaseIndex(ServerOrderControllerBase orderController, DynamicRoundData dynamicRoundData)
+        {
+            if (dynamicRoundData == null || dynamicRoundData.Phases == null || dynamicRoundData.Phases.Length == 0)
+            {
+                return 0;
+            }
+
+            if (orderController != null && RoundInstanceDataField != null && DynamicRoundInstanceCurrentPhaseField != null)
+            {
+                object roundInstanceData = RoundInstanceDataField.GetValue(orderController);
+                object rawPhase = roundInstanceData != null ? DynamicRoundInstanceCurrentPhaseField.GetValue(roundInstanceData) : null;
+                if (rawPhase is int)
+                {
+                    int currentPhase = (int)rawPhase;
+                    if (currentPhase >= 0 && currentPhase < dynamicRoundData.Phases.Length)
+                    {
+                        return currentPhase;
+                    }
+                }
+            }
+
+            return 0;
         }
 
         private static bool CanUseSyntheticFallback(AssembledDefinitionNode definition)
@@ -554,6 +592,14 @@ namespace HostUtilities
             method = AccessTools.Method(type, "OnSuccessfulDelivery", new[] { typeof(OrderID), typeof(RecipeList.Entry), typeof(float), typeof(bool), typeof(ServerPlateStation) });
             SuccessfulDeliveryMethodCache[type] = method;
             return method;
+        }
+
+        private static FieldInfo ResolveDynamicRoundPhaseField()
+        {
+            System.Type dynamicRoundInstanceType = typeof(DynamicRoundData).GetNestedType("DynamicRoundInstanceData", BindingFlags.Public | BindingFlags.NonPublic);
+            return dynamicRoundInstanceType != null
+                ? dynamicRoundInstanceType.GetField("CurrentPhase", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                : null;
         }
 
         private static void ClearSyntheticOrders()
