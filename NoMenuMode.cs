@@ -11,16 +11,20 @@ namespace HostUtilities
     internal static class NoMenuMode
     {
         private static readonly ConfigDefinition LegacyToggleKeyDefinition = new ConfigDefinition("00-菜单管理", "切换无菜单热键");
-        private static readonly MethodInfo TriggerAudioMessageMethod = AccessTools.Method("ServerMessenger:TriggerAudioMessage");
-        private static readonly FieldInfo CampaignFlowGameModeField = AccessTools.Field(typeof(ServerCampaignFlowController), "m_gameMode");
-        private static readonly FieldInfo CampaignModeContextField = AccessTools.Field(typeof(ServerCampaignMode), "m_context");
-        private static readonly FieldInfo KitchenPlateReturnControllerField = AccessTools.Field(typeof(ServerKitchenFlowControllerBase), "m_plateReturnController");
-        private static readonly FieldInfo KitchenFlowControllerField = AccessTools.Field(typeof(ServerKitchenFlowControllerBase), "m_kitchenFlowController");
-        private static readonly FieldInfo KitchenFlowMessageField = AccessTools.Field(typeof(ServerKitchenFlowControllerBase), "m_data");
+        private static readonly FieldInfo ClientCampaignTeamMonitorField = AccessTools.Field(typeof(ClientCampaignFlowController), "m_teamMonitor");
+        private static readonly FieldInfo ClientCompetitiveTeamOneMonitorField = AccessTools.Field(typeof(ClientCompetitiveFlowController), "m_teamOneMonitor");
+        private static readonly FieldInfo ClientCompetitiveTeamTwoMonitorField = AccessTools.Field(typeof(ClientCompetitiveFlowController), "m_teamTwoMonitor");
+        private static readonly FieldInfo ClientTeamMonitorMonitorField = AccessTools.Field(typeof(ClientTeamMonitor), "m_monitor");
+        private static readonly FieldInfo TeamMonitorRecipeBarField = AccessTools.Field(typeof(TeamMonitor), "m_recipeBarUIController");
+        private static readonly FieldInfo PlateReturnControllerField = AccessTools.Field(typeof(ServerKitchenFlowControllerBase), "m_plateReturnController");
         private static readonly FieldInfo AutoProgressField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_autoProgress");
-        private static readonly MethodInfo MatchesMethod = AccessTools.Method(typeof(ServerOrderControllerBase), "Matches");
+        private static readonly FieldInfo NextOrderIdField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_nextOrderID");
+        private static readonly MethodInfo AddSpecificOrderMethod = AccessTools.Method(typeof(ServerOrderControllerBase), "AddNewOrder", new[] { typeof(RecipeList.Entry) });
+        private static readonly Dictionary<System.Type, MethodInfo> SuccessfulDeliveryMethodCache = new Dictionary<System.Type, MethodInfo>();
+        private static readonly HashSet<uint> SyntheticOrderIds = new HashSet<uint>();
 
         private static ConfigEntry<bool> enabled;
+
         public static bool IsReady
         {
             get { return enabled != null; }
@@ -37,6 +41,7 @@ namespace HostUtilities
             {
                 _MODEntry.SettingsConfig.Save();
             }
+
             enabled = _MODEntry.SettingsConfig.Bind<bool>("00-菜单管理", "无菜单", false, "启用内置无菜单模式，不依赖外部 OC2NoMenu.dll。");
             ModuleUtility.RegisterHarmony(typeof(NoMenuMode));
         }
@@ -46,6 +51,8 @@ namespace HostUtilities
             if (enabled != null)
             {
                 enabled.Value = !enabled.Value;
+                RefreshServerOrderFlowState();
+                RefreshClientRecipeBarVisibility();
             }
         }
 
@@ -54,6 +61,21 @@ namespace HostUtilities
             if (enabled != null)
             {
                 enabled.Value = value;
+                RefreshServerOrderFlowState();
+                RefreshClientRecipeBarVisibility();
+            }
+        }
+
+        public static bool IsSyntheticOrder(OrderID orderId)
+        {
+            return orderId.m_id != 0u && SyntheticOrderIds.Contains(orderId.m_id);
+        }
+
+        public static void ForgetSyntheticOrder(OrderID orderId)
+        {
+            if (orderId.m_id != 0u)
+            {
+                SyntheticOrderIds.Remove(orderId.m_id);
             }
         }
 
@@ -61,161 +83,122 @@ namespace HostUtilities
         [HarmonyPatch(typeof(ServerCampaignFlowController), "StartSynchronising")]
         private static void ServerCampaignFlowController_StartSynchronising_Postfix(ServerCampaignFlowController __instance)
         {
-            if (!IsEnabled || __instance is ServerBossFlowController)
+            ClearSyntheticOrders();
+            if (__instance is ServerBossFlowController)
             {
                 return;
             }
 
-            IServerMode gameMode = GetCampaignFlowGameMode(__instance);
-            if (gameMode is ServerSurvivalMode)
-            {
-                return;
-            }
-
-            ServerCampaignMode campaignMode = gameMode as ServerCampaignMode;
-            if (campaignMode != null)
-            {
-                LevelConfigBase levelConfig = GetCampaignModeLevelConfig(campaignMode);
-                KitchenLevelConfigBase kitchenLevelConfig = levelConfig as KitchenLevelConfigBase;
-                if (kitchenLevelConfig != null && kitchenLevelConfig.m_recipesBeforeTimerStarts > 0)
-                {
-                    return;
-                }
-            }
-
-            ServerTeamMonitor monitor = __instance.GetMonitorForTeam(TeamID.One);
-            if (monitor != null && monitor.OrdersController != null)
-            {
-                monitor.OrdersController.SetAutoProgress(false);
-            }
+            __instance.SetOrdersAutoProgress(!ShouldDisableCampaignAutoProgress());
         }
 
         [HarmonyPostfix]
         [HarmonyPatch(typeof(ServerCompetitiveFlowController), "StartSynchronising")]
         private static void ServerCompetitiveFlowController_StartSynchronising_Postfix(ServerCompetitiveFlowController __instance)
         {
-            if (!IsEnabled)
+            ClearSyntheticOrders();
+            if (__instance == null)
             {
                 return;
             }
 
-            ServerTeamMonitor teamOne = __instance.GetMonitorForTeam(TeamID.One);
-            ServerTeamMonitor teamTwo = __instance.GetMonitorForTeam(TeamID.Two);
-            if (teamOne != null && teamOne.OrdersController != null)
-            {
-                teamOne.OrdersController.SetAutoProgress(false);
-            }
-            if (teamTwo != null && teamTwo.OrdersController != null)
-            {
-                teamTwo.OrdersController.SetAutoProgress(false);
-            }
+            bool autoProgress = !IsEnabled;
+            SetAutoProgress(__instance.GetMonitorForTeam(TeamID.One), autoProgress);
+            SetAutoProgress(__instance.GetMonitorForTeam(TeamID.Two), autoProgress);
         }
 
         [HarmonyPrefix]
         [HarmonyPatch(typeof(ServerKitchenFlowControllerBase), "OnFoodDelivered")]
         private static bool ServerKitchenFlowControllerBase_OnFoodDelivered_Prefix(ServerKitchenFlowControllerBase __instance, AssembledDefinitionNode _definition, PlatingStepData _plateType, ServerPlateStation _station)
         {
-            if (!IsEnabled || !CanUseManualDeliveryFlow())
-            {
-                return true;
-            }
-
-            LevelConfigBase levelConfig = GameUtils.GetLevelConfig();
-            KitchenLevelConfigBase kitchenLevelConfig = levelConfig as KitchenLevelConfigBase;
-            if (kitchenLevelConfig == null
-                || levelConfig is BossCampaignLevelConfig
-                || (!string.IsNullOrEmpty(levelConfig.name) && levelConfig.name.StartsWith("Tutorial", System.StringComparison.Ordinal)))
+            if (!ShouldHandleNoMenuDelivery(__instance, _station))
             {
                 return true;
             }
 
             ServerTeamMonitor monitor = __instance.GetMonitorForTeam(_station.GetTeamID());
-            if (monitor == null || monitor.OrdersController == null || GetAutoProgress(monitor.OrdersController))
+            if (monitor == null || monitor.OrdersController == null)
             {
                 return true;
             }
 
-            PlateReturnController plateReturnController = GetPlateReturnController(__instance);
+            if (!CanUseSyntheticFallback(_definition))
+            {
+                return true;
+            }
+
+            OrderID activeOrderId;
+            float activeOrderRemaining;
+            if (monitor.OrdersController.FindBestOrderForRecipe(_definition, _plateType, out activeOrderId, out activeOrderRemaining))
+            {
+                return true;
+            }
+
+            RecipeList.Entry matchedEntry;
+            if (!TryFindNoMenuRecipeMatch(monitor, _definition, _plateType, out matchedEntry))
+            {
+                return true;
+            }
+
+            PlateReturnController plateReturnController = PlateReturnControllerField != null ? PlateReturnControllerField.GetValue(__instance) as PlateReturnController : null;
             if (plateReturnController != null)
             {
                 plateReturnController.FoodDelivered(_definition, _plateType, _station);
             }
 
-            float timeRemainingPercent = 1f;
-            int tip = 0;
-            bool wasCombo = false;
-            OrderID orderId = new OrderID(0u);
-            RecipeList.Entry deliveredEntry = null;
-            if (monitor.OrdersController.FindBestOrderForRecipe(_definition, _plateType, out orderId, out timeRemainingPercent))
+            ServerOrderData syntheticOrder = AddSyntheticOrder(monitor, matchedEntry);
+            if (syntheticOrder == null)
             {
-                deliveredEntry = monitor.OrdersController.GetRecipe(orderId);
+                return true;
             }
 
-            if (deliveredEntry == null)
-            {
-                List<RecipeList.Entry> recipes = GetAvailableRecipes(kitchenLevelConfig);
-                deliveredEntry = recipes.Find(delegate(RecipeList.Entry entry)
-                {
-                    return entry != null
-                        && entry.m_order != null
-                        && MatchesOrder(monitor.OrdersController, entry.m_order, _definition, _plateType);
-                });
-                orderId = new OrderID(0u);
-                timeRemainingPercent = 1f;
-            }
-
-            KitchenFlowControllerBase kitchenFlowController = GetKitchenFlowController(__instance);
-            if (kitchenFlowController != null)
-            {
-                tip = kitchenFlowController.CalculateTip(timeRemainingPercent);
-            }
-
-            if (deliveredEntry != null)
-            {
-                wasCombo = true;
-                int baseScore = kitchenFlowController != null ? kitchenFlowController.CalculateBaseScore(deliveredEntry) : 0;
-                tip *= Mathf.Max(monitor.Score.TotalMultiplier, 1);
-                monitor.Score.TotalBaseScore += baseScore;
-                monitor.Score.TotalTipsScore += tip;
-                monitor.Score.TotalSuccessfulDeliveries++;
-                monitor.Score.TotalCombo++;
-                if (monitor.Score.TotalMultiplier < 4)
-                {
-                    monitor.Score.TotalMultiplier++;
-                }
-
-                if (TriggerAudioMessageMethod != null)
-                {
-                    TriggerAudioMessageMethod.Invoke(null, new object[]
-                    {
-                        GameOneShotAudioTag.SuccessfulDelivery,
-                        __instance.gameObject.layer
-                    });
-                }
-            }
-            else
-            {
-                monitor.Score.TotalCombo = 0;
-                monitor.Score.TotalMultiplier = 0;
-                monitor.Score.ComboMaintained = false;
-            }
-
-            KitchenFlowMessage kitchenFlowMessage = GetKitchenFlowMessage(__instance);
-            if (kitchenFlowMessage != null)
-            {
-                kitchenFlowMessage.m_msgType = KitchenFlowMessage.MsgType.Delivery;
-                kitchenFlowMessage.m_teamID = _station.GetTeamID();
-                kitchenFlowMessage.m_success = false;
-                kitchenFlowMessage.m_plateStation = _station.gameObject;
-                kitchenFlowMessage.m_orderID = orderId;
-                kitchenFlowMessage.m_wasCombo = wasCombo;
-                kitchenFlowMessage.m_timePropRemainingPercentage = timeRemainingPercent;
-                kitchenFlowMessage.m_tip = tip;
-                kitchenFlowMessage.SetScoreData(monitor.Score);
-                __instance.SendServerEvent(kitchenFlowMessage);
-            }
-
+            bool restartCombo = monitor.Score.TotalCombo == 0;
+            bool wasCombo = monitor.OrdersController.IsComboOrder(syntheticOrder.ID, restartCombo);
+            monitor.OrdersController.RemoveOrder(syntheticOrder.ID);
+            InvokeSuccessfulDelivery(__instance, syntheticOrder.ID, matchedEntry, 1f, wasCombo, _station);
             return false;
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(ClientCampaignFlowController), "StartSynchronising")]
+        private static void ClientCampaignFlowController_StartSynchronising_Postfix(ClientCampaignFlowController __instance)
+        {
+            ClearSyntheticOrders();
+            if (__instance is ClientBossFlowController)
+            {
+                return;
+            }
+
+            ApplyCampaignRecipeBarVisibility(__instance, !IsEnabled);
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(ClientCompetitiveFlowController), "StartSynchronising")]
+        private static void ClientCompetitiveFlowController_StartSynchronising_Postfix(ClientCompetitiveFlowController __instance)
+        {
+            ClearSyntheticOrders();
+            ApplyCompetitiveRecipeBarVisibility(__instance, !IsEnabled);
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnSuccessfulDelivery")]
+        private static void ClientKitchenFlowControllerBase_OnSuccessfulDelivery_Postfix(OrderID _orderID)
+        {
+            ForgetSyntheticOrder(_orderID);
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnFailedDelivery")]
+        private static void ClientKitchenFlowControllerBase_OnFailedDelivery_Postfix(OrderID _orderID)
+        {
+            ForgetSyntheticOrder(_orderID);
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnOrderExpired")]
+        private static void ClientKitchenFlowControllerBase_OnOrderExpired_Postfix(OrderID _orderID)
+        {
+            ForgetSyntheticOrder(_orderID);
         }
 
         [HarmonyPrefix]
@@ -226,108 +209,356 @@ namespace HostUtilities
             if (enabled != null)
             {
                 enabled.Value = false;
+                RefreshClientRecipeBarVisibility();
             }
+
             return true;
         }
 
-        private static IServerMode GetCampaignFlowGameMode(ServerCampaignFlowController controller)
+        private static void RefreshClientRecipeBarVisibility()
         {
-            return CampaignFlowGameModeField != null ? CampaignFlowGameModeField.GetValue(controller) as IServerMode : null;
+            bool visible = !IsEnabled;
+
+            ClientCampaignFlowController[] campaignFlows = Object.FindObjectsOfType<ClientCampaignFlowController>();
+            for (int i = 0; i < campaignFlows.Length; i++)
+            {
+                ClientCampaignFlowController flow = campaignFlows[i];
+                if (flow is ClientBossFlowController)
+                {
+                    continue;
+                }
+
+                ApplyCampaignRecipeBarVisibility(flow, visible);
+            }
+
+            ClientCompetitiveFlowController[] competitiveFlows = Object.FindObjectsOfType<ClientCompetitiveFlowController>();
+            for (int i = 0; i < competitiveFlows.Length; i++)
+            {
+                ApplyCompetitiveRecipeBarVisibility(competitiveFlows[i], visible);
+            }
         }
 
-        private static LevelConfigBase GetCampaignModeLevelConfig(ServerCampaignMode campaignMode)
+        private static void RefreshServerOrderFlowState()
         {
-            if (CampaignModeContextField == null)
+            bool campaignAutoProgress = !ShouldDisableCampaignAutoProgress();
+            ServerCampaignFlowController[] campaignFlows = Object.FindObjectsOfType<ServerCampaignFlowController>();
+            for (int i = 0; i < campaignFlows.Length; i++)
+            {
+                ServerCampaignFlowController flow = campaignFlows[i];
+                if (flow is ServerBossFlowController)
+                {
+                    continue;
+                }
+
+                flow.SetOrdersAutoProgress(campaignAutoProgress);
+            }
+
+            bool competitiveAutoProgress = !IsEnabled;
+            ServerCompetitiveFlowController[] competitiveFlows = Object.FindObjectsOfType<ServerCompetitiveFlowController>();
+            for (int i = 0; i < competitiveFlows.Length; i++)
+            {
+                ServerCompetitiveFlowController flow = competitiveFlows[i];
+                SetAutoProgress(flow.GetMonitorForTeam(TeamID.One), competitiveAutoProgress);
+                SetAutoProgress(flow.GetMonitorForTeam(TeamID.Two), competitiveAutoProgress);
+            }
+
+            if (!IsEnabled)
+            {
+                ClearSyntheticOrders();
+            }
+        }
+
+        private static void ApplyCampaignRecipeBarVisibility(ClientCampaignFlowController flow, bool visible)
+        {
+            if (flow == null || ClientCampaignTeamMonitorField == null)
+            {
+                return;
+            }
+
+            ClientTeamMonitor monitor = ClientCampaignTeamMonitorField.GetValue(flow) as ClientTeamMonitor;
+            SetRecipeBarVisible(GetRecipeBar(monitor), visible);
+        }
+
+        private static void ApplyCompetitiveRecipeBarVisibility(ClientCompetitiveFlowController flow, bool visible)
+        {
+            if (flow == null)
+            {
+                return;
+            }
+
+            if (ClientCompetitiveTeamOneMonitorField != null)
+            {
+                ClientTeamMonitor teamOne = ClientCompetitiveTeamOneMonitorField.GetValue(flow) as ClientTeamMonitor;
+                SetRecipeBarVisible(GetRecipeBar(teamOne), visible);
+            }
+
+            if (ClientCompetitiveTeamTwoMonitorField != null)
+            {
+                ClientTeamMonitor teamTwo = ClientCompetitiveTeamTwoMonitorField.GetValue(flow) as ClientTeamMonitor;
+                SetRecipeBarVisible(GetRecipeBar(teamTwo), visible);
+            }
+        }
+
+        private static RecipeFlowGUI GetRecipeBar(ClientTeamMonitor clientMonitor)
+        {
+            if (clientMonitor == null || ClientTeamMonitorMonitorField == null || TeamMonitorRecipeBarField == null)
             {
                 return null;
             }
 
-            object context = CampaignModeContextField.GetValue(campaignMode);
-            if (context == null)
+            TeamMonitor teamMonitor = ClientTeamMonitorMonitorField.GetValue(clientMonitor) as TeamMonitor;
+            return teamMonitor != null ? TeamMonitorRecipeBarField.GetValue(teamMonitor) as RecipeFlowGUI : null;
+        }
+
+        private static void SetRecipeBarVisible(RecipeFlowGUI recipeBar, bool visible)
+        {
+            if (recipeBar == null || recipeBar.gameObject == null)
             {
-                return null;
+                return;
             }
 
-            FieldInfo levelConfigField = AccessTools.Field(context.GetType(), "m_levelConfig");
-            return levelConfigField != null ? levelConfigField.GetValue(context) as LevelConfigBase : null;
-        }
-
-        private static PlateReturnController GetPlateReturnController(ServerKitchenFlowControllerBase controller)
-        {
-            return KitchenPlateReturnControllerField != null
-                ? KitchenPlateReturnControllerField.GetValue(controller) as PlateReturnController
-                : null;
-        }
-
-        private static KitchenFlowControllerBase GetKitchenFlowController(ServerKitchenFlowControllerBase controller)
-        {
-            return KitchenFlowControllerField != null
-                ? KitchenFlowControllerField.GetValue(controller) as KitchenFlowControllerBase
-                : null;
-        }
-
-        private static KitchenFlowMessage GetKitchenFlowMessage(ServerKitchenFlowControllerBase controller)
-        {
-            return KitchenFlowMessageField != null
-                ? KitchenFlowMessageField.GetValue(controller) as KitchenFlowMessage
-                : null;
-        }
-
-        private static bool GetAutoProgress(ServerOrderControllerBase controller)
-        {
-            if (controller == null || AutoProgressField == null)
+            CanvasGroup canvasGroup = recipeBar.gameObject.GetComponent<CanvasGroup>();
+            if (canvasGroup == null)
             {
-                return true;
+                canvasGroup = recipeBar.gameObject.AddComponent<CanvasGroup>();
             }
 
-            return (bool)AutoProgressField.GetValue(controller);
+            canvasGroup.alpha = visible ? 1f : 0f;
+            canvasGroup.interactable = visible;
+            canvasGroup.blocksRaycasts = visible;
         }
 
-        private static bool MatchesOrder(ServerOrderControllerBase controller, OrderDefinitionNode required, AssembledDefinitionNode provided, PlatingStepData plateType)
+        private static void SetAutoProgress(ServerTeamMonitor monitor, bool autoProgress)
         {
-            return controller != null
-                && MatchesMethod != null
-                && (bool)MatchesMethod.Invoke(controller, new object[] { required, provided, plateType });
+            if (monitor != null && monitor.OrdersController != null)
+            {
+                monitor.OrdersController.SetAutoProgress(autoProgress);
+            }
         }
 
-        private static bool CanUseManualDeliveryFlow()
+        private static bool ShouldHandleNoMenuDelivery(ServerKitchenFlowControllerBase flow, ServerPlateStation station)
         {
-            return AutoProgressField != null
-                && MatchesMethod != null
-                && KitchenFlowControllerField != null
-                && KitchenFlowMessageField != null;
+            if (!IsEnabled || flow == null || station == null)
+            {
+                return false;
+            }
+
+            LevelConfigBase levelConfig = GameUtils.GetLevelConfig();
+            if (!(levelConfig is KitchenLevelConfigBase) || levelConfig is BossCampaignLevelConfig)
+            {
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(levelConfig.name) && levelConfig.name.StartsWith("Tutorial"))
+            {
+                return false;
+            }
+
+            ServerTeamMonitor monitor = flow.GetMonitorForTeam(station.GetTeamID());
+            if (monitor == null || monitor.OrdersController == null)
+            {
+                return false;
+            }
+
+            return !IsAutoProgressEnabled(monitor);
         }
 
-        private static List<RecipeList.Entry> GetAvailableRecipes(KitchenLevelConfigBase levelConfig)
+        private static bool ShouldDisableCampaignAutoProgress()
         {
-            List<RecipeList.Entry> list = new List<RecipeList.Entry>();
-            RoundData roundData = levelConfig.GetRoundData();
+            if (!IsEnabled)
+            {
+                return false;
+            }
+
+            GameSession session = GameUtils.GetGameSession();
+            if (session == null || session.GameModeKind == Kind.Survival)
+            {
+                return false;
+            }
+
+            KitchenLevelConfigBase levelConfig = GameUtils.GetLevelConfig() as KitchenLevelConfigBase;
+            return !(session.GameModeKind == Kind.Campaign && levelConfig != null && levelConfig.m_recipesBeforeTimerStarts > 0);
+        }
+
+        private static bool IsAutoProgressEnabled(ServerTeamMonitor monitor)
+        {
+            return AutoProgressField != null && monitor != null && monitor.OrdersController != null && (bool)AutoProgressField.GetValue(monitor.OrdersController);
+        }
+
+        private static bool TryFindNoMenuRecipeMatch(ServerTeamMonitor monitor, AssembledDefinitionNode definition, PlatingStepData plateType, out RecipeList.Entry matchedEntry)
+        {
+            matchedEntry = null;
+            if (!CanUseSyntheticFallback(definition))
+            {
+                return false;
+            }
+
+            List<RecipeList.Entry> entries = GetAllRecipesForCurrentLevel();
+            for (int i = 0; i < entries.Count; i++)
+            {
+                RecipeList.Entry candidate = entries[i];
+                if (candidate != null && candidate.m_order != null && MatchesRecipe(candidate.m_order, definition, plateType))
+                {
+                    matchedEntry = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static List<RecipeList.Entry> GetAllRecipesForCurrentLevel()
+        {
+            List<RecipeList.Entry> entries = new List<RecipeList.Entry>();
+            KitchenLevelConfigBase levelConfig = GameUtils.GetLevelConfig() as KitchenLevelConfigBase;
+            if (levelConfig == null)
+            {
+                return entries;
+            }
+
+            RoundDataBase roundData = levelConfig.GetRoundData();
             DynamicRoundData dynamicRoundData = roundData as DynamicRoundData;
             if (dynamicRoundData != null && dynamicRoundData.Phases != null)
             {
                 for (int i = 0; i < dynamicRoundData.Phases.Length; i++)
                 {
-                    RecipeList recipes = dynamicRoundData.Phases[i].Recipes;
-                    if (recipes == null || recipes.m_recipes == null)
+                    RecipeList phaseRecipes = dynamicRoundData.Phases[i].Recipes;
+                    if (phaseRecipes == null || phaseRecipes.m_recipes == null)
                     {
                         continue;
                     }
 
-                    for (int j = 0; j < recipes.m_recipes.Length; j++)
+                    for (int j = 0; j < phaseRecipes.m_recipes.Length; j++)
                     {
-                        list.Add(recipes.m_recipes[j]);
+                        entries.Add(phaseRecipes.m_recipes[j]);
                     }
                 }
+
+                return entries;
             }
-            else if (roundData != null && roundData.m_recipes != null && roundData.m_recipes.m_recipes != null)
+
+            RoundData standardRoundData = roundData as RoundData;
+            if (standardRoundData != null && standardRoundData.m_recipes != null && standardRoundData.m_recipes.m_recipes != null)
             {
-                for (int i = 0; i < roundData.m_recipes.m_recipes.Length; i++)
+                for (int i = 0; i < standardRoundData.m_recipes.m_recipes.Length; i++)
                 {
-                    list.Add(roundData.m_recipes.m_recipes[i]);
+                    entries.Add(standardRoundData.m_recipes.m_recipes[i]);
                 }
             }
 
-            return list;
+            return entries;
+        }
+
+        private static bool CanUseSyntheticFallback(AssembledDefinitionNode definition)
+        {
+            if (definition == null || definition == AssembledDefinitionNode.NullNode)
+            {
+                return false;
+            }
+
+            CompositeAssembledNode composite = definition as CompositeAssembledNode;
+            if (composite != null)
+            {
+                bool hasComposition = composite.m_composition != null && composite.m_composition.Length > 0;
+                bool hasOptional = composite.m_optional != null && composite.m_optional.Length > 0;
+                if (!hasComposition && !hasOptional)
+                {
+                    return false;
+                }
+            }
+
+            AssembledDefinitionNode simplified = definition.Simpilfy();
+            return simplified != null && simplified != AssembledDefinitionNode.NullNode;
+        }
+
+        private static bool MatchesRecipe(OrderDefinitionNode required, AssembledDefinitionNode provided, PlatingStepData plateType)
+        {
+            if (required == null || provided == null || required.m_platingStep != plateType)
+            {
+                return false;
+            }
+
+            if (required.GetType() == typeof(WildcardOrderNode))
+            {
+                return AssembledDefinitionNode.Matching(required, provided);
+            }
+
+            return AssembledDefinitionNode.Matching(provided, required);
+        }
+
+        private static ServerOrderData AddSyntheticOrder(ServerTeamMonitor monitor, RecipeList.Entry entry)
+        {
+            if (monitor == null || monitor.OrdersController == null || AddSpecificOrderMethod == null || entry == null)
+            {
+                return null;
+            }
+
+            uint reservedOrderId = 0u;
+            if (NextOrderIdField != null)
+            {
+                object nextIdValue = NextOrderIdField.GetValue(monitor.OrdersController);
+                if (nextIdValue is uint)
+                {
+                    reservedOrderId = (uint)nextIdValue;
+                    SyntheticOrderIds.Add(reservedOrderId);
+                }
+            }
+
+            ServerOrderData syntheticOrder = AddSpecificOrderMethod.Invoke(monitor.OrdersController, new object[] { entry }) as ServerOrderData;
+            if (syntheticOrder == null)
+            {
+                if (reservedOrderId != 0u)
+                {
+                    SyntheticOrderIds.Remove(reservedOrderId);
+                }
+
+                return null;
+            }
+
+            if (reservedOrderId != 0u && syntheticOrder.ID.m_id != reservedOrderId)
+            {
+                SyntheticOrderIds.Remove(reservedOrderId);
+                SyntheticOrderIds.Add(syntheticOrder.ID.m_id);
+            }
+
+            return syntheticOrder;
+        }
+
+        private static void InvokeSuccessfulDelivery(ServerKitchenFlowControllerBase flow, OrderID orderId, RecipeList.Entry entry, float timeRemainingPercentage, bool wasCombo, ServerPlateStation station)
+        {
+            if (flow == null || entry == null || station == null)
+            {
+                return;
+            }
+
+            MethodInfo method = GetSuccessfulDeliveryMethod(flow.GetType());
+            if (method != null)
+            {
+                method.Invoke(flow, new object[] { orderId, entry, timeRemainingPercentage, wasCombo, station });
+            }
+        }
+
+        private static MethodInfo GetSuccessfulDeliveryMethod(System.Type type)
+        {
+            if (type == null)
+            {
+                return null;
+            }
+
+            MethodInfo method;
+            if (SuccessfulDeliveryMethodCache.TryGetValue(type, out method))
+            {
+                return method;
+            }
+
+            method = AccessTools.Method(type, "OnSuccessfulDelivery", new[] { typeof(OrderID), typeof(RecipeList.Entry), typeof(float), typeof(bool), typeof(ServerPlateStation) });
+            SuccessfulDeliveryMethodCache[type] = method;
+            return method;
+        }
+
+        private static void ClearSyntheticOrders()
+        {
+            SyntheticOrderIds.Clear();
         }
     }
 }
