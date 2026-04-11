@@ -13,8 +13,9 @@ using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
 using UnityEngine;
 using UnityEngine.UI;
+using HostUtilities;
 
-namespace HostUtilities
+namespace OC2MenuManager
 {
     internal static partial class ServedDishTracker
     {

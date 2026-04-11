@@ -1,8 +1,9 @@
 using System.Collections.Generic;
 using HarmonyLib;
 using Team17.Online;
+using HostUtilities;
 
-namespace HostUtilities
+namespace OC2MenuManager
 {
     internal static class MenuLevelHelper
     {

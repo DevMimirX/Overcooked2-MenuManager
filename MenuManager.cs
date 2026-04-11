@@ -4,8 +4,9 @@ using System.Reflection;
 using BepInEx.Configuration;
 using HarmonyLib;
 using UnityEngine;
+using HostUtilities;
 
-namespace HostUtilities
+namespace OC2MenuManager
 {
     public class MenuManager
     {

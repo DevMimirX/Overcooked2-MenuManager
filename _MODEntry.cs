@@ -6,8 +6,9 @@ using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
+using HostUtilities;
 
-namespace HostUtilities
+namespace OC2MenuManager
 {
     [BepInPlugin("com.ch3ngyz.plugin.OC2MenuManager", "[OC2MenuManager] Menu Tools", "1.0.0")]
     [BepInProcess("Overcooked2.exe")]
@@ -58,6 +59,12 @@ namespace HostUtilities
             defaultFontSize = SettingsConfig.Bind<int>("00-UI", "MOD的UI字体大小", 18, new ConfigDescription("MOD的UI字体大小", new AcceptableValueRange<int>(5, 40)));
             defaultFontColor = SettingsConfig.Bind<Color>("00-UI", "MOD的UI字体颜色", new Color(1f, 1f, 1f, 1f));
             UpdateGUIDpi();
+            PluginRuntimeContext.Configure(
+                CreateAndRegisterHarmony,
+                LogInfo,
+                delegate { return defaultFontSize.Value; },
+                delegate { return defaultFontColor.Value; },
+                delegate { return dpiScaleFactor; });
 
             for (int i = 0; i < ModuleAwakeActions.Length; i++)
             {
@@ -115,6 +122,13 @@ namespace HostUtilities
 
             AllHarmony.Add(harmony);
             AllHarmonyName.Add(harmonyName);
+        }
+
+        private static Harmony CreateAndRegisterHarmony(Type type)
+        {
+            Harmony harmony = Harmony.CreateAndPatchAll(type);
+            RegisterHarmony(type.Name, harmony);
+            return harmony;
         }
 
         private void UpdateGUIDpi()

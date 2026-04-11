@@ -7,16 +7,14 @@
     <ProjectGuid>{7C79DA82-5AA6-4BFB-8D86-6D2E56C184CB}</ProjectGuid>
     <OutputType>Library</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>HostUtilities</RootNamespace>
+    <RootNamespace>OC2MenuManager</RootNamespace>
     <AssemblyName>OC2MenuManager</AssemblyName>
   </PropertyGroup>
   <Import Project="..\..\eng\LegacyGamePlugin.props" />
   <ItemGroup>
-    <Compile Include="DebugOverlayHost.cs" />
     <Compile Include="DishNameCatalog.cs" />
     <Compile Include="MenuLevelHelper.cs" />
     <Compile Include="MenuManager.cs" />
-    <Compile Include="ModuleUtility.cs" />
     <Compile Include="NoMenuMode.cs" />
     <Compile Include="ServedDishTracker.cs" />
     <Compile Include="ServedDishTracker.Settings.cs" />
@@ -29,6 +27,9 @@
     <Compile Include="ServedDishTracker.Persistence.cs" />
     <Compile Include="_MODEntry.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\OC2Mods.Shared\OC2Mods.Shared.csproj" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

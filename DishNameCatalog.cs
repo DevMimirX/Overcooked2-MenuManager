@@ -4,8 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using BepInEx;
+using HostUtilities;
 
-namespace HostUtilities
+namespace OC2MenuManager
 {
     internal static class DishNameCatalog
     {

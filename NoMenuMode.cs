@@ -5,8 +5,9 @@ using GameModes;
 using HarmonyLib;
 using OrderController;
 using UnityEngine;
+using HostUtilities;
 
-namespace HostUtilities
+namespace OC2MenuManager
 {
     internal static class NoMenuMode
     {
