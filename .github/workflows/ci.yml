@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Build, test, verify, and package
+        shell: pwsh
+        run: ./tools/Build.ps1 -Configuration Release -Package
+
+      - name: Upload validated packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Overcooked2-MenuManager
+          path: artifacts/*.zip
+          if-no-files-found: error

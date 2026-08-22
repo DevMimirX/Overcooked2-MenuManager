@@ -1,0 +1,30 @@
+# Build and test output
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+[Tt]est[Rr]esult*/
+artifacts/
+
+# IDE state
+.vs/
+.vscode/
+.idea/
+_ReSharper*/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.DotSettings.user
+
+# Package output
+packages/
+*.nupkg
+*.snupkg
+
+# Local files
+*.tmp
+*.temp
+Thumbs.db
+Desktop.ini
+._*
