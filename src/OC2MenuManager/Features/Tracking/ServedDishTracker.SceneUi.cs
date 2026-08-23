@@ -13,6 +13,7 @@ using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
 using UnityEngine;
 using UnityEngine.UI;
+using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
 {
@@ -85,8 +86,10 @@ namespace OC2MenuManager
             }
 
             List<SceneInfo> scenes = new List<SceneInfo>();
-            AddDIYScenesFromRuntimeManager(scenes);
-            AddDIYScenesFromFileSystem(scenes);
+            if (!AddDIYScenesFromRuntimeManager(scenes))
+            {
+                AddDIYScenesFromFileSystem(scenes);
+            }
 
             CachedDIYScenes.Clear();
             CachedDIYScenes.AddRange(scenes);
@@ -94,66 +97,51 @@ namespace OC2MenuManager
             return CachedDIYScenes;
         }
 
-        private static void AddDIYScenesFromRuntimeManager(List<SceneInfo> scenes)
+        private static bool AddDIYScenesFromRuntimeManager(List<SceneInfo> scenes)
         {
-            IList levelSetInfos;
-            if (!TryGetDIYLevelSetInfos(out levelSetInfos))
+            string error;
+            if (!OptionalRecipeAdapters.TryGetDIYLevels(DIYLevelDescriptorsBuffer, out error))
             {
-                return;
+                return false;
             }
 
-            for (int i = 0; i < levelSetInfos.Count; i++)
+            for (int i = 0; i < DIYLevelDescriptorsBuffer.Count; i++)
             {
-                object levelSetPair = levelSetInfos[i];
-                object levelSetInfo = GetPairValue(levelSetPair);
-                Array levelInfos = GetFieldValue(levelSetInfo, "levelInfos") as Array;
-                if (levelInfos == null)
+                DIYLevelDescriptor descriptor = DIYLevelDescriptorsBuffer[i];
+                if (descriptor == null || string.IsNullOrEmpty(descriptor.SceneName))
                 {
                     continue;
                 }
 
-                string levelSetName = GetLocalizedString(levelSetInfo, "levelSetNameZH", "levelSetName");
-                for (int j = 0; j < levelInfos.Length; j++)
+                SceneInfo scene;
+                if (!SceneCache.TryGetValue(descriptor.SceneName, out scene) || scene == null)
                 {
-                    object levelInfo = levelInfos.GetValue(j);
-                    string sceneName = GetStringField(levelInfo, "sceneName");
-                    if (string.IsNullOrEmpty(sceneName))
-                    {
-                        continue;
-                    }
-
-                    string levelName = GetLocalizedString(levelInfo, "levelNameZH", "levelName");
-                    string displayName = BuildDIYDisplayName(levelSetName, levelName, sceneName);
-
-                    LevelConfigBase levelConfig;
-                    SceneInfo scene = TryGetDIYLevelConfig(levelInfo, levelSetInfo, out levelConfig) && !IsHordeLevel(levelConfig)
-                        ? BuildSceneInfo(sceneName, displayName, levelConfig)
-                        : null;
-
-                    if (scene == null)
-                    {
-                        SceneInfo cachedScene;
-                        if (SceneCache.TryGetValue(sceneName, out cachedScene) && cachedScene != null)
-                        {
-                            cachedScene.DisplayName = displayName;
-                            scene = cachedScene;
-                        }
-                    }
-
-                    if (scene == null)
-                    {
-                        scene = new SceneInfo();
-                        scene.SceneName = sceneName;
-                        scene.DisplayName = displayName;
-                    }
-                    else
-                    {
-                        scene.DisplayName = displayName;
-                    }
-
-                    AddDIYSceneIfMissing(scenes, scene);
+                    scene = new SceneInfo();
+                    scene.SceneName = descriptor.SceneName;
                 }
+
+                object previousLevelInfo = scene.DIYLevelInfo;
+                bool metadataChanged = !ReferenceEquals(previousLevelInfo, descriptor.LevelInfo);
+                bool metadataReplaced = previousLevelInfo != null && metadataChanged;
+                if (metadataReplaced && ResetSceneRecipeCatalog(scene))
+                {
+                    NotifyRecipeCatalogChanged(scene);
+                }
+                scene.DisplayName = UseChinese()
+                    ? descriptor.ChineseDisplayName
+                    : descriptor.EnglishDisplayName;
+                scene.IsDIY = true;
+                scene.DIYLevelInfo = descriptor.LevelInfo;
+                if (metadataChanged)
+                {
+                    scene.DIYHydrationAttempted = false;
+                    scene.DIYHydrationError = null;
+                }
+
+                AddDIYSceneIfMissing(scenes, scene);
             }
+
+            return true;
         }
 
         private static void AddDIYScenesFromFileSystem(List<SceneInfo> scenes)
@@ -164,7 +152,21 @@ namespace OC2MenuManager
                 return;
             }
 
-            string[] directories = Directory.GetDirectories(diyLevelsRoot);
+            string[] directories;
+            try
+            {
+                directories = Directory.GetDirectories(diyLevelsRoot);
+            }
+            catch (Exception ex)
+            {
+                if (!diyFileSystemWarningLogged)
+                {
+                    diyFileSystemWarningLogged = true;
+                    _MODEntry.LogWarning("[ServedDishTracker] Unable to enumerate preloaded DIY level folders: " + ex.GetType().Name + ": " + ex.Message);
+                }
+                return;
+            }
+
             for (int i = 0; i < directories.Length; i++)
             {
                 string directory = directories[i];
@@ -174,23 +176,43 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                string[] files = Directory.GetFiles(directory);
+                string[] files;
+                try
+                {
+                    files = Directory.GetFiles(directory);
+                }
+                catch
+                {
+                    continue;
+                }
                 for (int j = 0; j < files.Length; j++)
                 {
                     string fileName = Path.GetFileName(files[j]);
-                    if (string.IsNullOrEmpty(fileName) || fileName.StartsWith("info_", StringComparison.OrdinalIgnoreCase))
+                    if (string.IsNullOrEmpty(fileName)
+                        || fileName.StartsWith("info", StringComparison.OrdinalIgnoreCase)
+                        || fileName.EndsWith(".manifest", StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }
 
                     SceneInfo scene = new SceneInfo();
                     scene.SceneName = fileName;
-                    scene.DisplayName = BuildDIYDisplayName("DIY " + setName, fileName, fileName);
+                    scene.DisplayName = "DIY " + setName + " - " + fileName + " [" + fileName + "]";
+                    scene.IsDIY = true;
+                    scene.DIYHydrationError = "DIY Level metadata is still loading or unavailable.";
 
                     SceneInfo cachedScene;
                     if (SceneCache.TryGetValue(scene.SceneName, out cachedScene) && cachedScene != null)
                     {
-                        cachedScene.DisplayName = scene.DisplayName;
+                        cachedScene.IsDIY = true;
+                        if (cachedScene.DIYLevelInfo == null)
+                        {
+                            cachedScene.DisplayName = scene.DisplayName;
+                            if (string.IsNullOrEmpty(cachedScene.DIYHydrationError))
+                            {
+                                cachedScene.DIYHydrationError = scene.DIYHydrationError;
+                            }
+                        }
                         scene = cachedScene;
                     }
 
@@ -214,123 +236,65 @@ namespace OC2MenuManager
             scenes.Add(scene);
         }
 
-        private static bool TryGetDIYLevelSetInfos(out IList levelSetInfos)
+        private static bool EnsureDIYSceneHydrated(SceneInfo scene, bool forceRefresh)
         {
-            levelSetInfos = null;
-
-            Type diyLevelAssetBundleManagerType = AccessTools.TypeByName("OC2DIYLevel.DIYLevelAssetBundleManager");
-            if (diyLevelAssetBundleManagerType == null)
+            if (scene == null || !scene.IsDIY)
             {
+                return scene != null;
+            }
+
+            if (forceRefresh)
+            {
+                scene.DIYHydrationAttempted = false;
+                scene.DIYHydrationError = null;
+            }
+
+            if (scene.DIYHydrationAttempted)
+            {
+                return scene.OrderedRecipes.Count > 0;
+            }
+
+            scene.DIYHydrationAttempted = true;
+            if (scene.DIYLevelInfo == null)
+            {
+                scene.DIYHydrationError = "DIY Level metadata is still loading or unavailable.";
                 return false;
             }
 
-            PropertyInfo isInitializedProperty = AccessTools.Property(diyLevelAssetBundleManagerType, "IsInitialized");
-            if (isInitializedProperty == null || !(bool)isInitializedProperty.GetValue(null, null))
+            string error;
+            if (!OptionalRecipeAdapters.TryGetDIYRecipes(scene.DIYLevelInfo, DIYRecipeDescriptorsBuffer, out error))
             {
+                scene.DIYHydrationError = error;
                 return false;
             }
 
-            FieldInfo levelSetInfosField = AccessTools.Field(diyLevelAssetBundleManagerType, "levelSetInfos");
-            if (levelSetInfosField == null)
+            bool changed = false;
+            RuntimeRecipeIdsBuffer.Clear();
+            for (int i = 0; i < DIYRecipeDescriptorsBuffer.Count; i++)
             {
-                return false;
-            }
-
-            levelSetInfos = levelSetInfosField.GetValue(null) as IList;
-            return levelSetInfos != null;
-        }
-
-        private static bool TryGetDIYLevelConfig(object levelInfo, object levelSetInfo, out LevelConfigBase levelConfig)
-        {
-            levelConfig = GetLevelConfigObject(levelInfo);
-            if (levelConfig != null)
-            {
-                return true;
-            }
-
-            levelConfig = GetLevelConfigObject(levelSetInfo);
-            return levelConfig != null;
-        }
-
-        private static LevelConfigBase GetLevelConfigObject(object source)
-        {
-            if (source == null)
-            {
-                return null;
-            }
-
-            Type sourceType = source.GetType();
-            FieldInfo[] fields = sourceType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            for (int i = 0; i < fields.Length; i++)
-            {
-                FieldInfo field = fields[i];
-                if (typeof(LevelConfigBase).IsAssignableFrom(field.FieldType))
-                {
-                    return field.GetValue(source) as LevelConfigBase;
-                }
-            }
-
-            PropertyInfo[] properties = sourceType.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            for (int i = 0; i < properties.Length; i++)
-            {
-                PropertyInfo property = properties[i];
-                if (!property.CanRead || property.GetIndexParameters().Length > 0 || !typeof(LevelConfigBase).IsAssignableFrom(property.PropertyType))
+                DIYRecipeDescriptor descriptor = DIYRecipeDescriptorsBuffer[i];
+                if (descriptor == null || descriptor.Id == 0)
                 {
                     continue;
                 }
 
-                try
-                {
-                    return property.GetValue(source, null) as LevelConfigBase;
-                }
-                catch
-                {
-                }
+                RuntimeRecipeIdsBuffer.Add(descriptor.Id);
+                changed |= descriptor.Definition != null
+                    ? EnsureRecipe(scene, descriptor.Definition)
+                    : EnsureRecipeMetadata(scene, descriptor.Id, descriptor.InternalName);
             }
 
-            return null;
-        }
+            changed |= UpdateRecipeSourceIds(scene, scene.DIYRecipeIds, RuntimeRecipeIdsBuffer);
 
-        private static string BuildDIYDisplayName(string levelSetName, string levelName, string sceneName)
-        {
-            string resolvedLevelSetName = string.IsNullOrEmpty(levelSetName) ? "DIY" : levelSetName;
-            string resolvedLevelName = string.IsNullOrEmpty(levelName) ? sceneName : levelName;
-            return resolvedLevelSetName + " - " + resolvedLevelName + " [" + sceneName + "]";
-        }
-
-        private static string GetLocalizedString(object source, string primaryFieldName, string fallbackFieldName)
-        {
-            string localized = GetStringField(source, primaryFieldName);
-            if (!string.IsNullOrEmpty(localized))
+            scene.DIYHydrationError = scene.OrderedRecipes.Count > 0
+                ? null
+                : "The DIY level metadata did not contain any usable recipes.";
+            if (changed)
             {
-                return localized;
+                NotifyRecipeCatalogChanged(scene);
             }
 
-            string fallback = GetStringField(source, fallbackFieldName);
-            if (!string.IsNullOrEmpty(fallback))
-            {
-                return fallback;
-            }
-
-            return null;
-        }
-
-        private static object GetPairValue(object pair)
-        {
-            return pair != null
-                ? pair.GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public).GetValue(pair, null)
-                : null;
-        }
-
-        private static object GetFieldValue(object instance, string fieldName)
-        {
-            FieldInfo fieldInfo = instance != null ? AccessTools.Field(instance.GetType(), fieldName) : null;
-            return fieldInfo != null ? fieldInfo.GetValue(instance) : null;
-        }
-
-        private static string GetStringField(object instance, string fieldName)
-        {
-            return GetFieldValue(instance, fieldName) as string;
+            return scene.OrderedRecipes.Count > 0;
         }
 
         private static void AddSceneFromEntry(List<SceneInfo> scenes, HashSet<string> seenScenes, SceneDirectoryData.SceneDirectoryEntry entry)
@@ -444,8 +408,12 @@ namespace OC2MenuManager
 
         private static SceneDirectoryData GetWorldMapSceneDirectory()
         {
-            WorldMapFlowController worldMap = UnityEngine.Object.FindObjectOfType<WorldMapFlowController>();
-            return worldMap != null ? worldMap.GetSceneDirectory() : null;
+            if (cachedWorldMapFlowController == null)
+            {
+                cachedWorldMapFlowController = UnityEngine.Object.FindObjectOfType<WorldMapFlowController>();
+            }
+
+            return cachedWorldMapFlowController != null ? cachedWorldMapFlowController.GetSceneDirectory() : null;
         }
 
         private static SceneDirectoryData GetSceneDirectory(GameSession sessionPrefab)
@@ -524,10 +492,10 @@ namespace OC2MenuManager
 
         private static DLCManager GetDlcManager()
         {
-            if (cachedDlcManager == null || Time.frameCount >= nextDlcManagerLookupFrame)
+            if (cachedDlcManager == null && Time.frameCount >= nextDlcManagerLookupFrame)
             {
                 cachedDlcManager = UnityEngine.Object.FindObjectOfType<DLCManager>();
-                nextDlcManagerLookupFrame = Time.frameCount + (cachedDlcManager != null ? ControllerLookupIntervalFrames : ControllerLookupRetryIntervalFrames);
+                nextDlcManagerLookupFrame = Time.frameCount + ControllerLookupRetryIntervalFrames;
             }
 
             return cachedDlcManager;
@@ -560,18 +528,44 @@ namespace OC2MenuManager
             SceneInfo scene = new SceneInfo();
             scene.SceneName = sceneName;
             scene.DisplayName = displayName;
+            MergeLevelConfigIntoScene(scene, levelConfig);
+            return scene;
+        }
+
+        private static bool MergeLevelConfigIntoScene(SceneInfo scene, LevelConfigBase levelConfig)
+        {
+            if (scene == null || levelConfig == null)
+            {
+                return false;
+            }
+
+            scene.LevelConfigName = levelConfig.name;
+            scene.RuntimeLevelConfig = levelConfig;
+            bool changed = false;
 
             List<OrderDefinitionNode> recipes = levelConfig.GetAllRecipes();
             if (recipes == null)
             {
-                return scene;
+                return false;
             }
 
+            RuntimeRecipeIdsBuffer.Clear();
             for (int i = 0; i < recipes.Count; i++)
             {
-                EnsureRecipe(scene, recipes[i]);
+                OrderDefinitionNode recipe = recipes[i];
+                if (recipe == null || recipe.m_uID == 0)
+                {
+                    continue;
+                }
+
+                RuntimeRecipeIdsBuffer.Add(recipe.m_uID);
+                changed |= EnsureRecipe(scene, recipe);
             }
 
+            changed |= UpdateRecipeSourceIds(scene, scene.RuntimeRecipeIds, RuntimeRecipeIdsBuffer);
+
+            List<int>[] previousPhaseRecipeIds = scene.PhaseRecipeIds;
+            scene.PhaseRecipeIds = null;
             CampaignLevelConfigBase campaignLevelConfig = levelConfig as CampaignLevelConfigBase;
             if (campaignLevelConfig != null)
             {
@@ -591,7 +585,7 @@ namespace OC2MenuManager
                         for (int j = 0; j < phaseRecipes.m_recipes.Length; j++)
                         {
                             RecipeList.Entry entry = phaseRecipes.m_recipes[j];
-                            if (entry != null && entry.m_order != null)
+                            if (entry != null && entry.m_order != null && !scene.PhaseRecipeIds[i].Contains(entry.m_order.m_uID))
                             {
                                 scene.PhaseRecipeIds[i].Add(entry.m_order.m_uID);
                             }
@@ -600,28 +594,232 @@ namespace OC2MenuManager
                 }
             }
 
-            return scene;
+            changed |= !ArePhaseRecipeListsEqual(previousPhaseRecipeIds, scene.PhaseRecipeIds);
+            return changed;
         }
 
-        private static void EnsureRecipe(SceneInfo scene, OrderDefinitionNode recipe)
+        private static bool EnsureRecipe(SceneInfo scene, OrderDefinitionNode recipe)
         {
-            if (scene == null || recipe == null || scene.RecipesById.ContainsKey(recipe.m_uID))
+            if (scene == null || recipe == null || recipe.m_uID == 0)
             {
-                return;
+                return false;
+            }
+
+            RecipeInfo existing;
+            if (scene.RecipesById.TryGetValue(recipe.m_uID, out existing) && existing != null)
+            {
+                RecipeCatalogMergeAction action = RecipeCatalogMergePolicy.Evaluate(
+                    true,
+                    existing.Definition != null,
+                    true,
+                    !ReferenceEquals(existing.Definition, recipe),
+                    !string.Equals(existing.InternalName, recipe.name, StringComparison.Ordinal));
+                if (action == RecipeCatalogMergeAction.None)
+                {
+                    return false;
+                }
+
+                PopulateRecipeInfo(existing, recipe.m_uID, recipe.name, recipe);
+                DishNameCatalog.RecordRecipe(scene.SceneName, recipe.m_uID, recipe.name);
+                return true;
             }
 
             RecipeInfo info = new RecipeInfo();
-            info.Id = recipe.m_uID;
-            info.InternalName = recipe.name;
-            info.EnglishName = DishNameCatalog.GetEnglishName(recipe.name);
-            info.ChineseName = DishNameCatalog.GetChineseFullName(recipe.name);
-            info.CategoryName = DishNameCatalog.GetCategoryName(recipe.name);
-            info.CategoryTier = DishNameCatalog.GetCategoryTier(recipe.name);
-            info.Definition = recipe;
+            PopulateRecipeInfo(info, recipe.m_uID, recipe.name, recipe);
             scene.RecipesById.Add(info.Id, info);
             scene.OrderedRecipes.Add(info);
             scene.AllRecipeIds.Add(info.Id);
             DishNameCatalog.RecordRecipe(scene.SceneName, recipe.m_uID, recipe.name);
+            return true;
+        }
+
+        private static bool EnsureRecipeMetadata(SceneInfo scene, int recipeId, string internalName)
+        {
+            if (scene == null || recipeId == 0)
+            {
+                return false;
+            }
+
+            RecipeInfo existing;
+            if (scene.RecipesById.TryGetValue(recipeId, out existing) && existing != null)
+            {
+                RecipeCatalogMergeAction action = RecipeCatalogMergePolicy.Evaluate(
+                    true,
+                    existing.Definition != null,
+                    false,
+                    false,
+                    !string.Equals(existing.InternalName, internalName, StringComparison.Ordinal));
+                if (action == RecipeCatalogMergeAction.None)
+                {
+                    return false;
+                }
+
+                PopulateRecipeInfo(existing, recipeId, internalName, null);
+                DishNameCatalog.RecordRecipe(scene.SceneName, recipeId, internalName);
+                return true;
+            }
+
+            RecipeInfo info = new RecipeInfo();
+            PopulateRecipeInfo(info, recipeId, internalName, null);
+            scene.RecipesById.Add(info.Id, info);
+            scene.OrderedRecipes.Add(info);
+            scene.AllRecipeIds.Add(info.Id);
+            DishNameCatalog.RecordRecipe(scene.SceneName, recipeId, internalName);
+            return true;
+        }
+
+        private static bool UpdateRecipeSourceIds(SceneInfo scene, HashSet<int> sourceIds, HashSet<int> desiredIds)
+        {
+            if (scene == null || sourceIds == null || desiredIds == null)
+            {
+                return false;
+            }
+
+            StaleRecipeIdsBuffer.Clear();
+            foreach (int recipeId in sourceIds)
+            {
+                if (!desiredIds.Contains(recipeId))
+                {
+                    StaleRecipeIdsBuffer.Add(recipeId);
+                }
+            }
+
+            sourceIds.Clear();
+            foreach (int recipeId in desiredIds)
+            {
+                sourceIds.Add(recipeId);
+            }
+
+            bool changed = false;
+            for (int i = 0; i < StaleRecipeIdsBuffer.Count; i++)
+            {
+                changed |= RemoveRecipeIfUnreferenced(scene, StaleRecipeIdsBuffer[i]);
+            }
+
+            StaleRecipeIdsBuffer.Clear();
+            return changed;
+        }
+
+        private static bool RemoveRecipeIfUnreferenced(SceneInfo scene, int recipeId)
+        {
+            if (scene == null
+                || scene.DIYRecipeIds.Contains(recipeId)
+                || scene.RuntimeRecipeIds.Contains(recipeId)
+                || scene.ExtensionRecipeIds.Contains(recipeId))
+            {
+                return false;
+            }
+
+            RecipeInfo recipe;
+            if (!scene.RecipesById.TryGetValue(recipeId, out recipe))
+            {
+                return false;
+            }
+
+            scene.RecipesById.Remove(recipeId);
+            scene.AllRecipeIds.Remove(recipeId);
+            scene.OrderedRecipes.Remove(recipe);
+            if (scene.PhaseRecipeIds != null)
+            {
+                for (int i = 0; i < scene.PhaseRecipeIds.Length; i++)
+                {
+                    if (scene.PhaseRecipeIds[i] != null)
+                    {
+                        scene.PhaseRecipeIds[i].Remove(recipeId);
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static bool ResetSceneRecipeCatalog(SceneInfo scene)
+        {
+            if (scene == null)
+            {
+                return false;
+            }
+
+            bool changed = scene.OrderedRecipes.Count > 0 || scene.PhaseRecipeIds != null;
+            scene.AllRecipeIds.Clear();
+            scene.OrderedRecipes.Clear();
+            scene.RecipesById.Clear();
+            scene.DIYRecipeIds.Clear();
+            scene.RuntimeRecipeIds.Clear();
+            scene.ExtensionRecipeIds.Clear();
+            scene.PhaseRecipeIds = null;
+            scene.RuntimeLevelConfig = null;
+            scene.LevelConfigName = null;
+            return changed;
+        }
+
+        private static void PopulateRecipeInfo(RecipeInfo info, int recipeId, string internalName, OrderDefinitionNode definition)
+        {
+            string resolvedName = string.IsNullOrEmpty(internalName) ? "Recipe_" + recipeId : internalName;
+            info.Id = recipeId;
+            info.InternalName = resolvedName;
+            info.EnglishName = DishNameCatalog.GetEnglishName(resolvedName);
+            info.ChineseName = DishNameCatalog.GetChineseFullName(resolvedName);
+            info.CategoryName = DishNameCatalog.GetCategoryName(resolvedName);
+            info.CategoryTier = DishNameCatalog.GetCategoryTier(resolvedName);
+            info.Definition = definition;
+            info.SimplifiedDefinition = null;
+            info.SimplifiedUnwrappedDefinition = null;
+        }
+
+        private static bool ArePhaseRecipeListsEqual(List<int>[] left, List<int>[] right)
+        {
+            if (ReferenceEquals(left, right))
+            {
+                return true;
+            }
+
+            if (left == null || right == null || left.Length != right.Length)
+            {
+                return left == null && right == null;
+            }
+
+            for (int i = 0; i < left.Length; i++)
+            {
+                List<int> leftPhase = left[i];
+                List<int> rightPhase = right[i];
+                int leftCount = leftPhase != null ? leftPhase.Count : 0;
+                int rightCount = rightPhase != null ? rightPhase.Count : 0;
+                if (leftCount != rightCount)
+                {
+                    return false;
+                }
+
+                for (int j = 0; j < leftCount; j++)
+                {
+                    if (leftPhase[j] != rightPhase[j])
+                    {
+                        return false;
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        private static void NotifyRecipeCatalogChanged(SceneInfo scene)
+        {
+            if (scene == null)
+            {
+                return;
+            }
+
+            scene.CatalogRevision++;
+            if (currentRun != null && string.Equals(currentRun.SceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+            {
+                InitializeRunCounts(currentRun, scene);
+            }
+
+            preparedCandidateRecipeIdsDirty = true;
+            InvalidateProbabilityMap();
+            InvalidatePreparedCandidates(true);
+            InvalidateOverlay();
+            InvalidateTicketWidgets();
         }
 
         private static bool TryGetCurrentSceneInfo(out SceneInfo scene)
@@ -644,14 +842,20 @@ namespace OC2MenuManager
 
             string sceneName = sceneVariant.SceneName;
             LevelConfigBase levelConfig = sceneVariant.LevelConfig ?? GameUtils.GetLevelConfig();
-            if (SceneCache.TryGetValue(sceneName, out scene)
-                && scene != null
-                && (scene.OrderedRecipes.Count > 0 || levelConfig == null))
+            if (SceneCache.TryGetValue(sceneName, out scene) && scene != null)
             {
+                if (levelConfig != null && !ReferenceEquals(scene.RuntimeLevelConfig, levelConfig))
+                {
+                    if (MergeLevelConfigIntoScene(scene, levelConfig))
+                    {
+                        NotifyRecipeCatalogChanged(scene);
+                    }
+                }
+
                 cachedCurrentSceneInfoFrame = Time.frameCount;
                 cachedCurrentSceneInfo = scene;
-                cachedCurrentSceneInfoValid = true;
-                return true;
+                cachedCurrentSceneInfoValid = scene.OrderedRecipes.Count > 0 || levelConfig == null;
+                return cachedCurrentSceneInfoValid;
             }
 
             if (levelConfig == null || IsHordeLevel(levelConfig))

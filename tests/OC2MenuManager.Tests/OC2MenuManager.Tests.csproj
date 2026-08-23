@@ -15,6 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\..\src\OC2MenuManager\Infrastructure\RuntimePolicies.cs" Link="Source\RuntimePolicies.cs" />
     <Compile Include="..\..\src\OC2MenuManager\Infrastructure\UserDataMigration.cs" Link="Source\UserDataMigration.cs" />
   </ItemGroup>
 </Project>

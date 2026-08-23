@@ -13,6 +13,7 @@ using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
 using UnityEngine;
 using UnityEngine.UI;
+using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
 {
@@ -31,21 +32,6 @@ namespace OC2MenuManager
             InvalidateProbabilityMap();
             InvalidatePreparedCandidates(true);
             InvalidateOverlay();
-        }
-
-        private static int ComputeOverlayContentSignature()
-        {
-            unchecked
-            {
-                int hash = 17;
-                hash = (hash * 31) + (enabled != null && enabled.Value ? 1 : 0);
-                hash = (hash * 31) + (preparedTrackingEnabled != null && preparedTrackingEnabled.Value ? 1 : 0);
-                hash = (hash * 31) + (overlayMaxDisplayDishes != null ? overlayMaxDisplayDishes.Value : 0);
-                hash = (hash * 31) + (int)(languageMode != null ? languageMode.Value : TrackerLanguage.Auto);
-                hash = (hash * 31) + (currentRun != null ? currentRun.TotalAdded : 0);
-                hash = (hash * 31) + (currentRun != null ? currentRun.CurrentPhaseIndex : 0);
-                return hash;
-            }
         }
 
         private static string BuildOverlayText()
@@ -343,32 +329,46 @@ namespace OC2MenuManager
                 return probabilityByRecipeId;
             }
 
-            double recipeCount = activeRecipeIds.Count;
+            UniqueProbabilityRecipeIdsBuffer.Clear();
+            UniqueProbabilityRecipeIdSetBuffer.Clear();
+            for (int i = 0; i < activeRecipeIds.Count; i++)
+            {
+                int recipeId = activeRecipeIds[i];
+                if (scene.RecipesById.ContainsKey(recipeId) && UniqueProbabilityRecipeIdSetBuffer.Add(recipeId))
+                {
+                    UniqueProbabilityRecipeIdsBuffer.Add(recipeId);
+                }
+            }
+
+            if (UniqueProbabilityRecipeIdsBuffer.Count == 0)
+            {
+                return probabilityByRecipeId;
+            }
+
             double totalWeight = 0d;
             Dictionary<int, double> weightsByRecipeId = ProbabilityWeightsByRecipeBuffer;
             weightsByRecipeId.Clear();
-            for (int i = 0; i < activeRecipeIds.Count; i++)
+            for (int i = 0; i < UniqueProbabilityRecipeIdsBuffer.Count; i++)
             {
-                int id = activeRecipeIds[i];
-                double weight = ((double)(run.TotalAdded + 2) / recipeCount) - GetCount(run.AddedCounts, id);
-                if (weight < 0d)
-                {
-                    weight = 0d;
-                }
+                int id = UniqueProbabilityRecipeIdsBuffer[i];
+                double weight = ProbabilityPolicy.CalculateRawWeight(
+                    run.TotalAdded,
+                    UniqueProbabilityRecipeIdsBuffer.Count,
+                    GetCount(run.AddedCounts, id));
 
                 totalWeight += weight;
                 double existingWeight;
                 weightsByRecipeId[id] = weightsByRecipeId.TryGetValue(id, out existingWeight) ? existingWeight + weight : weight;
             }
 
-            if (totalWeight <= 0d)
+            if (!ProbabilityPolicy.IsFinite(totalWeight) || totalWeight <= 0d)
             {
                 return probabilityByRecipeId;
             }
 
             foreach (KeyValuePair<int, double> pair in weightsByRecipeId)
             {
-                probabilityByRecipeId[pair.Key] = pair.Value / totalWeight;
+                probabilityByRecipeId[pair.Key] = ProbabilityPolicy.Normalize(pair.Value, totalWeight);
             }
 
             return probabilityByRecipeId;
@@ -394,12 +394,8 @@ namespace OC2MenuManager
         private static bool IsTracked(SceneInfo scene, int recipeId)
         {
             HashSet<int> trackedIds;
-            if (!TrackedIdsByScene.TryGetValue(scene.SceneName, out trackedIds))
-            {
-                return true;
-            }
-
-            return trackedIds.Contains(recipeId);
+            bool hasExplicitSelection = TrackedIdsByScene.TryGetValue(scene.SceneName, out trackedIds);
+            return TrackingSelectionPolicy.IsTracked(hasExplicitSelection, trackedIds, recipeId);
         }
 
         private static string GetRecipeDisplayName(RecipeInfo recipe)

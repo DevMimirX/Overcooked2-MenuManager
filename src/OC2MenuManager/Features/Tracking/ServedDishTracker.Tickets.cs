@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Collections;
 using System.Reflection;
 using System.Text;
 using BepInEx;
@@ -113,100 +112,6 @@ namespace OC2MenuManager
             ForgetTicketWidget(__instance);
         }
 
-        [HarmonyPatch(typeof(RecipeFlowGUI), "LayoutWidgets")]
-        [HarmonyPostfix]
-        private static void RecipeFlowGUI_LayoutWidgets_Postfix(RecipeFlowGUI __instance)
-        {
-            if (__instance == null
-                || RecipeFlowOrderedWidgetsField == null
-                || RecipeFlowRecipeWidgetDataWidgetField == null)
-            {
-                return;
-            }
-
-            IList orderedWidgets = RecipeFlowOrderedWidgetsField.GetValue(__instance) as IList;
-            if (orderedWidgets == null || orderedWidgets.Count <= 1)
-            {
-                return;
-            }
-
-            LayoutReferenceWidgetDataBuffer.Clear();
-            LayoutDyingReferenceWidgetDataBuffer.Clear();
-            LayoutRealWidgetDataBuffer.Clear();
-            for (int i = 0; i < orderedWidgets.Count; i++)
-            {
-                object widgetData = orderedWidgets[i];
-                RecipeWidgetUIController widget = widgetData != null
-                    ? RecipeFlowRecipeWidgetDataWidgetField.GetValue(widgetData) as RecipeWidgetUIController
-                    : null;
-                if (widget == null)
-                {
-                    LayoutRealWidgetDataBuffer.Add(widgetData);
-                    continue;
-                }
-
-                TicketWidgetState state;
-                if (TicketWidgetsByInstanceId.TryGetValue(widget.GetInstanceID(), out state) && state != null && state.IsReferenceTicket)
-                {
-                    if (state.IsDyingReferenceTicket)
-                    {
-                        LayoutDyingReferenceWidgetDataBuffer.Add(widgetData);
-                    }
-                    else
-                    {
-                        LayoutReferenceWidgetDataBuffer.Add(widgetData);
-                    }
-                }
-                else
-                {
-                    LayoutRealWidgetDataBuffer.Add(widgetData);
-                }
-            }
-
-            if (LayoutReferenceWidgetDataBuffer.Count == 0 && LayoutDyingReferenceWidgetDataBuffer.Count == 0)
-            {
-                return;
-            }
-
-            float distanceBetweenOrders = RecipeFlowDistanceBetweenOrdersField != null
-                ? Convert.ToSingle(RecipeFlowDistanceBetweenOrdersField.GetValue(__instance))
-                : 5f;
-            float distanceFromEndOfScreen = RecipeFlowDistanceFromEndOfScreenField != null
-                ? Convert.ToSingle(RecipeFlowDistanceFromEndOfScreenField.GetValue(__instance))
-                : 5f;
-            float cursor = distanceFromEndOfScreen - distanceBetweenOrders;
-            ApplyOrderedWidgetLayout(LayoutRealWidgetDataBuffer, ref cursor, distanceBetweenOrders);
-            ApplyOrderedWidgetLayout(LayoutReferenceWidgetDataBuffer, ref cursor, distanceBetweenOrders);
-            ApplyOrderedWidgetLayout(LayoutDyingReferenceWidgetDataBuffer, ref cursor, distanceBetweenOrders);
-        }
-
-        private static void ApplyOrderedWidgetLayout(List<object> widgetDatas, ref float cursor, float distanceBetweenOrders)
-        {
-            if (widgetDatas == null || widgetDatas.Count == 0)
-            {
-                return;
-            }
-
-            for (int i = 0; i < widgetDatas.Count; i++)
-            {
-                object widgetData = widgetDatas[i];
-                RecipeWidgetUIController widget = widgetData != null
-                    ? RecipeFlowRecipeWidgetDataWidgetField.GetValue(widgetData) as RecipeWidgetUIController
-                    : null;
-                if (widget == null)
-                {
-                    continue;
-                }
-
-                float width = widget.GetBounds().width;
-                RectTransformExtension rectTransformExtension = widget.gameObject.RequireComponent<RectTransformExtension>();
-                float nextOffset = cursor + distanceBetweenOrders;
-                rectTransformExtension.AnchorOffset = Vector2.zero;
-                rectTransformExtension.PixelOffset = new Vector2(nextOffset, 0f);
-                cursor = nextOffset + width;
-            }
-        }
-
         private static void SuppressReferenceTicketWidgetAnimator(RecipeWidgetUIController widget)
         {
             if (widget == null)
@@ -311,21 +216,20 @@ namespace OC2MenuManager
 
         private static void RefreshKnownScenes(bool forceRefresh)
         {
+            if (!forceRefresh && Time.frameCount < nextSceneRefreshFrame)
+            {
+                return;
+            }
+
             if (forceRefresh)
             {
                 nextDIYSceneRefreshFrame = 0;
             }
 
-            List<SceneDirectoryData.SceneDirectoryEntry> entries;
-            string refreshContext = BuildSceneRefreshContext(out entries);
-            bool contextChanged = !string.Equals(lastSceneRefreshContext, refreshContext, StringComparison.Ordinal);
-            if (!forceRefresh && !contextChanged && Time.frameCount < nextSceneRefreshFrame)
-            {
-                return;
-            }
-
-            lastSceneRefreshContext = refreshContext;
             bool inActiveRound = IsInActiveRound();
+            List<SceneDirectoryData.SceneDirectoryEntry> entries = inActiveRound
+                ? new List<SceneDirectoryData.SceneDirectoryEntry>()
+                : GetAvailableSceneEntries();
             int refreshInterval = inActiveRound
                 ? (settingsWindowVisible ? SceneRefreshIntervalInRoundWithConfigOpen : SceneRefreshIntervalInRound)
                 : SceneRefreshIntervalOutOfRound;
@@ -352,50 +256,12 @@ namespace OC2MenuManager
                 return string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
             });
 
+            unchecked
+            {
+                knownScenesRevision++;
+            }
+
             UpdateIdScanStatus(KnownScenes);
-        }
-
-        private static string BuildSceneRefreshContext(out List<SceneDirectoryData.SceneDirectoryEntry> entries)
-        {
-            entries = new List<SceneDirectoryData.SceneDirectoryEntry>();
-            SceneDirectoryData.PerPlayerCountDirectoryEntry currentVariant;
-            if (IsInActiveRound() && TryGetCurrentSceneVariant(out currentVariant) && currentVariant != null)
-            {
-                return "level:" + currentVariant.SceneName;
-            }
-
-            entries = GetAvailableSceneEntries();
-            List<string> signatures = new List<string>();
-            for (int i = 0; i < entries.Count; i++)
-            {
-                string signature = BuildSceneEntrySignature(entries[i]);
-                if (!string.IsNullOrEmpty(signature))
-                {
-                    signatures.Add(signature);
-                }
-            }
-
-            List<SceneInfo> diyScenes = GetDIYScenes();
-            for (int i = 0; i < diyScenes.Count; i++)
-            {
-                SceneInfo diyScene = diyScenes[i];
-                signatures.Add("diy:" + diyScene.SceneName + ":" + diyScene.DisplayName + ":" + diyScene.OrderedRecipes.Count);
-            }
-
-            signatures.Sort(StringComparer.OrdinalIgnoreCase);
-            return "menu:" + string.Join("|", signatures.ToArray());
-        }
-
-        private static string BuildSceneEntrySignature(SceneDirectoryData.SceneDirectoryEntry entry)
-        {
-            if (entry == null)
-            {
-                return string.Empty;
-            }
-
-            SceneDirectoryData.PerPlayerCountDirectoryEntry sceneVarient = GetSceneVarient(entry);
-            string sceneName = sceneVarient != null ? sceneVarient.SceneName : string.Empty;
-            return entry.Label + ":" + sceneName;
         }
 
         private static void SyncTrackingConfigEntries()
@@ -414,22 +280,57 @@ namespace OC2MenuManager
             }
 
             SceneInfo selectedSceneInfo;
-            return TryResolveSelectedScene(selectableScenes, out selectedSceneInfo) ? selectedSceneInfo : null;
+            if (!TryResolveSelectedScene(selectableScenes, out selectedSceneInfo))
+            {
+                return null;
+            }
+
+            EnsureDIYSceneHydrated(selectedSceneInfo, false);
+            return selectedSceneInfo;
         }
 
         private static List<SceneInfo> GetSelectableScenes()
         {
-            SceneInfo currentScene;
-            if (IsInActiveRound() && TryGetCurrentSceneInfo(out currentScene))
+            SceneInfo currentScene = null;
+            bool lockedToRound = IsInActiveRound() && TryGetCurrentSceneInfo(out currentScene);
+            string currentSceneName = lockedToRound && currentScene != null ? currentScene.SceneName : string.Empty;
+            if (cachedSelectableLockedToRound == lockedToRound
+                && cachedSelectableKnownScenesRevision == knownScenesRevision
+                && string.Equals(cachedSelectableCurrentSceneName, currentSceneName, StringComparison.OrdinalIgnoreCase))
             {
-                return new List<SceneInfo> { currentScene };
+                return SelectableScenesBuffer;
             }
 
-            return KnownScenes.ToList();
+            SelectableScenesBuffer.Clear();
+            if (lockedToRound)
+            {
+                SelectableScenesBuffer.Add(currentScene);
+            }
+            else
+            {
+                SelectableScenesBuffer.AddRange(KnownScenes);
+            }
+
+            cachedSelectableLockedToRound = lockedToRound;
+            cachedSelectableKnownScenesRevision = knownScenesRevision;
+            cachedSelectableCurrentSceneName = currentSceneName;
+            unchecked
+            {
+                selectableScenesRevision++;
+            }
+
+            return SelectableScenesBuffer;
         }
 
         private static void RebuildSceneSelectorMaps(List<SceneInfo> selectableScenes)
         {
+            int maxLength = GetMaxSceneSelectorDisplayLength();
+            if (cachedSceneSelectorMapRevision == selectableScenesRevision
+                && cachedSceneSelectorMaxLength == maxLength)
+            {
+                return;
+            }
+
             OrderedSceneSelectorValues.Clear();
             SceneSelectorValuesByScene.Clear();
             SceneNamesBySelectorValue.Clear();
@@ -442,6 +343,9 @@ namespace OC2MenuManager
                 SceneSelectorValuesByScene[scene.SceneName] = selectorValue;
                 SceneNamesBySelectorValue[selectorValue] = scene.SceneName;
             }
+
+            cachedSceneSelectorMapRevision = selectableScenesRevision;
+            cachedSceneSelectorMaxLength = maxLength;
         }
 
         private static string ResolveDesiredSceneName(List<SceneInfo> selectableScenes)
@@ -606,7 +510,7 @@ namespace OC2MenuManager
 
             if (scene == null)
             {
-                GUILayout.Label(Ui("当前还没有可用关卡数据。请先进入世界地图、街机大厅，或先进入一次目标关卡。", "No scene data is available yet. Visit the world map, the arcade lobby, or enter the target scene once first."));
+                GUILayout.Label(Ui("当前还没有可用关卡数据。请进入世界地图或街机大厅；DIY 关卡元数据加载完成后也会自动出现。", "No scene data is available yet. Visit the world map or arcade lobby; DIY scenes appear after their metadata finishes loading."));
                 if (GUILayout.Button(Ui("刷新关卡列表", "Refresh Scenes")))
                 {
                     RefreshKnownScenes(true);
@@ -635,12 +539,20 @@ namespace OC2MenuManager
             {
                 RefreshKnownScenes(true);
                 scene = SyncSceneSelectorConfigEntry();
+                EnsureDIYSceneHydrated(scene, true);
             }
             GUILayout.EndHorizontal();
 
             if (scene.OrderedRecipes.Count == 0)
             {
-                GUILayout.Label(Ui("这个 DIY 关卡的菜谱还没有被读取。请先进入一次该关卡，然后再打开菜单窗口勾选要追踪的菜品。", "This DIY scene has not been scanned yet. Enter it once, then reopen this window to choose tracked dishes."));
+                string hydrationStatus = !string.IsNullOrEmpty(scene.DIYHydrationError)
+                    ? scene.DIYHydrationError
+                    : Ui("DIY 菜谱元数据仍在加载。", "DIY recipe metadata is still loading.");
+                GUILayout.Label(Ui("无法预读取这个 DIY 关卡的菜谱：", "Could not preload this DIY scene's recipes: ") + hydrationStatus);
+                if (GUILayout.Button(Ui("重试读取 DIY 菜谱", "Retry DIY Recipe Load")))
+                {
+                    EnsureDIYSceneHydrated(scene, true);
+                }
                 GUILayout.EndVertical();
                 return;
             }
@@ -721,7 +633,21 @@ namespace OC2MenuManager
 
         private static List<CategorySelectionGroup> BuildCategorySelectionGroups(SceneInfo scene)
         {
+            bool chinese = UseChinese();
+            if (scene != null
+                && string.Equals(cachedCategorySelectionSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase)
+                && cachedCategorySelectionCatalogRevision == scene.CatalogRevision
+                && cachedCategorySelectionTierRevision == categoryTierRevision
+                && cachedCategorySelectionChinese == chinese)
+            {
+                return CategorySelectionGroupsBuffer;
+            }
+
             CategorySelectionGroupsBuffer.Clear();
+            cachedCategorySelectionSceneName = scene != null ? scene.SceneName : string.Empty;
+            cachedCategorySelectionCatalogRevision = scene != null ? scene.CatalogRevision : -1;
+            cachedCategorySelectionTierRevision = categoryTierRevision;
+            cachedCategorySelectionChinese = chinese;
             if (scene == null || scene.OrderedRecipes.Count == 0)
             {
                 return CategorySelectionGroupsBuffer;
@@ -736,7 +662,7 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                string categoryName = DishNameCatalog.GetDisplayCategoryName(recipe.InternalName, UseChinese());
+                string categoryName = DishNameCatalog.GetDisplayCategoryName(recipe.InternalName, chinese);
                 if (string.IsNullOrEmpty(categoryName))
                 {
                     categoryName = Ui("其他", "Other");

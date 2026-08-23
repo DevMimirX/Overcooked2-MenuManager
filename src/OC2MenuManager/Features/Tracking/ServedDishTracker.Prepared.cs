@@ -207,6 +207,7 @@ namespace OC2MenuManager
             source.GameObjectInstanceId = gameObjectInstanceId;
             source.Component = component;
             source.Provider = provider;
+            source.CookingHandler = component.gameObject.GetComponent<ClientCookingHandler>();
             source.PendingRemoval = false;
             source.RemovalGraceUntilFrame = 0;
             source.Callback = delegate
@@ -313,7 +314,7 @@ namespace OC2MenuManager
 
         private static void RegisterPreparedCookingHandler(Component sourceComponent)
         {
-            if (sourceComponent == null || sourceComponent.gameObject == null)
+            if (!IsPreparedTrackingEnabled() || sourceComponent == null || sourceComponent.gameObject == null)
             {
                 return;
             }
@@ -325,6 +326,11 @@ namespace OC2MenuManager
             }
 
             PreparedSourceComponentByHandlerId[cookingHandler.GetInstanceID()] = sourceComponent;
+            PreparedSourceState source;
+            if (PreparedSourcesByInstanceId.TryGetValue(sourceComponent.GetInstanceID(), out source) && source != null)
+            {
+                source.CookingHandler = cookingHandler;
+            }
         }
 
         private static void QueueCookablePreparedSourceRefresh(Component sourceComponent)
@@ -335,9 +341,18 @@ namespace OC2MenuManager
             }
 
             int instanceId = sourceComponent.GetInstanceID();
-            ClientCookingHandler cookingHandler = sourceComponent.gameObject != null
-                ? sourceComponent.gameObject.GetComponent<ClientCookingHandler>()
+            PreparedSourceState source;
+            ClientCookingHandler cookingHandler = PreparedSourcesByInstanceId.TryGetValue(instanceId, out source) && source != null
+                ? source.CookingHandler
                 : null;
+            if (cookingHandler == null && sourceComponent.gameObject != null)
+            {
+                cookingHandler = sourceComponent.gameObject.GetComponent<ClientCookingHandler>();
+                if (source != null)
+                {
+                    source.CookingHandler = cookingHandler;
+                }
+            }
             if (cookingHandler == null)
             {
                 TryRegisterPreparedSource(sourceComponent);
@@ -437,8 +452,8 @@ namespace OC2MenuManager
             try
             {
                 AssembledDefinitionNode composition = source.Provider.GetOrderComposition();
-                bool isCookedSource = RequiresCookedPreparedState(source.Component);
-                if (isCookedSource && !IsPreparedCookingSourceCooked(source.Component, composition))
+                bool isCookedSource = source.CookingHandler != null;
+                if (isCookedSource && !IsPreparedCookingSourceCooked(source, composition))
                 {
                     SetPreparedSourceMatch(source, 0);
                     return;
@@ -453,22 +468,14 @@ namespace OC2MenuManager
             }
         }
 
-        private static bool RequiresCookedPreparedState(Component component)
+        private static bool IsPreparedCookingSourceCooked(PreparedSourceState source, AssembledDefinitionNode composition)
         {
-            return component != null
-                && component.gameObject != null
-                && component.gameObject.GetComponent<ClientCookingHandler>() != null;
-        }
-
-        private static bool IsPreparedCookingSourceCooked(Component component, AssembledDefinitionNode composition)
-        {
-            if (component == null)
+            if (source == null)
             {
                 return false;
             }
 
-            GameObject gameObject = component.gameObject;
-            ClientCookingHandler cookingHandler = gameObject != null ? gameObject.GetComponent<ClientCookingHandler>() : null;
+            ClientCookingHandler cookingHandler = source.CookingHandler;
             if (cookingHandler != null)
             {
                 return cookingHandler.GetCookedOrderState() == CookedCompositeOrderNode.CookingProgress.Cooked;
@@ -491,7 +498,12 @@ namespace OC2MenuManager
                 return 0;
             }
 
-            AssembledDefinitionNode simplifiedComposition = null;
+            AssembledDefinitionNode simplifiedComposition = SafeSimplifyNode(composition);
+            if (simplifiedComposition == null)
+            {
+                return 0;
+            }
+
             AssembledDefinitionNode unwrappedSimplifiedComposition = null;
             bool cookedFallbackInitialized = false;
             for (int i = 0; i < candidateRecipeIds.Count; i++)
@@ -502,7 +514,9 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                if (AssembledDefinitionNode.Matching(composition, recipe.Definition))
+                AssembledDefinitionNode simplifiedDefinition = GetSimplifiedPreparedRecipeDefinition(recipe);
+                if (simplifiedDefinition != null
+                    && AssembledDefinitionNode.MatchingAlreadySimple(simplifiedComposition, simplifiedDefinition))
                 {
                     return recipe.Id;
                 }
@@ -514,7 +528,6 @@ namespace OC2MenuManager
 
                 if (!cookedFallbackInitialized)
                 {
-                    simplifiedComposition = SafeSimplifyNode(composition);
                     unwrappedSimplifiedComposition = simplifiedComposition != null
                         ? UnwrapCookedCompositeNode(simplifiedComposition)
                         : null;
@@ -526,7 +539,6 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                AssembledDefinitionNode simplifiedDefinition = GetSimplifiedPreparedRecipeDefinition(recipe);
                 if (simplifiedDefinition != null
                     && AssembledDefinitionNode.MatchingAlreadySimple(unwrappedSimplifiedComposition, simplifiedDefinition))
                 {
@@ -871,7 +883,12 @@ namespace OC2MenuManager
         [HarmonyPostfix]
         private static void ClientCookingHandler_ApplyServerUpdate_Postfix(ClientCookingHandler __instance)
         {
-            if (__instance == null)
+            if (__instance == null
+                || enabled == null
+                || !enabled.Value
+                || !IsPreparedTrackingEnabled()
+                || NoMenuMode.IsActiveForRound
+                || !IsInActiveRound())
             {
                 return;
             }

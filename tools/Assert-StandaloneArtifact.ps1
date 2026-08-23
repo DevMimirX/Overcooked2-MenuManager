@@ -103,7 +103,6 @@ $forbiddenSourcePatterns = @(
     "\bOC2Mods\.Shared\b",
     "\bConfigurationManager\b",
     "PluginRuntimeContext",
-    "\bBepInDependency\b",
     "\bAssembly\s*\.\s*Load(?:File|From)?\s*\("
 )
 
@@ -112,6 +111,14 @@ foreach ($pattern in $forbiddenSourcePatterns) {
     $match = $sourceFiles | Select-String -Pattern $pattern | Select-Object -First 1
     if ($null -ne $match) {
         throw "Standalone source boundary violation at $($match.Path):$($match.LineNumber): $($match.Line.Trim())"
+    }
+}
+
+$allowedSoftDependencyPattern = '^\s*\[BepInDependency\(OptionalRecipeAdapters\.(DIYLevelPluginGuid|ManyRecipesPluginGuid), BepInDependency\.DependencyFlags\.SoftDependency\)\]\s*$'
+$dependencyDeclarations = @($sourceFiles | Select-String -Pattern '\bBepInDependency\b')
+foreach ($declaration in $dependencyDeclarations) {
+    if ($declaration.Line -notmatch $allowedSoftDependencyPattern) {
+        throw "Only the audited DIY Level and Recipe Extension soft-dependency declarations are allowed: $($declaration.Path):$($declaration.LineNumber): $($declaration.Line.Trim())"
     }
 }
 

@@ -13,6 +13,7 @@ using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
 using UnityEngine;
 using UnityEngine.UI;
+using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
 {
@@ -133,6 +134,10 @@ namespace OC2MenuManager
             }
 
             RefreshSceneCategoryTiers(cachedCurrentSceneInfo);
+            unchecked
+            {
+                categoryTierRevision++;
+            }
         }
 
         private static void RefreshSceneCategoryTiers(SceneInfo scene)
@@ -211,12 +216,20 @@ namespace OC2MenuManager
 
         private static bool IsPreparedTrackingEnabled()
         {
-            return preparedTrackingEnabled != null && preparedTrackingEnabled.Value;
+            return enabled != null
+                && enabled.Value
+                && !NoMenuMode.IsActiveForRound
+                && preparedTrackingEnabled != null
+                && preparedTrackingEnabled.Value;
         }
 
         private static bool IsMenuTicketTintEnabled()
         {
-            return menuTicketTintEnabled != null && menuTicketTintEnabled.Value;
+            return enabled != null
+                && enabled.Value
+                && !NoMenuMode.IsActiveForRound
+                && menuTicketTintEnabled != null
+                && menuTicketTintEnabled.Value;
         }
 
         private static void ClearOnMenuCounts()
@@ -230,7 +243,10 @@ namespace OC2MenuManager
 
         private static void ClearPreparedState()
         {
-            bool hadPreparedState = PreparedSourcesByInstanceId.Count > 0 || PreparedCountsByRecipe.Count > 0;
+            bool hadPreparedState = PreparedSourcesByInstanceId.Count > 0
+                || PreparedCountsByRecipe.Count > 0
+                || PreparedSourceComponentByHandlerId.Count > 0
+                || PreparedCookStateBySourceId.Count > 0;
             foreach (PreparedSourceState source in PreparedSourcesByInstanceId.Values)
             {
                 if (source != null && source.Provider != null && source.Callback != null)
@@ -273,7 +289,14 @@ namespace OC2MenuManager
         {
             foreach (TicketWidgetState state in TicketWidgetsByInstanceId.Values)
             {
-                RestoreTicketWidgetTint(state);
+                try
+                {
+                    RestoreTicketWidgetTint(state);
+                }
+                catch
+                {
+                    // Widgets may have been destroyed by Unity before transition cleanup runs.
+                }
             }
 
             TicketWidgetsByInstanceId.Clear();
@@ -292,18 +315,6 @@ namespace OC2MenuManager
 
             referenceTicketsDirty = false;
             nextReferenceTicketSyncFrame = 0;
-        }
-
-        private static void ClearReferenceTicketsForFlow(int flowInstanceId)
-        {
-            for (int i = ReferenceTicketStates.Count - 1; i >= 0; i--)
-            {
-                ReferenceTicketState state = ReferenceTicketStates[i];
-                if (state != null && state.FlowInstanceId == flowInstanceId)
-                {
-                    RemoveReferenceTicketAt(i);
-                }
-            }
         }
 
         private static void RemoveReferenceTicketAt(int index)
@@ -344,16 +355,22 @@ namespace OC2MenuManager
                     }
 
                     IList activeWidgets = RecipeFlowWidgetsField != null ? RecipeFlowWidgetsField.GetValue(state.Flow) as IList : null;
-                    if (widgetData != null && activeWidgets != null)
+                    if (widgetData != null && activeWidgets == null)
                     {
-                        activeWidgets.Remove(widgetData);
+                        state.Flow.RemoveElement(state.Token, new ReferenceTicketDestroyAnimation(GetReferenceTicketDestroyAnimationColor()));
+                        return;
                     }
 
-                    bool[] occupiedTables = RecipeFlowOccupiedTablesField != null ? RecipeFlowOccupiedTablesField.GetValue(state.Flow) as bool[] : null;
-                    int tableNumber = state.Widget.GetTableNumber();
-                    if (occupiedTables != null && tableNumber >= 0 && tableNumber < occupiedTables.Length)
+                    bool removedActiveWidget = widgetData != null && activeWidgets != null && activeWidgets.Contains(widgetData);
+                    if (removedActiveWidget)
                     {
-                        occupiedTables[tableNumber] = false;
+                        activeWidgets.Remove(widgetData);
+                        bool[] occupiedTables = RecipeFlowOccupiedTablesField != null ? RecipeFlowOccupiedTablesField.GetValue(state.Flow) as bool[] : null;
+                        int tableNumber = state.Widget.GetTableNumber();
+                        if (occupiedTables != null && tableNumber >= 0 && tableNumber < occupiedTables.Length)
+                        {
+                            occupiedTables[tableNumber] = false;
+                        }
                     }
 
                     UnregisterTicketWidget(state.Widget);
@@ -558,7 +575,7 @@ namespace OC2MenuManager
 
         private static bool ShouldShowOverlay(bool inActiveRound)
         {
-            if (enabled == null || !enabled.Value)
+            if (enabled == null || !enabled.Value || NoMenuMode.IsActiveForRound)
             {
                 return false;
             }
@@ -580,10 +597,10 @@ namespace OC2MenuManager
 
         private static ClientFlowControllerBase GetClientFlowController()
         {
-            if (cachedClientFlowController == null || Time.frameCount >= nextClientFlowLookupFrame)
+            if (cachedClientFlowController == null && Time.frameCount >= nextClientFlowLookupFrame)
             {
                 cachedClientFlowController = UnityEngine.Object.FindObjectOfType<ClientFlowControllerBase>();
-                nextClientFlowLookupFrame = Time.frameCount + (cachedClientFlowController != null ? ControllerLookupIntervalFrames : ControllerLookupRetryIntervalFrames);
+                nextClientFlowLookupFrame = Time.frameCount + ControllerLookupRetryIntervalFrames;
             }
 
             return cachedClientFlowController;
@@ -591,10 +608,10 @@ namespace OC2MenuManager
 
         private static ClientKitchenFlowControllerBase GetKitchenFlowController()
         {
-            if (cachedKitchenFlowController == null || Time.frameCount >= nextKitchenFlowLookupFrame)
+            if (cachedKitchenFlowController == null && Time.frameCount >= nextKitchenFlowLookupFrame)
             {
                 cachedKitchenFlowController = UnityEngine.Object.FindObjectOfType<ClientKitchenFlowControllerBase>();
-                nextKitchenFlowLookupFrame = Time.frameCount + (cachedKitchenFlowController != null ? ControllerLookupIntervalFrames : ControllerLookupRetryIntervalFrames);
+                nextKitchenFlowLookupFrame = Time.frameCount + ControllerLookupRetryIntervalFrames;
             }
 
             return cachedKitchenFlowController;
@@ -605,7 +622,7 @@ namespace OC2MenuManager
             referenceTicketsDirty = false;
             nextReferenceTicketSyncFrame = 0;
 
-            if (enabled == null || !enabled.Value || !IsInActiveRound())
+            if (enabled == null || !enabled.Value || !IsInActiveRound() || NoMenuMode.IsActiveForRound)
             {
                 if (ReferenceTicketStates.Count > 0)
                 {
@@ -652,6 +669,7 @@ namespace OC2MenuManager
             if (flows.Count == 0)
             {
                 PruneReferenceTicketStates();
+                ScheduleReferenceTicketRetry();
                 return;
             }
 
@@ -683,7 +701,7 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                EnsureReferenceTicketCapacity(flow, BaseMenuTicketCapacity + displayLimit);
+                EnsureReferenceTicketCapacity(flow, desiredCandidates.Count);
                 SyncReferenceTicketsForFlow(flow, desiredCandidates, true);
             }
         }
@@ -732,7 +750,7 @@ namespace OC2MenuManager
             return ReferenceTicketFlowsBuffer;
         }
 
-        private static void EnsureReferenceTicketCapacity(RecipeFlowGUI flow, int desiredCapacity)
+        private static void EnsureReferenceTicketCapacity(RecipeFlowGUI flow, int requestedReferenceCount)
         {
             if (flow == null || RecipeFlowMaxOrdersAllowedField == null || RecipeFlowOccupiedTablesField == null)
             {
@@ -742,6 +760,9 @@ namespace OC2MenuManager
             object currentMaxValue = RecipeFlowMaxOrdersAllowedField.GetValue(flow);
             int currentMax = currentMaxValue is int ? (int)currentMaxValue : BaseMenuTicketCapacity;
             bool[] occupiedTables = RecipeFlowOccupiedTablesField.GetValue(flow) as bool[];
+            int activeRealTickets = GetActiveRealTicketCount(flow);
+            int effectiveRealLimit = GetEffectiveRealTicketLimit(flow, activeRealTickets);
+            int desiredCapacity = TicketCapacityPolicy.CalculateTargetCapacity(effectiveRealLimit, activeRealTickets, requestedReferenceCount);
             int targetCapacity = Math.Max(desiredCapacity, Math.Max(currentMax, occupiedTables != null ? occupiedTables.Length : 0));
             if (currentMax != targetCapacity)
             {
@@ -760,17 +781,78 @@ namespace OC2MenuManager
             }
         }
 
-        private static void CreateReferenceTicketsForFlow(RecipeFlowGUI flow, List<ReferenceTicketCandidate> candidates)
+        private static int GetEffectiveRealTicketLimit(RecipeFlowGUI flow, int activeRealTickets)
         {
-            if (flow == null || candidates == null || candidates.Count == 0)
+            if (flow == null)
             {
-                return;
+                return Math.Max(BaseMenuTicketCapacity, activeRealTickets);
             }
 
-            for (int i = 0; i < candidates.Count; i++)
+            int flowInstanceId = flow.GetInstanceID();
+            int effectiveLimit;
+            if (!ReferenceRealTicketLimitByFlowId.TryGetValue(flowInstanceId, out effectiveLimit))
             {
-                AddReferenceTicket(flow, candidates[i], i, true);
+                effectiveLimit = BaseMenuTicketCapacity;
+                if (RecipeFlowGetMaxOrderNumberMethod != null)
+                {
+                    try
+                    {
+                        object value = RecipeFlowGetMaxOrderNumberMethod.Invoke(flow, null);
+                        if (value is int)
+                        {
+                            effectiveLimit = Math.Max(effectiveLimit, (int)value);
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                ReferenceRealTicketLimitByFlowId[flowInstanceId] = effectiveLimit;
             }
+
+            return Math.Max(effectiveLimit, activeRealTickets);
+        }
+
+        private static int GetActiveRealTicketCount(RecipeFlowGUI flow)
+        {
+            IList activeWidgets = flow != null && RecipeFlowWidgetsField != null
+                ? RecipeFlowWidgetsField.GetValue(flow) as IList
+                : null;
+            int activeWidgetCount = activeWidgets != null ? activeWidgets.Count : 0;
+            int referenceCount = 0;
+            int flowInstanceId = flow != null ? flow.GetInstanceID() : 0;
+            for (int i = 0; i < ReferenceTicketStates.Count; i++)
+            {
+                ReferenceTicketState state = ReferenceTicketStates[i];
+                if (state != null && state.FlowInstanceId == flowInstanceId && state.Widget != null)
+                {
+                    referenceCount++;
+                }
+            }
+
+            return Math.Max(0, activeWidgetCount - referenceCount);
+        }
+
+        private static bool HasFreeReferenceTicketTable(RecipeFlowGUI flow)
+        {
+            bool[] occupiedTables = flow != null && RecipeFlowOccupiedTablesField != null
+                ? RecipeFlowOccupiedTablesField.GetValue(flow) as bool[]
+                : null;
+            if (occupiedTables == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < occupiedTables.Length; i++)
+            {
+                if (!occupiedTables[i])
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static void SyncReferenceTicketsForFlow(RecipeFlowGUI flow, List<ReferenceTicketCandidate> desiredCandidates, bool silentAdds)
@@ -858,7 +940,14 @@ namespace OC2MenuManager
                     && existingState != null
                     && ReferenceTicketStates.Contains(existingState))
                 {
-                    UpdateReferenceTicketState(existingState, candidate, i);
+                    if (!ReferenceEquals(existingState.Definition, candidate.Recipe.Definition))
+                    {
+                        RebindReferenceTicketState(existingState, candidate, i);
+                    }
+                    else
+                    {
+                        UpdateReferenceTicketState(existingState, candidate, i);
+                    }
                     continue;
                 }
 
@@ -867,6 +956,93 @@ namespace OC2MenuManager
 
             existingStatesByRecipeId.Clear();
             desiredRecipeIds.Clear();
+            ReorderActiveTicketWidgets(flow);
+        }
+
+        private static void ReorderActiveTicketWidgets(RecipeFlowGUI flow)
+        {
+            List<RecipeFlowGUI.RecipeWidgetData> activeWidgets = flow != null && RecipeFlowWidgetsField != null
+                ? RecipeFlowWidgetsField.GetValue(flow) as List<RecipeFlowGUI.RecipeWidgetData>
+                : null;
+            if (activeWidgets == null || activeWidgets.Count < 2)
+            {
+                return;
+            }
+
+            RealTicketWidgetDataBuffer.Clear();
+            ReferenceTicketWidgetDataBuffer.Clear();
+            bool realTicketFoundAfterReference = false;
+            bool foundReference = false;
+            for (int i = 0; i < activeWidgets.Count; i++)
+            {
+                RecipeFlowGUI.RecipeWidgetData widgetData = activeWidgets[i];
+                if (IsReferenceTicketWidgetData(widgetData))
+                {
+                    foundReference = true;
+                    ReferenceTicketWidgetDataBuffer.Add(widgetData);
+                }
+                else
+                {
+                    realTicketFoundAfterReference |= foundReference;
+                    RealTicketWidgetDataBuffer.Add(widgetData);
+                }
+            }
+
+            ReferenceTicketWidgetDataBuffer.Sort(delegate(RecipeFlowGUI.RecipeWidgetData left, RecipeFlowGUI.RecipeWidgetData right)
+            {
+                int leftOrder = left != null ? left.m_order : int.MaxValue;
+                int rightOrder = right != null ? right.m_order : int.MaxValue;
+                return leftOrder.CompareTo(rightOrder);
+            });
+
+            bool referenceOrderChanged = false;
+            int referenceStartIndex = RealTicketWidgetDataBuffer.Count;
+            for (int i = 0; i < ReferenceTicketWidgetDataBuffer.Count; i++)
+            {
+                int activeIndex = referenceStartIndex + i;
+                if (activeIndex >= activeWidgets.Count || !ReferenceEquals(activeWidgets[activeIndex], ReferenceTicketWidgetDataBuffer[i]))
+                {
+                    referenceOrderChanged = true;
+                    break;
+                }
+            }
+
+            if (realTicketFoundAfterReference || referenceOrderChanged)
+            {
+                activeWidgets.Clear();
+                activeWidgets.AddRange(RealTicketWidgetDataBuffer);
+                activeWidgets.AddRange(ReferenceTicketWidgetDataBuffer);
+            }
+
+            RealTicketWidgetDataBuffer.Clear();
+            ReferenceTicketWidgetDataBuffer.Clear();
+        }
+
+        private static bool IsReferenceTicketWidgetData(RecipeFlowGUI.RecipeWidgetData widgetData)
+        {
+            if (widgetData == null || widgetData.m_widget == null)
+            {
+                return false;
+            }
+
+            TicketWidgetState ticketState;
+            if (TicketWidgetsByInstanceId.TryGetValue(widgetData.m_widget.GetInstanceID(), out ticketState)
+                && ticketState != null
+                && ticketState.IsReferenceTicket)
+            {
+                return true;
+            }
+
+            for (int i = 0; i < ReferenceTicketStates.Count; i++)
+            {
+                ReferenceTicketState referenceState = ReferenceTicketStates[i];
+                if (referenceState != null && ReferenceEquals(referenceState.Widget, widgetData.m_widget))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static int CompareReferenceTicketStates(ReferenceTicketState a, ReferenceTicketState b)
@@ -927,12 +1103,53 @@ namespace OC2MenuManager
                 return;
             }
 
+            if (!HasFreeReferenceTicketTable(flow))
+            {
+                ScheduleReferenceTicketRetry();
+                return;
+            }
+
+            IList activeWidgetsBeforeAdd = RecipeFlowWidgetsField != null
+                ? RecipeFlowWidgetsField.GetValue(flow) as IList
+                : null;
+            int activeWidgetCountBeforeAdd = activeWidgetsBeforeAdd != null ? activeWidgetsBeforeAdd.Count : -1;
+            int childCountBeforeAdd = flow.transform != null ? flow.transform.childCount : -1;
+            int nextIndexBeforeAdd = -1;
+            if (RecipeFlowNextIndexField != null)
+            {
+                object nextIndexValue = RecipeFlowNextIndexField.GetValue(flow);
+                if (nextIndexValue is int)
+                {
+                    nextIndexBeforeAdd = (int)nextIndexValue;
+                }
+            }
+            bool[] occupiedTablesBeforeAdd = RecipeFlowOccupiedTablesField != null
+                ? RecipeFlowOccupiedTablesField.GetValue(flow) as bool[]
+                : null;
+            occupiedTablesBeforeAdd = occupiedTablesBeforeAdd != null
+                ? (bool[])occupiedTablesBeforeAdd.Clone()
+                : null;
+
             try
             {
                 RecipeFlowGUI.ElementToken token = flow.AddElement(candidate.Recipe.Definition, ReferenceTicketSyntheticTimeLimit, ReferenceTicketExpiredCallback);
                 RecipeFlowGUI.RecipeWidgetData widgetData = flow.GetData(token);
                 if (widgetData == null || widgetData.m_widget == null)
                 {
+                    RollbackFailedReferenceTicketAdd(flow, activeWidgetCountBeforeAdd, childCountBeforeAdd, nextIndexBeforeAdd, occupiedTablesBeforeAdd);
+                    return;
+                }
+
+                int tableNumber = widgetData.m_widget.GetTableNumber();
+                bool[] occupiedTables = RecipeFlowOccupiedTablesField != null ? RecipeFlowOccupiedTablesField.GetValue(flow) as bool[] : null;
+                if (occupiedTables == null || tableNumber < 0 || tableNumber >= occupiedTables.Length)
+                {
+                    RollbackFailedReferenceTicketAdd(flow, activeWidgetCountBeforeAdd, childCountBeforeAdd, nextIndexBeforeAdd, occupiedTablesBeforeAdd);
+                    if (!invalidReferenceTableWarningLogged)
+                    {
+                        invalidReferenceTableWarningLogged = true;
+                        _MODEntry.LogWarning("[ServedDishTracker] Deferred a reference ticket because RecipeFlowGUI returned an invalid table index.");
+                    }
                     return;
                 }
 
@@ -942,6 +1159,7 @@ namespace OC2MenuManager
                 state.FlowInstanceId = flow.GetInstanceID();
                 state.Flow = flow;
                 state.RecipeId = candidate.Recipe.Id;
+                state.Definition = candidate.Recipe.Definition;
                 state.Probability = candidate.Probability;
                 state.Token = token;
                 state.Widget = widgetData.m_widget;
@@ -964,13 +1182,91 @@ namespace OC2MenuManager
             }
             catch (Exception ex)
             {
-                _MODEntry.LogWarning("[ServedDishTracker] Failed to add reference ticket: " + ex.GetType().Name + ": " + ex.Message);
+                RollbackFailedReferenceTicketAdd(flow, activeWidgetCountBeforeAdd, childCountBeforeAdd, nextIndexBeforeAdd, occupiedTablesBeforeAdd);
+                if (!referenceTicketAddFailureLogged)
+                {
+                    referenceTicketAddFailureLogged = true;
+                    _MODEntry.LogWarning("[ServedDishTracker] Failed to add reference ticket: " + ex.GetType().Name + ": " + ex.Message);
+                }
             }
         }
 
-        private static void ApplyReferenceTicketPresentation(ReferenceTicketState state)
+        private static void RollbackFailedReferenceTicketAdd(
+            RecipeFlowGUI flow,
+            int previousWidgetCount,
+            int previousChildCount,
+            int previousNextIndex,
+            bool[] previousOccupiedTables)
         {
-            ApplyReferenceTicketPresentation(state, -1);
+            ScheduleReferenceTicketRetry();
+            if (flow == null)
+            {
+                return;
+            }
+
+            try
+            {
+                IList activeWidgets = RecipeFlowWidgetsField != null
+                    ? RecipeFlowWidgetsField.GetValue(flow) as IList
+                    : null;
+                while (activeWidgets != null && previousWidgetCount >= 0 && activeWidgets.Count > previousWidgetCount)
+                {
+                    int lastIndex = activeWidgets.Count - 1;
+                    RecipeFlowGUI.RecipeWidgetData widgetData = activeWidgets[lastIndex] as RecipeFlowGUI.RecipeWidgetData;
+                    activeWidgets.RemoveAt(lastIndex);
+                    if (widgetData != null && widgetData.m_widget != null)
+                    {
+                        UnregisterTicketWidget(widgetData.m_widget);
+                    }
+                }
+
+                Transform flowTransform = flow.transform;
+                while (flowTransform != null && previousChildCount >= 0 && flowTransform.childCount > previousChildCount)
+                {
+                    Transform child = flowTransform.GetChild(flowTransform.childCount - 1);
+                    RecipeWidgetUIController widget = child != null ? child.GetComponent<RecipeWidgetUIController>() : null;
+                    if (widget != null)
+                    {
+                        UnregisterTicketWidget(widget);
+                    }
+
+                    if (child != null)
+                    {
+                        child.gameObject.SetActive(false);
+                        child.SetParent(null, false);
+                        UnityEngine.Object.Destroy(child.gameObject);
+                    }
+                }
+
+                if (RecipeFlowNextIndexField != null && previousNextIndex >= 0)
+                {
+                    RecipeFlowNextIndexField.SetValue(flow, previousNextIndex);
+                }
+
+                bool[] occupiedTables = RecipeFlowOccupiedTablesField != null
+                    ? RecipeFlowOccupiedTablesField.GetValue(flow) as bool[]
+                    : null;
+                int restoreCount = occupiedTables != null && previousOccupiedTables != null
+                    ? Math.Min(occupiedTables.Length, previousOccupiedTables.Length)
+                    : 0;
+                for (int i = 0; i < restoreCount; i++)
+                {
+                    occupiedTables[i] = previousOccupiedTables[i];
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static void ScheduleReferenceTicketRetry()
+        {
+            referenceTicketsDirty = true;
+            int targetFrame = Time.frameCount + TicketWidgetRetryIntervalFrames;
+            if (nextReferenceTicketSyncFrame == 0 || nextReferenceTicketSyncFrame < Time.frameCount || targetFrame < nextReferenceTicketSyncFrame)
+            {
+                nextReferenceTicketSyncFrame = targetFrame;
+            }
         }
 
         private static void ApplyReferenceTicketPresentation(ReferenceTicketState state, int referenceOrder)
@@ -1009,6 +1305,7 @@ namespace OC2MenuManager
             }
 
             state.RecipeId = candidate.Recipe.Id;
+            state.Definition = candidate.Recipe.Definition;
             if (!TrySilentlyRefreshReferenceTicketWidget(state.Widget, candidate.Recipe.Definition))
             {
                 int stateIndex = ReferenceTicketStates.IndexOf(state);
@@ -1118,6 +1415,7 @@ namespace OC2MenuManager
             }
 
             state.Probability = candidate.Probability;
+            state.Definition = candidate.Recipe.Definition;
             int referenceOrder = ReferenceTicketOrderBase + Mathf.Max(0, displayIndex);
             try
             {

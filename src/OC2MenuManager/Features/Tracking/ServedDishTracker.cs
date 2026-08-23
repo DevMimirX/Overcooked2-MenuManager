@@ -170,6 +170,15 @@ namespace OC2MenuManager
             ModuleUtility.RegisterHarmony(typeof(ServedDishTracker));
         }
 
+        public static void Shutdown()
+        {
+            TryResetRoundRuntimeState("shutdown");
+            overlayVisible = false;
+            settingsWindowVisible = false;
+            sceneDropdownExpanded = false;
+            capturingHotkey = false;
+        }
+
         public static void Update()
         {
             RefreshHotkeyFromFileIfChanged();
@@ -186,7 +195,13 @@ namespace OC2MenuManager
                 capturingHotkey = false;
             }
 
-            bool inActiveRound = IsInActiveRound();
+            bool runtimeEnabled = enabled != null && enabled.Value;
+            bool needsRoundState = runtimeEnabled
+                || settingsWindowVisible
+                || PreparedSourcesByInstanceId.Count > 0
+                || ReferenceTicketStates.Count > 0
+                || TicketWidgetsByInstanceId.Count > 0;
+            bool inActiveRound = needsRoundState && IsInActiveRound();
             bool shouldTintMenuTickets = IsMenuTicketTintEnabled();
             if (shouldTintMenuTickets != lastMenuTicketTintEnabled)
             {
@@ -198,13 +213,16 @@ namespace OC2MenuManager
             {
                 RefreshPreparedState(inActiveRound);
             }
-            else if (PreparedSourcesByInstanceId.Count > 0 || PreparedCountsByRecipe.Count > 0)
+            else if (PreparedSourcesByInstanceId.Count > 0
+                || PreparedCountsByRecipe.Count > 0
+                || PreparedSourceComponentByHandlerId.Count > 0
+                || PreparedCookStateBySourceId.Count > 0)
             {
                 ClearPreparedState();
                 InvalidateOverlay();
             }
 
-            if (!enabled.Value || !inActiveRound)
+            if (!enabled.Value || !inActiveRound || NoMenuMode.IsActiveForRound)
             {
                 if (ReferenceTicketStates.Count > 0)
                 {
@@ -287,6 +305,22 @@ namespace OC2MenuManager
 
                 nextDiscoveryFlushFrame = Time.frameCount + DiscoveryFlushIntervalFrames;
             }
+        }
+
+        internal static void OnNoMenuRoundStateChanged(bool active)
+        {
+            if (active)
+            {
+                ClearReferenceTickets();
+                RestoreAllTicketWidgetTints();
+                ClearPreparedState();
+                overlayVisible = false;
+            }
+
+            InvalidatePreparedCandidates(!active);
+            InvalidateReferenceTickets();
+            InvalidateTicketWidgets();
+            InvalidateOverlay();
         }
 
         public static void OnGUI()

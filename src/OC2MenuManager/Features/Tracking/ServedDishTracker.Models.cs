@@ -49,10 +49,20 @@ namespace OC2MenuManager
         {
             public string SceneName;
             public string DisplayName;
+            public string LevelConfigName;
+            public LevelConfigBase RuntimeLevelConfig;
             public List<int>[] PhaseRecipeIds;
+            public bool IsDIY;
+            public object DIYLevelInfo;
+            public bool DIYHydrationAttempted;
+            public string DIYHydrationError;
+            public int CatalogRevision;
             public readonly List<int> AllRecipeIds = new List<int>();
             public readonly List<RecipeInfo> OrderedRecipes = new List<RecipeInfo>();
             public readonly Dictionary<int, RecipeInfo> RecipesById = new Dictionary<int, RecipeInfo>();
+            public readonly HashSet<int> DIYRecipeIds = new HashSet<int>();
+            public readonly HashSet<int> RuntimeRecipeIds = new HashSet<int>();
+            public readonly HashSet<int> ExtensionRecipeIds = new HashSet<int>();
         }
 
         private sealed class RunInfo
@@ -70,6 +80,7 @@ namespace OC2MenuManager
             public int GameObjectInstanceId;
             public Component Component;
             public IClientOrderDefinition Provider;
+            public ClientCookingHandler CookingHandler;
             public OrderCompositionChangedCallback Callback;
             public int MatchedRecipeId;
             public bool PendingRemoval;
@@ -97,7 +108,6 @@ namespace OC2MenuManager
                 cachedText = BuildOverlayText();
                 overlayDirty = false;
                 nextOverlayRefreshFrame = 0;
-                lastOverlayBuildFrame = Time.frameCount;
             }
 
             public override void OnDraw(ref Rect rect, GUIStyle style)
@@ -233,6 +243,7 @@ namespace OC2MenuManager
             public int FlowInstanceId;
             public RecipeFlowGUI Flow;
             public int RecipeId;
+            public OrderDefinitionNode Definition;
             public double Probability;
             public RecipeFlowGUI.ElementToken Token;
             public RecipeWidgetUIController Widget;

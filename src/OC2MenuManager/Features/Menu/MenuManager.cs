@@ -83,7 +83,6 @@ namespace OC2MenuManager
         {
             public static RecipeList.Entry[] GetNextRecipeFixed(RoundData roundData, RoundInstanceDataBase _data)
             {
-                log("running fixed menu RoundData");
                 RoundData.RoundInstanceData instance = _data as RoundData.RoundInstanceData;
                 if (roundData == null
                     || instance == null
@@ -125,6 +124,8 @@ namespace OC2MenuManager
 
         [HarmonyPrefix]
         [HarmonyPatch(typeof(RoundData), "GetNextRecipe")]
+        [HarmonyBefore(OptionalRecipeAdapters.ManyRecipesPluginGuid)]
+        [HarmonyPriority(Priority.First)]
         public static bool RoundDataGetNextRecipePatch(RoundData __instance, ref RecipeList.Entry[] __result, RoundInstanceDataBase _data)
         {
             if (IsCarnivalLevel() && IsCarnivalMenuFixedEnabled)

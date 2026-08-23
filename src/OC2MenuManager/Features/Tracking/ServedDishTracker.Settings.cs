@@ -322,7 +322,8 @@ namespace OC2MenuManager
             DrawToggleRow(Ui("无菜单", "No Menu Mode"), NoMenuMode.IsEnabled, delegate(bool value)
             {
                 NoMenuMode.SetEnabled(value);
-            }, Ui("启用无菜单模式。", "Enables the built-in no-menu mode."));
+            }, Ui("无菜单设置在下一局开始时生效。", "No Menu changes apply when the next round starts."));
+            GUILayout.Label(NoMenuMode.GetStatusText(UseChinese()));
         }
 
         private static void DrawTrackingSettingsSection()
@@ -338,7 +339,7 @@ namespace OC2MenuManager
                     InvalidateOverlay();
                 }
             }, Ui("标准关卡历史菜单追踪。", "Tracks menu history on standard levels."));
-            DrawToggleRow(Ui("启用已备跟踪", "Enable Prepared Tracking"), IsPreparedTrackingEnabled(), delegate(bool value)
+            DrawToggleRow(Ui("启用已备跟踪", "Enable Prepared Tracking"), preparedTrackingEnabled != null && preparedTrackingEnabled.Value, delegate(bool value)
             {
                 if (preparedTrackingEnabled != null)
                 {
@@ -358,7 +359,7 @@ namespace OC2MenuManager
                     }
                 }
             }, Ui("跟踪已完成但尚未上菜的成品。", "Tracks completed dishes that have not been served yet."));
-            DrawToggleRow(Ui("菜单颜色", "Ticket Colors"), IsMenuTicketTintEnabled(), delegate(bool value)
+            DrawToggleRow(Ui("菜单颜色", "Ticket Colors"), menuTicketTintEnabled != null && menuTicketTintEnabled.Value, delegate(bool value)
             {
                 if (menuTicketTintEnabled != null)
                 {

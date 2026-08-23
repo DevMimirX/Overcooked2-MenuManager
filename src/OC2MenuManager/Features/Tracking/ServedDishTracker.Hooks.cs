@@ -18,23 +18,54 @@ namespace OC2MenuManager
 {
     internal static partial class ServedDishTracker
     {
-        [HarmonyPatch(typeof(LoadingScreenFlow), "NextScene", MethodType.Getter)]
+        [HarmonyPatch(typeof(LoadingScreenFlow), "LoadScene", new Type[] { typeof(string), typeof(GameState) })]
         [HarmonyPrefix]
-        private static void LoadingScreenFlow_NextScene_Prefix()
+        private static void LoadingScreenFlow_LoadScene_Prefix()
         {
+            TryResetRoundRuntimeState("scene load");
+        }
+
+        [HarmonyPatch(typeof(LoadingScreenFlow), "RequestReturnToStartScreen")]
+        [HarmonyPrefix]
+        private static void LoadingScreenFlow_RequestReturnToStartScreen_Prefix()
+        {
+            TryResetRoundRuntimeState("return to start screen");
+        }
+
+        private static void TryResetRoundRuntimeState(string reason)
+        {
+            try
+            {
+                ResetRoundRuntimeState();
+            }
+            catch (Exception ex)
+            {
+                // A cleanup failure must not escape a Harmony prefix and block scene loading.
+                _MODEntry.LogWarning("[ServedDishTracker] Cleanup during " + reason + " was incomplete, but the scene transition was allowed to continue: " + ex.GetType().Name + ": " + ex.Message);
+            }
+        }
+
+        private static void ResetRoundRuntimeState()
+        {
+            ClearTicketWidgetState();
             currentRun = null;
             InvalidateProbabilityMap();
             cachedClientFlowController = null;
             cachedKitchenFlowController = null;
             cachedDlcManager = null;
+            cachedWorldMapFlowController = null;
             nextClientFlowLookupFrame = 0;
             nextKitchenFlowLookupFrame = 0;
             nextDlcManagerLookupFrame = 0;
             cachedCurrentSceneInfo = null;
             cachedCurrentSceneInfoValid = false;
             cachedCurrentSceneInfoFrame = int.MinValue;
+            ReferenceRealTicketLimitByFlowId.Clear();
+            invalidReferenceTableWarningLogged = false;
+            referenceTicketAddFailureLogged = false;
             ClearOnMenuCounts();
             ClearPreparedState();
+            ClearReferenceTickets();
             InvalidateOverlay();
         }
 
@@ -42,7 +73,7 @@ namespace OC2MenuManager
         [HarmonyPostfix]
         private static void ClientKitchenFlowControllerBase_OnOrderAdded_Postfix(Serialisable _orderData)
         {
-            if (!enabled.Value)
+            if (!enabled.Value || NoMenuMode.IsActiveForRound)
             {
                 return;
             }
@@ -53,13 +84,22 @@ namespace OC2MenuManager
                 return;
             }
 
+            if (NoMenuMode.IsSyntheticOrder(orderData.ID))
+            {
+                return;
+            }
+
             SceneInfo scene;
             if (!TryGetCurrentSceneInfo(out scene))
             {
                 return;
             }
 
-            EnsureRecipe(scene, orderData.RecipeListEntry.m_order);
+            scene.RuntimeRecipeIds.Add(orderData.RecipeListEntry.m_order.m_uID);
+            if (EnsureRecipe(scene, orderData.RecipeListEntry.m_order))
+            {
+                NotifyRecipeCatalogChanged(scene);
+            }
             RunInfo run = EnsureRun(scene);
             int recipeId = orderData.RecipeListEntry.m_order.m_uID;
             run.TotalAdded++;
@@ -73,7 +113,7 @@ namespace OC2MenuManager
         [HarmonyPrefix]
         private static void ClientKitchenFlowControllerBase_OnSuccessfulDelivery_Prefix(ClientKitchenFlowControllerBase __instance, TeamID _teamID, OrderID _orderID)
         {
-            if (!enabled.Value || __instance == null)
+            if (!enabled.Value || __instance == null || NoMenuMode.IsActiveForRound || NoMenuMode.IsSyntheticOrder(_orderID))
             {
                 return;
             }
@@ -84,8 +124,8 @@ namespace OC2MenuManager
                 return;
             }
 
-            RecipeList.Entry entry = monitor.OrdersController.GetRecipe(_orderID);
-            if (entry == null || entry.m_order == null)
+            RecipeList.Entry entry;
+            if (!TryGetClientRecipe(monitor.OrdersController, _orderID, out entry))
             {
                 return;
             }
@@ -96,7 +136,11 @@ namespace OC2MenuManager
                 return;
             }
 
-            EnsureRecipe(scene, entry.m_order);
+            scene.RuntimeRecipeIds.Add(entry.m_order.m_uID);
+            if (EnsureRecipe(scene, entry.m_order))
+            {
+                NotifyRecipeCatalogChanged(scene);
+            }
             RunInfo run = EnsureRun(scene);
             int recipeId = entry.m_order.m_uID;
             run.ServedCounts[recipeId] = GetCount(run.ServedCounts, recipeId) + 1;
@@ -108,7 +152,7 @@ namespace OC2MenuManager
         [HarmonyPrefix]
         private static void ClientKitchenFlowControllerBase_OnFailedDelivery_Prefix(ClientKitchenFlowControllerBase __instance, TeamID _teamID, OrderID _orderID)
         {
-            if (!enabled.Value || __instance == null || _orderID.m_id == 0u)
+            if (!enabled.Value || __instance == null || _orderID.m_id == 0u || NoMenuMode.IsActiveForRound || NoMenuMode.IsSyntheticOrder(_orderID))
             {
                 return;
             }
@@ -119,8 +163,8 @@ namespace OC2MenuManager
                 return;
             }
 
-            RecipeList.Entry entry = monitor.OrdersController.GetRecipe(_orderID);
-            if (entry == null || entry.m_order == null)
+            RecipeList.Entry entry;
+            if (!TryGetClientRecipe(monitor.OrdersController, _orderID, out entry))
             {
                 return;
             }
@@ -131,7 +175,11 @@ namespace OC2MenuManager
                 return;
             }
 
-            EnsureRecipe(scene, entry.m_order);
+            scene.RuntimeRecipeIds.Add(entry.m_order.m_uID);
+            if (EnsureRecipe(scene, entry.m_order))
+            {
+                NotifyRecipeCatalogChanged(scene);
+            }
             RunInfo run = EnsureRun(scene);
             int recipeId = entry.m_order.m_uID;
             run.ServedCounts[recipeId] = GetCount(run.ServedCounts, recipeId) + 1;
@@ -142,7 +190,7 @@ namespace OC2MenuManager
         [HarmonyPrefix]
         private static void ClientKitchenFlowControllerBase_OnOrderExpired_Prefix(ClientKitchenFlowControllerBase __instance, TeamID _teamID, OrderID _orderID)
         {
-            if (!enabled.Value || __instance == null)
+            if (!enabled.Value || __instance == null || NoMenuMode.IsActiveForRound || NoMenuMode.IsSyntheticOrder(_orderID))
             {
                 return;
             }
@@ -153,8 +201,8 @@ namespace OC2MenuManager
                 return;
             }
 
-            RecipeList.Entry entry = monitor.OrdersController.GetRecipe(_orderID);
-            if (entry == null || entry.m_order == null)
+            RecipeList.Entry entry;
+            if (!TryGetClientRecipe(monitor.OrdersController, _orderID, out entry))
             {
                 return;
             }
@@ -165,7 +213,11 @@ namespace OC2MenuManager
                 return;
             }
 
-            EnsureRecipe(scene, entry.m_order);
+            scene.RuntimeRecipeIds.Add(entry.m_order.m_uID);
+            if (EnsureRecipe(scene, entry.m_order))
+            {
+                NotifyRecipeCatalogChanged(scene);
+            }
             DecrementOnMenuCount(scene.SceneName, entry.m_order.m_uID);
             InvalidateOverlay();
         }
@@ -174,16 +226,14 @@ namespace OC2MenuManager
         [HarmonyPostfix]
         private static void ClientDynamicFlowController_OnDynamicLevelMessage_Postfix(Serialisable _serialisable)
         {
+            if (NoMenuMode.IsActiveForRound)
+            {
+                return;
+            }
+
             DynamicLevelMessage message = _serialisable as DynamicLevelMessage;
             ResetProbabilityState(message != null ? message.m_phase : 0);
             InvalidateOverlay();
-        }
-
-        private static void BootstrapPreparedSources()
-        {
-            while (!RunPreparedBootstrapStep())
-            {
-            }
         }
 
         private static void SchedulePreparedBootstrap(int delayFrames)
@@ -191,6 +241,25 @@ namespace OC2MenuManager
             preparedSourceBootstrapComplete = false;
             preparedSourceBootstrapStage = 0;
             nextPreparedBootstrapFrame = Time.frameCount + Math.Max(0, delayFrames);
+        }
+
+        private static bool TryGetClientRecipe(ClientOrderControllerBase orderController, OrderID orderId, out RecipeList.Entry entry)
+        {
+            entry = null;
+            if (orderController == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                entry = orderController.GetRecipe(orderId);
+                return entry != null && entry.m_order != null;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
     }

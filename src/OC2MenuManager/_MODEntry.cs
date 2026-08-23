@@ -12,6 +12,8 @@ namespace OC2MenuManager
 {
     [BepInPlugin(PluginMetadata.Guid, PluginMetadata.Name, PluginMetadata.Version)]
     [BepInProcess("Overcooked2.exe")]
+    [BepInDependency(OptionalRecipeAdapters.DIYLevelPluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(OptionalRecipeAdapters.ManyRecipesPluginGuid, BepInDependency.DependencyFlags.SoftDependency)]
     public class _MODEntry : BaseUnityPlugin
     {
         private const string SettingsConfigBaseName = "OC2MenuManager";
@@ -48,6 +50,8 @@ namespace OC2MenuManager
         public static float dpiScaleFactor = 1f;
         public static ConfigEntry<int> defaultFontSize;
         public static ConfigEntry<Color> defaultFontColor;
+        private static int lastScreenWidth = -1;
+        private static int lastScreenHeight = -1;
 
         public void Awake()
         {
@@ -68,6 +72,8 @@ namespace OC2MenuManager
 
         private void OnDestroy()
         {
+            NoMenuMode.Shutdown();
+            ServedDishTracker.Shutdown();
             Instance = null;
             for (int i = 0; i < AllHarmony.Count; i++)
             {
@@ -84,9 +90,7 @@ namespace OC2MenuManager
 
         public void Update()
         {
-            int expectedWidth = Mathf.RoundToInt(BaseScreenWidth * dpiScaleFactor);
-            int expectedHeight = Mathf.RoundToInt(BaseScreenHeight * dpiScaleFactor);
-            if (Screen.width != expectedWidth || Screen.height != expectedHeight)
+            if (Screen.width != lastScreenWidth || Screen.height != lastScreenHeight)
             {
                 UpdateGUIDpi();
             }
@@ -118,6 +122,8 @@ namespace OC2MenuManager
 
         private void UpdateGUIDpi()
         {
+            lastScreenWidth = Screen.width;
+            lastScreenHeight = Screen.height;
             float ratioWidth = (float)Screen.width / BaseScreenWidth;
             float ratioHeight = (float)Screen.height / BaseScreenHeight;
             dpiScaleFactor = Mathf.Min(ratioWidth, ratioHeight);

@@ -6,7 +6,7 @@ Chinese version: [OC2MenuManager-zh.md](./OC2MenuManager-zh.md)
 
 `OC2MenuManager` is a standalone menu helper mod for Overcooked! 2.
 It provides its own in-game settings window and does not require `ConfigurationManager.dll` or `HostUtilities`.
-If `OC2DIYLevel` is installed, it can also scan DIY levels for dish tracking.
+If `OC2DIYLevel` or Recipe Extension (`OC2ManyRecipes`) is installed, guarded optional adapters add their dishes without making either mod mandatory.
 
 Main features:
 
@@ -22,6 +22,19 @@ Main features:
 
 - `Overcooked! 2`
 - `BepInEx`
+
+## Optional Mod Compatibility
+
+- `OC2DIYLevel` 0.8-style and newer recipe-helper contracts are supported.
+  - DIY scenes and their exact recipe IDs/names are read after the DIY frontend metadata initializes.
+  - You can select a DIY scene and configure its tracked dishes before launching it.
+  - Original DIY recipes can be fully hydrated in the frontend; custom recipes are preloaded by ID/name and upgraded to their real runtime definitions when the round starts.
+- Recipe Extension / `OC2ManyRecipes` 1.1 is supported at runtime.
+  - Its generated recipes are added after the extension creates them for the round.
+  - Its two special dynamic-level phase filters are preserved.
+  - Six real orders plus five guess tickets are supported safely.
+
+Both integrations are optional. If an optional mod is absent or changes to an unknown reflection contract, only that integration is disabled and Menu Manager continues to run.
 
 ## Installation
 
@@ -132,13 +145,9 @@ Important behavior:
 - during a round, the scene selector locks to the current scene
 - this lock is intentional so you do not accidentally edit another level mid-run
 
-If a scene is missing or looks incomplete:
+DIY scenes appear once OC2DIYLevel finishes loading its frontend metadata. Selecting one lazily loads its recipes; the window shows a loading or error message and a retry button if metadata is not ready. You no longer need to launch a DIY level once just to configure it.
 
-- enter that scene once
-- return to the menu manager
-- refresh the scene and dish list
-
-This is especially relevant for custom or DIY levels.
+Recipe Extension dishes are generated from the real level at round initialization, so they appear in the current scene selector after that round starts. Press `Refresh` if a recently changed optional-mod configuration has not appeared yet.
 
 ### Menu History Tracker
 
@@ -204,6 +213,7 @@ Important notes:
 - these are reference orders only
 - they are not real game orders
 - real orders stay first; guess orders are appended after them
+- ticket capacity grows from the game or Recipe Extension real-order limit, so the six-order extension mode does not consume guess slots
 - if there are too many cards, horizontal overflow is expected
 
 #### Display Language
@@ -276,7 +286,14 @@ These are special gameplay-related toggles.
 
 #### No Menu Mode
 
-- enables the built-in no-menu mode
+- changes apply at the next round boundary; the status line reports active, pending, or unsupported state
+- supports standard and dynamic campaign kitchens plus versus kitchens
+- disables normal order generation and safely clears startup orders for the active round
+- accepts any recipe valid for the current round; dynamic levels follow the game's current phase
+- supports DIY and Recipe Extension recipes
+- preserves normal score/combo callbacks and returns the delivered plate once
+- suspends Menu Manager’s overlay, prepared tracking, ticket tinting, and guess tickets while active
+- boss, tutorial, survival, Horde, pre-timer-order, and public-online rounds retain their normal menu and show the reason
 
 ### Overlay
 
@@ -451,8 +468,10 @@ If the mod feels heavy, try these changes first:
 
 Why:
 
-- sorting itself is relatively cheap
-- the heavier work usually comes from prepared-source tracking, ticket refresh, and top-row guess synchronization
+- prepared-source matching remains the heaviest optional feature
+- scene/controller discovery is cached, prepared sources are normally event-driven, and recovery scans are delayed and staged
+- ticket layout is left to the game; Menu Manager only reorders membership when the real/guess set changes
+- large recipe pools use cached selector groups and finite, duplicate-safe probability calculations
 
 ## Troubleshooting
 
@@ -498,6 +517,14 @@ Try:
 - lowering `Overlay Dish Limit`
 - increasing the text-length settings
 - moving the overlay
+
+### A DIY scene is listed but has no dishes
+
+Wait for OC2DIYLevel to finish loading, select the scene, and press `Retry DIY Recipe Load`. Check the BepInEx log for one `[Compatibility]` warning if the installed DIY version exposes an unsupported contract.
+
+### Recipe Extension dishes do not appear
+
+They are generated at round initialization rather than in the frontend. Start the level, open `F6`, and use `Refresh`. Confirm `OC2ManyRecipes` 1.1 is enabled and look for the one-time adapter activation line in the BepInEx log.
 
 ## Summary
 
