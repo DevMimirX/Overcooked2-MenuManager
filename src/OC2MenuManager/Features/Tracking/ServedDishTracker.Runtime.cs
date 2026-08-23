@@ -925,13 +925,10 @@ namespace OC2MenuManager
                 return;
             }
 
+            // DIY and Recipe Extension can disagree about the real-order limit even when
+            // history tracking is disabled, so every non-reference ticket reserves a slot.
             bool trackerActive = enabled != null && enabled.Value && !NoMenuMode.IsActiveForRound;
             int activeReferenceTickets = GetActiveReferenceTicketCount(flow);
-            if (!trackerActive && activeReferenceTickets == 0)
-            {
-                return;
-            }
-
             int activeRealTickets = GetActiveRealTicketCount(flow);
             int projectedRealTickets = activeRealTickets < int.MaxValue ? activeRealTickets + 1 : int.MaxValue;
             int configuredReferenceLimit = trackerActive ? GetReferenceTicketDisplayLimit() : 0;

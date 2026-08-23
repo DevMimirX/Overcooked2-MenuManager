@@ -38,6 +38,9 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 7. Serve and expire early, middle, and late `s_rw_5` orders. Verify score updates once, each real ticket completes its normal animation and disappears, and no invalid table release or stuck order remains.
 8. Run another DIY level with Recipe Extension enabled and verify both catalogs coexist without duplicate IDs or exceptions.
 9. Disable Recipe Extension for the next round and verify generated-only selector entries are removed from the active scene catalog.
+10. Disable Menu Manager history tracking while keeping Recipe Extension enabled. Fill the available real-order slots and verify every incoming real ticket still receives capacity and removes normally.
+11. On `Day_3_4`, test Good Menu alone and Good Menu plus Good Cake. Verify generated recipes remain eligible, opening restrictions affect only the original Carnival indices, and forced-cake checkpoints select the original cake entries without corrupting extension frequencies.
+12. Enable the fixed/TAS Carnival menu and verify its exact base-recipe sequence still takes precedence over Recipe Extension.
 
 ## No Menu lifecycle
 

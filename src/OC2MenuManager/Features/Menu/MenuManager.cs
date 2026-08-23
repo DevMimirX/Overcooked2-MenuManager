@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Reflection;
 using BepInEx.Configuration;
 using HarmonyLib;
-using UnityEngine;
 using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
@@ -19,6 +18,9 @@ namespace OC2MenuManager
         public static ConfigEntry<bool> isCarnivalCakeGood;
         public static ConfigEntry<bool> isCarnivalMenuFixed;
         private static readonly FieldInfo RoundInstanceCumulativeFrequenciesField = ResolveRoundInstanceCumulativeFrequenciesField();
+        private static readonly List<RecipeList.Entry> CarnivalExtensionEntriesBuffer = new List<RecipeList.Entry>();
+        private static RecipeList.Entry[] CarnivalCandidateEntriesBuffer = new RecipeList.Entry[0];
+        private static float[] CarnivalCandidateWeightsBuffer = new float[0];
 
         public static int[][] carnivalMenu;
 
@@ -120,6 +122,102 @@ namespace OC2MenuManager
                 instance.CumulativeFrequencies[menuIndex]++;
                 return new RecipeList.Entry[] { roundData.m_recipes.m_recipes[menuIndex] };
             }
+
+            internal static bool TryGetNextRecipeWithRecipeExtension(
+                RoundData roundData,
+                RoundInstanceDataBase data,
+                bool cakeRulesEnabled,
+                out RecipeList.Entry[] result)
+            {
+                result = null;
+                RoundData.RoundInstanceData instance = data as RoundData.RoundInstanceData;
+                RecipeList.Entry[] baseEntries = roundData != null && roundData.m_recipes != null
+                    ? roundData.m_recipes.m_recipes
+                    : null;
+                if (instance == null || instance.CumulativeFrequencies == null || baseEntries == null)
+                {
+                    return false;
+                }
+
+                ScriptedRoundData scriptedRoundData = roundData as ScriptedRoundData;
+                if (scriptedRoundData != null
+                    && scriptedRoundData.m_manualOrder != null
+                    && instance.RecipeCount < scriptedRoundData.m_manualOrder.Length)
+                {
+                    return false;
+                }
+
+                CarnivalExtensionEntriesBuffer.Clear();
+                if (!OptionalRecipeAdapters.TryGetManyRecipeEntries(CarnivalExtensionEntriesBuffer)
+                    || !CarnivalRecipeSelectionPolicy.HasCompatibleCandidateShape(
+                        baseEntries.Length,
+                        CarnivalExtensionEntriesBuffer.Count,
+                        instance.CumulativeFrequencies.Length))
+                {
+                    return false;
+                }
+
+                int candidateCount = instance.CumulativeFrequencies.Length;
+                if (CarnivalCandidateEntriesBuffer.Length != candidateCount)
+                {
+                    CarnivalCandidateEntriesBuffer = new RecipeList.Entry[candidateCount];
+                    CarnivalCandidateWeightsBuffer = new float[candidateCount];
+                }
+
+                for (int i = 0; i < baseEntries.Length; i++)
+                {
+                    RecipeList.Entry entry = baseEntries[i];
+                    if (entry == null || entry.m_order == null)
+                    {
+                        return false;
+                    }
+
+                    CarnivalCandidateEntriesBuffer[i] = entry;
+                }
+
+                for (int i = 0; i < CarnivalExtensionEntriesBuffer.Count; i++)
+                {
+                    RecipeList.Entry entry = CarnivalExtensionEntriesBuffer[i];
+                    if (entry == null || entry.m_order == null)
+                    {
+                        return false;
+                    }
+
+                    CarnivalCandidateEntriesBuffer[baseEntries.Length + i] = entry;
+                }
+
+                if (!CarnivalRecipeSelectionPolicy.TryCalculateWeights(
+                    instance.CumulativeFrequencies,
+                    baseEntries.Length,
+                    cakeRulesEnabled,
+                    CarnivalCandidateWeightsBuffer))
+                {
+                    return false;
+                }
+
+                float totalWeight = 0f;
+                for (int i = 0; i < candidateCount; i++)
+                {
+                    totalWeight += CarnivalCandidateWeightsBuffer[i];
+                }
+
+                if (totalWeight <= 0f || float.IsNaN(totalWeight) || float.IsInfinity(totalWeight))
+                {
+                    return false;
+                }
+
+                KeyValuePair<int, RecipeList.Entry> selected = CarnivalCandidateEntriesBuffer.GetWeightedRandomElement(
+                    (int index, RecipeList.Entry entry) => CarnivalCandidateWeightsBuffer[index]);
+                if (selected.Key < 0 || selected.Key >= candidateCount || selected.Value == null)
+                {
+                    return false;
+                }
+
+                instance.RecipeCount++;
+                instance.CumulativeFrequencies[selected.Key]++;
+                result = new RecipeList.Entry[] { selected.Value };
+                return true;
+            }
         }
 
         [HarmonyPrefix]
@@ -128,11 +226,27 @@ namespace OC2MenuManager
         [HarmonyPriority(Priority.First)]
         public static bool RoundDataGetNextRecipePatch(RoundData __instance, ref RecipeList.Entry[] __result, RoundInstanceDataBase _data)
         {
-            if (IsCarnivalLevel() && IsCarnivalMenuFixedEnabled)
+            if (!IsCarnivalLevel())
+            {
+                return true;
+            }
+
+            if (IsCarnivalMenuFixedEnabled)
             {
                 __result = FixedMenuRoundData.GetNextRecipeFixed(__instance, _data);
                 return __result == null;
             }
+
+            if (IsCarnivalMenuGoodEnabled
+                && FixedMenuRoundData.TryGetNextRecipeWithRecipeExtension(
+                    __instance,
+                    _data,
+                    IsCarnivalCakeGoodEnabled,
+                    out __result))
+            {
+                return false;
+            }
+
             return true;
         }
 
@@ -143,109 +257,22 @@ namespace OC2MenuManager
             if (IsCarnivalLevel() && IsCarnivalMenuGoodEnabled && !IsCarnivalMenuFixedEnabled)
             {
                 int[] cumulativeFrequencies = GetRoundInstanceCumulativeFrequencies(_instance);
-                if (cumulativeFrequencies == null
-                    || cumulativeFrequencies.Length == 0
-                    || __instance == null
-                    || __instance.m_recipes == null
-                    || __instance.m_recipes.m_recipes == null
-                    || _recipeIndex < 0
-                    || _recipeIndex >= cumulativeFrequencies.Length
-                    || _recipeIndex >= __instance.m_recipes.m_recipes.Length
-                    || cumulativeFrequencies.Length < 2)
+                RecipeList.Entry[] baseEntries = __instance != null && __instance.m_recipes != null
+                    ? __instance.m_recipes.m_recipes
+                    : null;
+                float weight;
+                if (baseEntries == null
+                    || !CarnivalRecipeSelectionPolicy.TryCalculateWeight(
+                        cumulativeFrequencies,
+                        baseEntries.Length,
+                        _recipeIndex,
+                        IsCarnivalCakeGoodEnabled,
+                        out weight))
                 {
                     return true;
                 }
 
-                int recipe_len = __instance.m_recipes.m_recipes.Length;
-                if (recipe_len <= 0)
-                {
-                    return true;
-                }
-
-                int num = cumulativeFrequencies.Collapse((int f, int total) => total + f);
-                float theo_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)cumulativeFrequencies[_recipeIndex], 0f);
-                float berry_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)cumulativeFrequencies[0], 0f);
-                float choco_prob = Mathf.Max((float)(num + 2) / (float)recipe_len - (float)cumulativeFrequencies[1], 0f);
-
-                __result = theo_prob;
-                if (num == 0 && (_recipeIndex <= 1 || (_recipeIndex >= 5 && _recipeIndex <= 7)))
-                {
-                    __result = 0f;
-                }
-                else if (num == 1 && _recipeIndex <= 1)
-                {
-                    __result = 0f;
-                }
-
-                if (IsCarnivalCakeGoodEnabled)
-                {
-                    if (_recipeIndex <= 1)
-                    {
-                        __result *= 3f;
-                    }
-
-                    if (num == 46)
-                    {
-                        if (berry_prob > 0f && choco_prob > 0f)
-                        {
-                            if (_recipeIndex <= 1)
-                                __result = 1f;
-                            else
-                                __result = 0f;
-                        }
-                    }
-                    else if (num == 49)
-                    {
-                        if (berry_prob > 0f && choco_prob > 0f)
-                        {
-                            if (_recipeIndex <= 1)
-                                __result = 1f;
-                            else
-                                __result = 0f;
-                        }
-                        else if (berry_prob > 0f && choco_prob <= 0f)
-                        {
-                            if (_recipeIndex == 0)
-                                __result = 1f;
-                            else
-                                __result = 0f;
-                        }
-                        else if (berry_prob <= 0f && choco_prob > 0f)
-                        {
-                            if (_recipeIndex == 1)
-                                __result = 1f;
-                            else
-                                __result = 0f;
-                        }
-                        else
-                        {
-                            __result = theo_prob;
-                        }
-                    }
-                    else if (num == 54)
-                    {
-                        if (berry_prob > 0f)
-                        {
-                            if (_recipeIndex == 0)
-                                __result = 1f;
-                            else
-                                __result = 0f;
-                        }
-                    }
-                    else if (num == 55)
-                    {
-                        if (choco_prob > 0f)
-                        {
-                            if (_recipeIndex == 1)
-                                __result = 1f;
-                            else
-                                __result = 0f;
-                        }
-                    }
-
-                }
-
-                //log($"Round {num}|{_recipeIndex}: {theo_prob}, {__result},  {_instance.CumulativeFrequencies[_recipeIndex]}, {recipe_len}");
+                __result = weight;
                 return false;
             }
             return true;

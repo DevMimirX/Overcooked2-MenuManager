@@ -33,6 +33,8 @@ Main features:
   - Its generated recipes are added after the extension creates them for the round.
   - Its two special dynamic-level phase filters are preserved.
   - Real orders always keep their slots; active real and guess tickets are capped at ten whenever the level itself stays within that limit.
+  - A served or expired real ticket always completes removal even if another mod previously assigned it an invalid UI table index.
+  - On Carnival, non-fixed Good Menu and Good Cake rules use the full generated pool while applying their special restrictions only to the original Carnival recipes. The fixed/TAS sequence remains base-recipe-only.
 
 Both integrations are optional. If an optional mod is absent or changes to an unknown reflection contract, only that integration is disabled and Menu Manager continues to run.
 
@@ -527,6 +529,10 @@ Wait for OC2DIYLevel to finish loading, select the scene, and press `Retry DIY R
 ### Recipe Extension dishes do not appear
 
 They are generated at round initialization rather than in the frontend. Start the level, open `F6`, and use `Refresh`. Confirm `OC2ManyRecipes` 1.1 is enabled and look for the one-time adapter activation line in the BepInEx log.
+
+### A served order remains visible
+
+Version 1.1.0 reserves a valid UI table before every real ticket, including when history tracking is disabled. It also guards the base game's unchecked table release so a ticket inherited from an already-full UI can still animate out and be destroyed. If this still occurs, keep the BepInEx log and note the level, active real-order count, Recipe Extension options, and `Max Guess Count`.
 
 ## Summary
 

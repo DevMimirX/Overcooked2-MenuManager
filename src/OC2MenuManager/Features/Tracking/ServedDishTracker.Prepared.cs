@@ -915,6 +915,7 @@ namespace OC2MenuManager
 
         [HarmonyPatch(typeof(ClientPreparationContainer), "StartSynchronising")]
         [HarmonyPostfix]
+        [HarmonyAfter(OptionalRecipeAdapters.ManyRecipesPluginGuid)]
         private static void ClientPreparationContainer_StartSynchronising_Postfix(ClientPreparationContainer __instance)
         {
             TryRegisterPreparedSource(__instance);

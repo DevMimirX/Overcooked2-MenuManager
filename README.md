@@ -27,7 +27,7 @@ User guides:
 - `tools`: build, dependency-audit, version, and packaging scripts
 - `.github/workflows`: pull-request CI and tag-only releases
 
-The optional OC2DIYLevel and Recipe Extension integrations use audited soft-dependency metadata plus guarded reflection. Their absence is a supported no-op, and neither optional DLL becomes a runtime assembly dependency.
+The optional OC2DIYLevel and Recipe Extension integrations use audited soft-dependency metadata plus guarded reflection. Recipe Extension's generated pool, six-order option, prepared containers, No Menu behavior, and Carnival weighting are supported. Their absence is a supported no-op, and neither optional DLL becomes a runtime assembly dependency.
 
 ## Build and validation
 
