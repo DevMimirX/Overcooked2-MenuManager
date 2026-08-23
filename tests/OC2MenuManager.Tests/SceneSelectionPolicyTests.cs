@@ -33,6 +33,168 @@ public sealed class SceneSelectionPolicyTests
         Assert.True(SceneSelectionPolicy.Matches(query, "s_test", "Test", "Test", "测试"));
     }
 
+    [Theory]
+    [InlineData(true, "s_rw_5", "s_rw_1", true, "s_sushi_1_1", "s_rw_5")]
+    [InlineData(false, "s_rw_5", "s_rw_1", true, "s_sushi_1_1", "s_rw_1")]
+    [InlineData(false, "s_rw_5", "missing", false, "s_sushi_1_1", "s_sushi_1_1")]
+    [InlineData(true, "", "s_rw_1", true, "s_sushi_1_1", "s_rw_1")]
+    public void ActiveSceneOverridesConfiguredSceneOnlyDuringARound(
+        bool inActiveRound,
+        string activeScene,
+        string configuredScene,
+        bool configuredSceneAvailable,
+        string fallbackScene,
+        string expected)
+    {
+        Assert.Equal(
+            expected,
+            SceneSelectionPolicy.ResolveEffectiveSceneName(
+                inActiveRound,
+                activeScene,
+                configuredScene,
+                configuredSceneAvailable,
+                fallbackScene));
+    }
+
+    [Theory]
+    [InlineData(true, "s_rw_1", false, "s_rw_5", "s_rw_1")]
+    [InlineData(false, "s_rw_1", true, "s_rw_1", "s_rw_1")]
+    [InlineData(false, "", false, "s_sushi_1_1", "s_sushi_1_1")]
+    [InlineData(false, "temporarily_missing", false, "s_sushi_1_1", "temporarily_missing")]
+    public void RuntimeAndTransientFallbacksDoNotOverwriteAnExplicitConfiguredScene(
+        bool inActiveRound,
+        string configuredScene,
+        bool configuredSceneAvailable,
+        string effectiveScene,
+        string expected)
+    {
+        Assert.Equal(
+            expected,
+            SceneSelectionPolicy.ResolveConfiguredSceneName(
+                inActiveRound,
+                configuredScene,
+                configuredSceneAvailable,
+                effectiveScene));
+    }
+
+    [Fact]
+    public void PostRoundManualSelectionWinsOverTheStillCachedRuntimeScene()
+    {
+        string configuredScene = "s_rw_5";
+        string effectiveScene = SceneSelectionPolicy.ResolveEffectiveSceneName(
+            true,
+            "s_rw_5",
+            configuredScene,
+            true,
+            "s_sushi_1_1");
+        configuredScene = SceneSelectionPolicy.ResolveConfiguredSceneName(
+            true,
+            configuredScene,
+            true,
+            effectiveScene);
+        Assert.Equal("s_rw_5", configuredScene);
+
+        configuredScene = "s_rw_1";
+        effectiveScene = SceneSelectionPolicy.ResolveEffectiveSceneName(
+            false,
+            "s_rw_5",
+            configuredScene,
+            true,
+            "s_sushi_1_1");
+        configuredScene = SceneSelectionPolicy.ResolveConfiguredSceneName(
+            false,
+            configuredScene,
+            true,
+            effectiveScene);
+
+        Assert.Equal("s_rw_1", effectiveScene);
+        Assert.Equal("s_rw_1", configuredScene);
+    }
+
+    [Fact]
+    public void OnlyExplicitNavigationRequestsAutomaticScrolling()
+    {
+        SceneDropdownScrollRequest request = SceneDropdownScrollRequest.None;
+        request = SceneSelectionPolicy.UpdateScrollRequest(request, SceneDropdownNavigationEvent.CatalogRefreshed);
+        request = SceneSelectionPolicy.UpdateScrollRequest(request, SceneDropdownNavigationEvent.CatalogRefreshed);
+        Assert.Equal(SceneDropdownScrollRequest.None, request);
+
+        request = SceneSelectionPolicy.UpdateScrollRequest(request, SceneDropdownNavigationEvent.DropdownOpened);
+        Assert.Equal(SceneDropdownScrollRequest.RevealKeyboardTarget, request);
+        request = SceneSelectionPolicy.UpdateScrollRequest(request, SceneDropdownNavigationEvent.CatalogRefreshed);
+        Assert.Equal(SceneDropdownScrollRequest.RevealKeyboardTarget, request);
+
+        request = SceneSelectionPolicy.UpdateScrollRequest(request, SceneDropdownNavigationEvent.SearchChanged);
+        Assert.Equal(SceneDropdownScrollRequest.ResetToTop, request);
+        request = SceneSelectionPolicy.UpdateScrollRequest(request, SceneDropdownNavigationEvent.KeyboardMoved);
+        Assert.Equal(SceneDropdownScrollRequest.RevealKeyboardTarget, request);
+        request = SceneSelectionPolicy.UpdateScrollRequest(request, SceneDropdownNavigationEvent.UserScrolled);
+        Assert.Equal(SceneDropdownScrollRequest.None, request);
+    }
+
+    [Fact]
+    public void ManualScrollSurvivesPollingWhileClearRetargetsTheFirstResult()
+    {
+        SceneDropdownScrollRequest request = SceneDropdownScrollRequest.None;
+        string keyboardTarget = "s_rw_4";
+
+        for (var poll = 0; poll < 4; poll++)
+        {
+            request = SceneSelectionPolicy.UpdateScrollRequest(
+                request,
+                SceneDropdownNavigationEvent.CatalogRefreshed);
+            keyboardTarget = SceneSelectionPolicy.ResolveKeyboardTargetSceneName(
+                false,
+                keyboardTarget,
+                true,
+                "s_rw_1",
+                true,
+                "s_base");
+        }
+
+        Assert.Equal(SceneDropdownScrollRequest.None, request);
+        Assert.Equal("s_rw_4", keyboardTarget);
+
+        request = SceneSelectionPolicy.UpdateScrollRequest(
+            request,
+            SceneDropdownNavigationEvent.SearchChanged);
+        keyboardTarget = SceneSelectionPolicy.ResolveKeyboardTargetSceneName(
+            true,
+            keyboardTarget,
+            true,
+            "s_rw_1",
+            true,
+            "s_base");
+
+        Assert.Equal(SceneDropdownScrollRequest.ResetToTop, request);
+        Assert.Equal("s_base", keyboardTarget);
+    }
+
+    [Theory]
+    [InlineData(false, "s_rw_4", true, "s_rw_1", true, "s_base", "s_rw_4")]
+    [InlineData(false, "missing", false, "s_rw_1", true, "s_base", "s_rw_1")]
+    [InlineData(false, "missing", false, "missing", false, "s_base", "s_base")]
+    [InlineData(true, "s_rw_4", true, "s_rw_1", true, "s_base", "s_base")]
+    public void KeyboardTargetSurvivesRefreshByIdentityButSearchAndClearStartAtTheFirstResult(
+        bool retargetFirstResult,
+        string previousTarget,
+        bool previousTargetAvailable,
+        string selectedScene,
+        bool selectedSceneAvailable,
+        string firstResult,
+        string expected)
+    {
+        Assert.Equal(
+            expected,
+            SceneSelectionPolicy.ResolveKeyboardTargetSceneName(
+                retargetFirstResult,
+                previousTarget,
+                previousTargetAvailable,
+                selectedScene,
+                selectedSceneAvailable,
+                firstResult));
+    }
+
     [Fact]
     public void FilteringPreservesProviderOrderingAndReportsTheExpectedCount()
     {
@@ -144,6 +306,49 @@ public sealed class SceneSelectionPolicyTests
         Assert.Equal(
             expected,
             SceneSelectionPolicy.CalculateScrollOffsetForItem(index, count, current, viewport, rowHeight));
+    }
+
+    [Theory]
+    [InlineData(100, 250f, 100f, 25f, 250f)]
+    [InlineData(10, 250f, 100f, 25f, 150f)]
+    [InlineData(3, -20f, 100f, 25f, 0f)]
+    [InlineData(0, 20f, 100f, 25f, 0f)]
+    public void UserScrollIsPreservedAndOnlyClampedWhenResultsShrink(
+        int itemCount,
+        float current,
+        float viewport,
+        float rowHeight,
+        float expected)
+    {
+        Assert.Equal(
+            expected,
+            SceneSelectionPolicy.CalculateClampedScrollOffset(itemCount, current, viewport, rowHeight));
+    }
+
+    [Theory]
+    [InlineData(100, 250f, 3f, 100f, 25f, 325f)]
+    [InlineData(100, 250f, -20f, 100f, 25f, 0f)]
+    [InlineData(10, 140f, 3f, 100f, 25f, 150f)]
+    [InlineData(3, 20f, 3f, 100f, 25f, 0f)]
+    public void NestedSceneWheelInputMovesOnlyWithinTheAvailableListRange(
+        int itemCount,
+        float current,
+        float wheelDelta,
+        float viewport,
+        float rowHeight,
+        float expected)
+    {
+        Assert.Equal(
+            expected,
+            SceneSelectionPolicy.CalculateWheelScrollOffset(itemCount, current, wheelDelta, viewport, rowHeight));
+    }
+
+    [Fact]
+    public void InvalidWheelInputPreservesTheCurrentValidPosition()
+    {
+        Assert.Equal(
+            250f,
+            SceneSelectionPolicy.CalculateWheelScrollOffset(100, 250f, float.NaN, 100f, 25f));
     }
 
     [Fact]

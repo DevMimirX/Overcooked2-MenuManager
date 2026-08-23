@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using HarmonyLib;
 using UnityEngine;
+using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
 {
@@ -17,6 +18,7 @@ namespace OC2MenuManager
         {
             try
             {
+                OptionalRecipeAdapters.InvalidateManyRecipeEntries();
                 RefreshRuntimeRecipeExtensions(__instance != null ? __instance.GetLevelConfig() : null);
             }
             catch (Exception ex)
@@ -32,6 +34,7 @@ namespace OC2MenuManager
         {
             try
             {
+                OptionalRecipeAdapters.InvalidateManyRecipeEntries();
                 if (__instance != null)
                 {
                     cachedClientFlowController = __instance;
@@ -86,7 +89,21 @@ namespace OC2MenuManager
                 return;
             }
 
-            bool extensionAdapterAvailable = OptionalRecipeAdapters.TryGetManyRecipeEntries(RuntimeRecipeEntriesBuffer);
+            // Horde owns a separate wave/recipe pipeline. Do not build a tracker scene
+            // or touch its generated catalog even when Recipe Extension is active.
+            if (IsHordeLevel(levelConfig))
+            {
+                nextManyRecipesCatalogRetryFrame = 0;
+                RuntimePhaseRecipeEntriesBuffer.Clear();
+                RuntimeRecipeEntriesBuffer.Clear();
+                RuntimeRecipeIdsBuffer.Clear();
+                return;
+            }
+
+            ManyRecipesSnapshotState extensionState = OptionalRecipeAdapters.TryGetManyRecipeEntries(RuntimeRecipeEntriesBuffer);
+            nextManyRecipesCatalogRetryFrame = extensionState == ManyRecipesSnapshotState.ActiveUnavailable
+                ? Time.frameCount + ManyRecipesCatalogRetryIntervalFrames
+                : 0;
 
             SceneInfo scene;
             if (!TryGetCurrentSceneInfo(out scene) || scene == null)
@@ -113,7 +130,8 @@ namespace OC2MenuManager
             }
 
             bool changed = MergeLevelConfigIntoScene(scene, levelConfig);
-            if (!extensionAdapterAvailable)
+            changed |= UpdateManyRecipesSnapshotIdentity(scene, extensionState, RuntimeRecipeEntriesBuffer);
+            if (extensionState != ManyRecipesSnapshotState.Ready)
             {
                 RuntimeRecipeIdsBuffer.Clear();
                 changed |= UpdateRecipeSourceIds(scene, scene.ExtensionRecipeIds, RuntimeRecipeIdsBuffer);
@@ -188,18 +206,82 @@ namespace OC2MenuManager
             }
         }
 
-        internal static void AppendRecipeExtensionEntries(List<RecipeList.Entry> destination, LevelConfigBase levelConfig, bool allPhases, int phaseIndex)
+        private static void RetryManyRecipesCatalogIfNeeded(bool inActiveRound)
         {
-            if (destination == null)
+            if (!inActiveRound
+                || nextManyRecipesCatalogRetryFrame <= 0
+                || Time.frameCount < nextManyRecipesCatalogRetryFrame)
             {
                 return;
             }
 
-            OptionalRecipeAdapters.AppendManyRecipeEntries(
+            // Schedule the next attempt before entering provider-owned reflection so
+            // even an unexpected exception cannot turn this into a per-frame retry.
+            nextManyRecipesCatalogRetryFrame = Time.frameCount + ManyRecipesCatalogRetryIntervalFrames;
+
+            SceneInfo scene;
+            if (!TryGetCurrentSceneInfo(out scene)
+                || scene == null
+                || scene.ManyRecipesState != ManyRecipesSnapshotState.ActiveUnavailable)
+            {
+                nextManyRecipesCatalogRetryFrame = 0;
+                return;
+            }
+
+            LevelConfigBase levelConfig = scene.RuntimeLevelConfig;
+            if (levelConfig != null)
+            {
+                RefreshRuntimeRecipeExtensions(levelConfig);
+            }
+        }
+
+        internal static ManyRecipesSnapshotState AppendRecipeExtensionEntries(
+            List<RecipeList.Entry> destination,
+            LevelConfigBase levelConfig,
+            bool allPhases,
+            int phaseIndex)
+        {
+            if (destination == null)
+            {
+                return ManyRecipesSnapshotState.ActiveUnavailable;
+            }
+
+            return OptionalRecipeAdapters.AppendManyRecipeEntries(
                 destination,
                 levelConfig != null ? levelConfig.name : null,
                 phaseIndex,
                 allPhases);
+        }
+
+        private static bool UpdateManyRecipesSnapshotIdentity(
+            SceneInfo scene,
+            ManyRecipesSnapshotState state,
+            List<RecipeList.Entry> orderedEntries)
+        {
+            if (scene == null)
+            {
+                return false;
+            }
+
+            int entryCount = state == ManyRecipesSnapshotState.Ready && orderedEntries != null
+                ? orderedEntries.Count
+                : 0;
+            RuntimeOrderedRecipeIdsBuffer.Clear();
+            for (int i = 0; i < entryCount; i++)
+            {
+                RuntimeOrderedRecipeIdsBuffer.Add(orderedEntries[i].m_order.m_uID);
+            }
+
+            bool changed = scene.ManyRecipesState != state
+                || !ManyRecipesSnapshotPolicy.OrderedRecipeIdsMatch(
+                    scene.ManyRecipesOrderedEntryIds,
+                    RuntimeOrderedRecipeIdsBuffer);
+            scene.ManyRecipesState = state;
+            scene.ManyRecipesOrderedEntryIds.Clear();
+            scene.ManyRecipesOrderedEntryIds.AddRange(RuntimeOrderedRecipeIdsBuffer);
+            RuntimeOrderedRecipeIdsBuffer.Clear();
+
+            return changed;
         }
     }
 }

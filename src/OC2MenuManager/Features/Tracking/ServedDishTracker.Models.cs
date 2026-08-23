@@ -16,6 +16,7 @@ using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
 using UnityEngine;
 using UnityEngine.UI;
+using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
 {
@@ -66,9 +67,11 @@ namespace OC2MenuManager
             public bool DIYHydrationAttempted;
             public string DIYHydrationError;
             public int CatalogRevision;
+            public ManyRecipesSnapshotState ManyRecipesState = ManyRecipesSnapshotState.Absent;
             public readonly List<int> AllRecipeIds = new List<int>();
             public readonly List<RecipeInfo> OrderedRecipes = new List<RecipeInfo>();
             public readonly Dictionary<int, RecipeInfo> RecipesById = new Dictionary<int, RecipeInfo>();
+            public readonly List<int> ManyRecipesOrderedEntryIds = new List<int>();
             public readonly HashSet<int> DIYRecipeIds = new HashSet<int>();
             public readonly HashSet<int> RuntimeRecipeIds = new HashSet<int>();
             public readonly HashSet<int> ExtensionRecipeIds = new HashSet<int>();

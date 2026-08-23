@@ -748,6 +748,8 @@ namespace OC2MenuManager
             scene.AllRecipeIds.Clear();
             scene.OrderedRecipes.Clear();
             scene.RecipesById.Clear();
+            scene.ManyRecipesOrderedEntryIds.Clear();
+            scene.ManyRecipesState = ManyRecipesSnapshotState.Absent;
             scene.DIYRecipeIds.Clear();
             scene.RuntimeRecipeIds.Clear();
             scene.ExtensionRecipeIds.Clear();
@@ -834,6 +836,7 @@ namespace OC2MenuManager
             if (cachedCurrentSceneInfoValid
                 && cachedCurrentSceneInfo != null
                 && cachedCurrentSceneInfo.RuntimeLevelConfig != null
+                && !IsHordeLevel(cachedCurrentSceneInfo.RuntimeLevelConfig)
                 && cachedCurrentSceneInfo.OrderedRecipes.Count > 0)
             {
                 scene = cachedCurrentSceneInfo;
@@ -858,6 +861,14 @@ namespace OC2MenuManager
 
             string sceneName = sceneVariant.SceneName;
             LevelConfigBase levelConfig = sceneVariant.LevelConfig ?? GameUtils.GetLevelConfig();
+            if (levelConfig != null && IsHordeLevel(levelConfig))
+            {
+                cachedCurrentSceneInfoFrame = Time.frameCount;
+                cachedCurrentSceneInfo = null;
+                cachedCurrentSceneInfoValid = false;
+                return false;
+            }
+
             if (SceneCache.TryGetValue(sceneName, out scene) && scene != null)
             {
                 if (levelConfig != null && !ReferenceEquals(scene.RuntimeLevelConfig, levelConfig))
@@ -874,7 +885,7 @@ namespace OC2MenuManager
                 return cachedCurrentSceneInfoValid;
             }
 
-            if (levelConfig == null || IsHordeLevel(levelConfig))
+            if (levelConfig == null)
             {
                 cachedCurrentSceneInfoFrame = Time.frameCount;
                 cachedCurrentSceneInfo = null;

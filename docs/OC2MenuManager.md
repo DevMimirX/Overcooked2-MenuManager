@@ -36,13 +36,15 @@ Compatibility target: Steam build `20236421`. Maintainers can verify the referen
   - You can select a DIY scene and configure its tracked dishes before launching it.
   - Original DIY recipes can be fully hydrated in the frontend; custom recipes are preloaded by ID/name and upgraded to their real runtime definitions when the round starts.
 - Recipe Extension / `OC2ManyRecipes` 1.1 is supported at runtime.
-  - Its generated recipes are added after the extension creates them for the round.
+  - Its generated recipes are added automatically after the extension creates them during server/client round synchronization. They appear as one selector and overlay row per recipe ID; duplicate names retain their IDs for disambiguation.
+  - A scene with no saved subset tracks newly generated IDs automatically. Once you save an explicit subset, later IDs remain unchecked until you select them; disabling the extension removes generated-only rows for that round without deleting those saved IDs.
+  - Provider entry order and duplicate entries are preserved for probability balancing. If an enabled provider snapshot is incomplete or its runtime frequency shape does not match, probability displays `—`, guesses are suppressed, and No Menu disables safely for that round.
   - Its two special dynamic-level phase filters are preserved.
   - Real orders always keep their slots; active real and guess tickets are capped at ten whenever the level itself stays within that limit.
   - A successfully served real ticket always completes removal even if another mod previously assigned it an invalid UI table index. Expiration follows the base game: the same ticket remains active and its timer resets.
   - On Carnival, non-fixed Good Menu and Good Cake rules use the full generated pool while applying their special restrictions only to the original Carnival recipes. The fixed/TAS sequence remains base-recipe-only.
 
-Both integrations are optional. If an optional mod is absent or changes to an unknown reflection contract, only that integration is disabled and Menu Manager continues to run.
+Both integrations are optional. Menu Manager does not reference, bundle, or modify either provider DLL or its settings/collections. If an optional mod is absent or changes to an unknown reflection contract, only that integration is disabled and Menu Manager continues to run. Private-online tracking works when both clients have Recipe Extension enabled; ambiguous remote probability remains `—`. Public online follows Recipe Extension's own disabled behavior, and Horde remains outside Menu Manager tracking and No Menu scope.
 
 ## Installation
 
@@ -152,13 +154,15 @@ Important behavior:
 
 - outside a round, you can browse scenes freely
 - during a round, the scene selector locks to the current scene
+- this lock is temporary and does not replace your configured scene; the previous selection returns when the round ends
 - this lock is intentional so you do not accidentally edit another level mid-run
 - the expanded selector shows filtered/total and DIY counts; mouse wheel, arrow keys, Page Up/Down, Home/End, and Enter are supported
+- background metadata refreshes preserve mouse and scrollbar positions instead of returning to the selected row
 - the search remains active while you configure several scenes and clears when the settings window closes
 
 DIY scenes appear once OC2DIYLevel finishes loading its frontend metadata. Menu Manager never scans the game directory, enumerates the `levels` folder, or loads DIY asset bundles itself. It accepts only OC2DIYLevel's in-memory catalog, so screenshots, text files, and other files beside the bundles are ignored. A temporary provider failure keeps the last valid catalog visible, while malformed or duplicate metadata entries are skipped and reported without hiding valid scenes. Selecting a scene lazily loads its recipes; a failed preload is retried automatically while the window is open, and the retry button forces another attempt. You no longer need to launch a DIY level once just to configure it.
 
-Recipe Extension dishes are generated from the real level at round initialization, so they appear in the current scene selector after that round starts. Press `Refresh` if a recently changed optional-mod configuration has not appeared yet.
+Recipe Extension dishes are generated from the real level at round initialization, so they appear automatically in the current scene selector and in-round overlay after synchronization completes. If a recently changed extension configuration does not appear, start a new round and inspect the one-time `[Compatibility]` warning in the BepInEx log; a failed active snapshot is deliberately not replaced with a partial catalog.
 
 ### Menu History Tracker
 
@@ -521,6 +525,11 @@ Best practice:
 
 This is normal during a round.
 The mod locks the selector to the current scene while you are in-level.
+The lock ends with the round and the last scene you explicitly selected becomes active again.
+
+### The scene list jumps while scrolling
+
+Metadata refreshes do not reposition the list. Opening the selector reveals the configured scene once, search changes return to the first result, and keyboard movement reveals only its keyboard target. Mouse-wheel and scrollbar positions otherwise remain under your control.
 
 ### The top guess orders are not the same as the real orders
 
@@ -547,7 +556,7 @@ Open the scene selector and search for its scene ID, such as `s_rw_`. The count 
 
 ### Recipe Extension dishes do not appear
 
-They are generated at round initialization rather than in the frontend. Start the level, open `F6`, and use `Refresh`. Confirm `OC2ManyRecipes` 1.1 is enabled and look for the one-time adapter activation line in the BepInEx log.
+They are generated at round initialization rather than in the frontend. Confirm `OC2ManyRecipes` 1.1 is enabled, start a new level, and wait for synchronization to complete before opening `F6`. Look for the one-time adapter-ready or compatibility-warning line in the BepInEx log. Null arrays for recipe categories unused by the level are normal; an invalid non-null array is rejected as a whole instead of exposing a misleading partial list.
 
 ### A served order remains visible
 

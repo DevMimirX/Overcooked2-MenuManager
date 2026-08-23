@@ -361,27 +361,48 @@ namespace OC2MenuManager
 
         private static void SyncTrackingConfigEntries()
         {
-            SyncSceneSelectorConfigEntry();
+            ResolveSceneSelectorSelection();
         }
 
-        private static SceneInfo SyncSceneSelectorConfigEntry()
+        private static SceneInfo ResolveSceneSelectorSelection()
         {
             List<SceneInfo> selectableScenes = GetSelectableScenes();
             RebuildSceneSelectorMaps(selectableScenes);
-            string desiredSceneName = ResolveDesiredSceneName(selectableScenes);
-            if (!string.Equals(selectedSceneName, desiredSceneName, StringComparison.OrdinalIgnoreCase))
+
+            SceneInfo activeScene = null;
+            bool lockedToRound = IsInActiveRound() && TryGetCurrentSceneInfo(out activeScene) && activeScene != null;
+            string resolvedConfiguredSceneName;
+            bool configuredSceneAvailable = TryResolveSceneNameFromSelectorValue(
+                selectableScenes,
+                configuredSceneName,
+                out resolvedConfiguredSceneName);
+            string fallbackSceneName = selectableScenes.Count > 0 ? selectableScenes[0].SceneName : string.Empty;
+            string effectiveSceneName = SceneSelectionPolicy.ResolveEffectiveSceneName(
+                lockedToRound,
+                lockedToRound ? activeScene.SceneName : string.Empty,
+                resolvedConfiguredSceneName,
+                configuredSceneAvailable,
+                fallbackSceneName);
+
+            configuredSceneName = SceneSelectionPolicy.ResolveConfiguredSceneName(
+                lockedToRound,
+                configuredSceneName,
+                configuredSceneAvailable,
+                effectiveSceneName);
+
+            for (int i = 0; i < selectableScenes.Count; i++)
             {
-                selectedSceneName = desiredSceneName;
+                SceneInfo scene = selectableScenes[i];
+                if (!string.Equals(scene.SceneName, effectiveSceneName, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                EnsureDIYSceneHydrated(scene, false);
+                return scene;
             }
 
-            SceneInfo selectedSceneInfo;
-            if (!TryResolveSelectedScene(selectableScenes, out selectedSceneInfo))
-            {
-                return null;
-            }
-
-            EnsureDIYSceneHydrated(selectedSceneInfo, false);
-            return selectedSceneInfo;
+            return null;
         }
 
         private static List<SceneInfo> GetSelectableScenes()
@@ -441,65 +462,6 @@ namespace OC2MenuManager
 
             cachedSceneSelectorMapRevision = selectableScenesRevision;
             cachedSceneSelectorMaxLength = maxLength;
-        }
-
-        private static string ResolveDesiredSceneName(List<SceneInfo> selectableScenes)
-        {
-            SceneInfo currentScene;
-            if (TryGetCurrentSceneInfo(out currentScene))
-            {
-                return currentScene.SceneName;
-            }
-
-            string selectedSceneName;
-            if (TryResolveSceneNameFromSelectorValue(selectableScenes, ServedDishTracker.selectedSceneName, out selectedSceneName))
-            {
-                return selectedSceneName;
-            }
-
-            if (!string.IsNullOrEmpty(preferredSceneName)
-                && selectableScenes.Any(scene => string.Equals(scene.SceneName, preferredSceneName, StringComparison.OrdinalIgnoreCase)))
-            {
-                return preferredSceneName;
-            }
-
-            return selectableScenes.Count > 0 ? selectableScenes[0].SceneName : string.Empty;
-        }
-
-        private static bool TryResolveSelectedScene(List<SceneInfo> selectableScenes, out SceneInfo selectedSceneInfo)
-        {
-            selectedSceneInfo = null;
-            if (selectableScenes == null || selectableScenes.Count == 0)
-            {
-                return false;
-            }
-
-            string selectedSceneName;
-            if (!TryResolveSceneNameFromSelectorValue(selectableScenes, ServedDishTracker.selectedSceneName, out selectedSceneName))
-            {
-                selectedSceneName = selectableScenes[0].SceneName;
-            }
-
-            ServedDishTracker.selectedSceneName = selectedSceneName;
-
-            for (int i = 0; i < selectableScenes.Count; i++)
-            {
-                SceneInfo scene = selectableScenes[i];
-                if (!string.Equals(scene.SceneName, selectedSceneName, StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                selectedSceneInfo = scene;
-                SceneInfo currentScene;
-                if (!TryGetCurrentSceneInfo(out currentScene) || !string.Equals(currentScene.SceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
-                {
-                    preferredSceneName = scene.SceneName;
-                }
-                return true;
-            }
-
-            return false;
         }
 
         private static bool TryResolveSceneNameFromSelectorValue(List<SceneInfo> selectableScenes, string selectorValue, out string sceneName)
@@ -598,7 +560,7 @@ namespace OC2MenuManager
 
         private static void DrawTrackingPanel(ConfigEntryBase entryObject)
         {
-            SceneInfo scene = SyncSceneSelectorConfigEntry();
+            SceneInfo scene = ResolveSceneSelectorSelection();
             bool isLockedToCurrentScene = IsLockedToCurrentScene();
 
             GUILayout.BeginVertical();
@@ -609,7 +571,7 @@ namespace OC2MenuManager
                 if (GUILayout.Button(Ui("刷新关卡列表", "Refresh Scenes")))
                 {
                     RefreshKnownScenes(true);
-                    SyncSceneSelectorConfigEntry();
+                    ResolveSceneSelectorSelection();
                 }
                 GUILayout.EndVertical();
                 return;
@@ -633,7 +595,7 @@ namespace OC2MenuManager
             if (GUILayout.Button(Ui("刷新", "Refresh"), GUILayout.MinWidth(42f), GUILayout.MaxWidth(52f), GUILayout.ExpandWidth(false)))
             {
                 RefreshKnownScenes(true);
-                scene = SyncSceneSelectorConfigEntry();
+                scene = ResolveSceneSelectorSelection();
                 EnsureDIYSceneHydrated(scene, true);
             }
             GUILayout.EndHorizontal();

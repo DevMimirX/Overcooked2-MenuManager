@@ -618,17 +618,131 @@ namespace OC2MenuManager.Infrastructure
         }
     }
 
-    internal static class RecipeExtensionPhasePolicy
+    /// <summary>Describes whether Recipe Extension supplied an authoritative round snapshot.</summary>
+    internal enum ManyRecipesSnapshotState
     {
-        internal static bool HasCompatibleRuntimeShape(int baseCandidateCount, int extensionCandidateCount, int cumulativeFrequencyCount)
+        Absent,
+        Disabled,
+        Ready,
+        ActiveUnavailable
+    }
+
+    /// <summary>
+    /// Owns cache, identity, runtime-shape, and No Menu safety decisions for the
+    /// reflection-only Recipe Extension snapshot shared by runtime consumers.
+    /// </summary>
+    internal static class ManyRecipesSnapshotPolicy
+    {
+        internal static bool IsProviderRegistryAvailable(int providerCount)
         {
-            return baseCandidateCount >= 0
-                && extensionCandidateCount > 0
-                && cumulativeFrequencyCount >= 0
-                && baseCandidateCount <= int.MaxValue - extensionCandidateCount
+            // The audited v1.1 plugin registers its providers during Awake, before
+            // dependent plugins are started. An enabled plugin with no providers is
+            // therefore an incomplete initialization, not an authoritative empty
+            // recipe snapshot.
+            return providerCount > 0;
+        }
+
+        internal static ManyRecipesSnapshotState Classify(
+            bool providerPresent,
+            bool contractValid,
+            bool enabled,
+            bool patchListAvailable,
+            bool entriesValid)
+        {
+            if (!providerPresent)
+            {
+                return ManyRecipesSnapshotState.Absent;
+            }
+
+            if (!contractValid)
+            {
+                return ManyRecipesSnapshotState.ActiveUnavailable;
+            }
+
+            if (!enabled)
+            {
+                return ManyRecipesSnapshotState.Disabled;
+            }
+
+            return patchListAvailable && entriesValid
+                ? ManyRecipesSnapshotState.Ready
+                : ManyRecipesSnapshotState.ActiveUnavailable;
+        }
+
+        internal static bool ShouldCache(ManyRecipesSnapshotState state)
+        {
+            return state != ManyRecipesSnapshotState.ActiveUnavailable;
+        }
+
+        internal static bool HasGeneratedEntries(ManyRecipesSnapshotState state, int extensionCandidateCount)
+        {
+            return state == ManyRecipesSnapshotState.Ready && extensionCandidateCount > 0;
+        }
+
+        internal static bool OrderedRecipeIdsMatch(IList<int> left, IList<int> right)
+        {
+            if (left == null || right == null || left.Count != right.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < left.Count; i++)
+            {
+                if (left[i] != right[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        internal static bool HasExactRuntimeShape(
+            ManyRecipesSnapshotState state,
+            int baseCandidateCount,
+            int extensionCandidateCount,
+            int cumulativeFrequencyCount)
+        {
+            if (state == ManyRecipesSnapshotState.ActiveUnavailable
+                || baseCandidateCount < 0
+                || extensionCandidateCount < 0
+                || cumulativeFrequencyCount < 0
+                || baseCandidateCount > int.MaxValue - extensionCandidateCount)
+            {
+                return false;
+            }
+
+            if (state == ManyRecipesSnapshotState.Absent || state == ManyRecipesSnapshotState.Disabled)
+            {
+                return extensionCandidateCount == 0 && baseCandidateCount == cumulativeFrequencyCount;
+            }
+
+            return state == ManyRecipesSnapshotState.Ready
                 && baseCandidateCount + extensionCandidateCount == cumulativeFrequencyCount;
         }
 
+        internal static bool MustDisableNoMenu(
+            ManyRecipesSnapshotState state,
+            int baseCandidateCount,
+            int extensionCandidateCount,
+            int cumulativeFrequencyCount)
+        {
+            if (state == ManyRecipesSnapshotState.Absent || state == ManyRecipesSnapshotState.Disabled)
+            {
+                return false;
+            }
+
+            return state != ManyRecipesSnapshotState.Ready
+                || !HasExactRuntimeShape(
+                    state,
+                    baseCandidateCount,
+                    extensionCandidateCount,
+                    cumulativeFrequencyCount);
+        }
+    }
+
+    internal static class RecipeExtensionPhasePolicy
+    {
         internal static void GetEntryWindow(string levelConfigName, int phaseIndex, bool allPhases, int entryCount, out int startIndex, out int endIndex)
         {
             startIndex = 0;

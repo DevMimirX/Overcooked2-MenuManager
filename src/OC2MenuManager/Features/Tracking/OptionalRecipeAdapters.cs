@@ -73,8 +73,12 @@ namespace OC2MenuManager
         private const string DIYManagerTypeName = "OC2DIYLevel.DIYLevelAssetBundleManager";
         private const string DIYRecipeHelperTypeName = "OC2DIYLevel.RecipeHelper";
         private const string ManyRecipesPluginTypeName = "OC2ManyRecipes.ManyRecipesPlugin";
+        private const string ManyRecipesSettingsTypeName = "OC2ManyRecipes.ManyRecipesSettings";
 
         private static readonly List<RecipeList.Entry> ManyRecipeEntriesCache = new List<RecipeList.Entry>();
+        private static readonly List<object> ManyRecipePatchIdentityBuffer = new List<object>();
+        private static readonly List<RecipeList.Entry[]> ManyRecipeEntryArrayIdentityBuffer = new List<RecipeList.Entry[]>();
+        private static readonly List<int> ManyRecipeEntryIdIdentityBuffer = new List<int>();
         private static readonly HashSet<string> DIYAcceptedSceneNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private static Type diyManagerType;
@@ -87,11 +91,14 @@ namespace OC2MenuManager
         private static bool diyActivationLogged;
 
         private static Type manyRecipesPluginType;
+        private static Type manyRecipesSettingsType;
         private static FieldInfo manyRecipePatchesField;
+        private static FieldInfo manyRecipesEnabledField;
         private static bool manyContractResolved;
         private static bool manyContractWarningLogged;
         private static bool manyActivationLogged;
         private static bool manyRecipeEntriesCacheValid;
+        private static ManyRecipesSnapshotState manyRecipesSnapshotState = ManyRecipesSnapshotState.Absent;
 
         internal static bool TryGetDIYLevels(List<DIYLevelDescriptor> destination, out DIYLevelCatalogReadResult result)
         {
@@ -354,37 +361,52 @@ namespace OC2MenuManager
             return true;
         }
 
-        internal static void AppendManyRecipeEntries(List<RecipeList.Entry> destination, string levelConfigName, int phaseIndex, bool allPhases)
+        internal static ManyRecipesSnapshotState AppendManyRecipeEntries(
+            List<RecipeList.Entry> destination,
+            string levelConfigName,
+            int phaseIndex,
+            bool allPhases)
         {
-            if (destination == null || !EnsureManyRecipeEntriesCache())
+            ManyRecipesSnapshotState state = EnsureManyRecipeEntriesCache();
+            if (destination == null || state != ManyRecipesSnapshotState.Ready)
             {
-                return;
+                return state;
             }
 
             AppendManyRecipeEntriesFromSnapshot(destination, ManyRecipeEntriesCache, levelConfigName, phaseIndex, allPhases);
+            return state;
         }
 
-        internal static bool TryGetManyRecipeEntries(List<RecipeList.Entry> destination)
+        internal static ManyRecipesSnapshotState TryGetManyRecipeEntries(List<RecipeList.Entry> destination)
         {
             if (destination == null)
             {
-                return false;
+                return ManyRecipesSnapshotState.ActiveUnavailable;
             }
 
             destination.Clear();
-            if (!EnsureManyRecipeEntriesCache())
+            ManyRecipesSnapshotState state = EnsureManyRecipeEntriesCache();
+            if (state == ManyRecipesSnapshotState.Ready)
             {
-                return false;
+                destination.AddRange(ManyRecipeEntriesCache);
             }
 
-            destination.AddRange(ManyRecipeEntriesCache);
-            return true;
+            return state;
+        }
+
+        internal static ManyRecipesSnapshotState GetManyRecipesSnapshotState()
+        {
+            return EnsureManyRecipeEntriesCache();
         }
 
         internal static void InvalidateManyRecipeEntries()
         {
             manyRecipeEntriesCacheValid = false;
+            manyRecipesSnapshotState = ManyRecipesSnapshotState.Absent;
             ManyRecipeEntriesCache.Clear();
+            ManyRecipePatchIdentityBuffer.Clear();
+            ManyRecipeEntryArrayIdentityBuffer.Clear();
+            ManyRecipeEntryIdIdentityBuffer.Clear();
         }
 
         internal static void AppendManyRecipeEntriesFromSnapshot(
@@ -484,41 +506,76 @@ namespace OC2MenuManager
             return oneParameterFallback;
         }
 
-        private static bool TryResolveManyRecipesContract()
+        private static ManyRecipesSnapshotState ResolveManyRecipesContract()
         {
             if (manyContractResolved)
             {
-                return true;
+                return ManyRecipesSnapshotState.Ready;
             }
 
             manyRecipesPluginType = AccessTools.TypeByName(ManyRecipesPluginTypeName);
             if (manyRecipesPluginType == null)
             {
-                return false;
+                return ManyRecipesSnapshotPolicy.Classify(false, false, false, false, false);
             }
 
+            manyRecipesSettingsType = AccessTools.TypeByName(ManyRecipesSettingsTypeName);
             manyRecipePatchesField = AccessTools.Field(manyRecipesPluginType, "recipePatches");
-            if (manyRecipePatchesField == null)
+            manyRecipesEnabledField = manyRecipesSettingsType != null
+                ? AccessTools.Field(manyRecipesSettingsType, "enabled")
+                : null;
+            bool contractValid = manyRecipesSettingsType != null
+                && manyRecipePatchesField != null
+                && manyRecipePatchesField.IsStatic
+                && typeof(IList).IsAssignableFrom(manyRecipePatchesField.FieldType)
+                && manyRecipesEnabledField != null
+                && manyRecipesEnabledField.IsStatic
+                && manyRecipesEnabledField.FieldType == typeof(bool);
+            if (!contractValid)
             {
-                if (!manyContractWarningLogged)
-                {
-                    manyContractWarningLogged = true;
-                    _MODEntry.LogWarning("[Compatibility] Recipe Extension was detected, but its recipePatches contract is unavailable. Integration is disabled.");
-                }
-
-                return false;
+                LogManyRecipesContractWarning(
+                    "Recipe Extension was detected, but its enabled/recipePatches contract is unavailable. Optional integration will retry and remain fail-closed.");
+                return ManyRecipesSnapshotPolicy.Classify(true, false, false, false, false);
             }
 
             manyContractResolved = true;
-            return true;
+            return ManyRecipesSnapshotState.Ready;
         }
 
-        private static bool TryCollectManyRecipeEntries(List<RecipeList.Entry> destination)
+        private static ManyRecipesSnapshotState CollectManyRecipeEntries(List<RecipeList.Entry> destination)
         {
             destination.Clear();
-            if (!TryResolveManyRecipesContract())
+            ManyRecipePatchIdentityBuffer.Clear();
+            ManyRecipeEntryArrayIdentityBuffer.Clear();
+            ManyRecipeEntryIdIdentityBuffer.Clear();
+            ManyRecipesSnapshotState contractState = ResolveManyRecipesContract();
+            if (contractState != ManyRecipesSnapshotState.Ready)
             {
-                return false;
+                return contractState;
+            }
+
+            bool isEnabled;
+            try
+            {
+                object enabledValue = manyRecipesEnabledField.GetValue(null);
+                if (!(enabledValue is bool))
+                {
+                    LogManyRecipesContractWarning("Recipe Extension's enabled state did not contain a Boolean value.");
+                    return ManyRecipesSnapshotState.ActiveUnavailable;
+                }
+
+                isEnabled = (bool)enabledValue;
+            }
+            catch (Exception ex)
+            {
+                LogManyRecipesContractWarning(
+                    "Could not read Recipe Extension's enabled state: " + ex.GetType().Name + ": " + ex.Message);
+                return ManyRecipesSnapshotState.ActiveUnavailable;
+            }
+
+            if (!isEnabled)
+            {
+                return ManyRecipesSnapshotPolicy.Classify(true, true, false, false, false);
             }
 
             IList patches;
@@ -528,23 +585,163 @@ namespace OC2MenuManager
             }
             catch (Exception ex)
             {
-                if (!manyContractWarningLogged)
-                {
-                    manyContractWarningLogged = true;
-                    _MODEntry.LogWarning("[Compatibility] Could not read Recipe Extension entries: " + ex.GetType().Name + ": " + ex.Message);
-                }
-
-                return false;
+                LogManyRecipesContractWarning(
+                    "Could not read Recipe Extension entries: " + ex.GetType().Name + ": " + ex.Message);
+                return ManyRecipesSnapshotState.ActiveUnavailable;
             }
 
             if (patches == null)
             {
-                return true;
+                LogManyRecipesContractWarning("Recipe Extension is enabled, but recipePatches is unavailable.");
+                return ManyRecipesSnapshotState.ActiveUnavailable;
             }
 
-            for (int i = 0; i < patches.Count; i++)
+            int patchCount;
+            try
             {
-                Array entries = GetMemberValue(patches[i], "entries") as Array;
+                patchCount = patches.Count;
+            }
+            catch (Exception ex)
+            {
+                LogManyRecipesContractWarning(
+                    "Could not read Recipe Extension's provider count: " + ex.GetType().Name + ": " + ex.Message);
+                return ManyRecipesSnapshotState.ActiveUnavailable;
+            }
+
+            if (!ManyRecipesSnapshotPolicy.IsProviderRegistryAvailable(patchCount))
+            {
+                LogManyRecipesContractWarning(
+                    "Recipe Extension is enabled, but its provider registry is empty. Optional integration will retry after initialization completes.");
+                return ManyRecipesSnapshotState.ActiveUnavailable;
+            }
+
+            for (int i = 0; i < patchCount; i++)
+            {
+                object patch;
+                try
+                {
+                    patch = patches[i];
+                }
+                catch (Exception ex)
+                {
+                    destination.Clear();
+                    LogManyRecipesContractWarning(
+                        "Recipe Extension's provider list changed while it was read: " + ex.GetType().Name + ": " + ex.Message);
+                    return ManyRecipesSnapshotState.ActiveUnavailable;
+                }
+
+                object entriesValue;
+                if (patch == null || !TryGetMemberValueStrict(patch, "entries", out entriesValue))
+                {
+                    destination.Clear();
+                    LogManyRecipesContractWarning("Recipe Extension provider " + (i + 1) + " does not expose a readable entries array.");
+                    return ManyRecipesSnapshotState.ActiveUnavailable;
+                }
+
+                if (entriesValue == null)
+                {
+                    // Recipe categories not used by the current level intentionally publish null.
+                    ManyRecipePatchIdentityBuffer.Add(patch);
+                    ManyRecipeEntryArrayIdentityBuffer.Add(null);
+                    continue;
+                }
+
+                RecipeList.Entry[] entries = entriesValue as RecipeList.Entry[];
+                if (entries == null)
+                {
+                    destination.Clear();
+                    LogManyRecipesContractWarning("Recipe Extension provider " + (i + 1) + " exposed entries with an unexpected type.");
+                    return ManyRecipesSnapshotState.ActiveUnavailable;
+                }
+
+                ManyRecipePatchIdentityBuffer.Add(patch);
+                ManyRecipeEntryArrayIdentityBuffer.Add(entries);
+
+                for (int j = 0; j < entries.Length; j++)
+                {
+                    RecipeList.Entry entry = entries[j];
+
+                    if (entry == null || entry.m_order == null || entry.m_order.m_uID == 0)
+                    {
+                        destination.Clear();
+                        LogManyRecipesContractWarning(
+                            "Recipe Extension provider " + (i + 1) + " contains an invalid generated recipe entry at index " + j + ".");
+                        return ManyRecipesSnapshotState.ActiveUnavailable;
+                    }
+
+                    // Deliberately preserve source order and duplicate entries. The base
+                    // game balances frequencies per entry before probabilities aggregate by ID.
+                    destination.Add(entry);
+                    ManyRecipeEntryIdIdentityBuffer.Add(entry.m_order.m_uID);
+                }
+            }
+
+            try
+            {
+                if (patches.Count != patchCount
+                    || !IsManyRecipesSnapshotUnchanged(patches, patchCount, destination))
+                {
+                    destination.Clear();
+                    LogManyRecipesContractWarning("Recipe Extension's provider entries changed while they were read.");
+                    return ManyRecipesSnapshotState.ActiveUnavailable;
+                }
+            }
+            catch (Exception ex)
+            {
+                destination.Clear();
+                LogManyRecipesContractWarning(
+                    "Could not verify Recipe Extension's provider snapshot: " + ex.GetType().Name + ": " + ex.Message);
+                return ManyRecipesSnapshotState.ActiveUnavailable;
+            }
+
+            if (!manyActivationLogged)
+            {
+                manyActivationLogged = true;
+                _MODEntry.LogInfo("[Compatibility] Recipe Extension adapter ready; snapshotted "
+                    + destination.Count + " generated entry/entries for the current level.");
+            }
+
+            ManyRecipePatchIdentityBuffer.Clear();
+            ManyRecipeEntryArrayIdentityBuffer.Clear();
+            ManyRecipeEntryIdIdentityBuffer.Clear();
+            return ManyRecipesSnapshotPolicy.Classify(true, true, true, true, true);
+        }
+
+        private static bool IsManyRecipesSnapshotUnchanged(
+            IList patches,
+            int patchCount,
+            List<RecipeList.Entry> orderedEntries)
+        {
+            if (patches == null
+                || orderedEntries == null
+                || ManyRecipePatchIdentityBuffer.Count != patchCount
+                || ManyRecipeEntryArrayIdentityBuffer.Count != patchCount
+                || ManyRecipeEntryIdIdentityBuffer.Count != orderedEntries.Count)
+            {
+                return false;
+            }
+
+            int entryIndex = 0;
+            for (int i = 0; i < patchCount; i++)
+            {
+                object patch = patches[i];
+                if (!ReferenceEquals(patch, ManyRecipePatchIdentityBuffer[i]))
+                {
+                    return false;
+                }
+
+                object entriesValue;
+                if (!TryGetMemberValueStrict(patch, "entries", out entriesValue))
+                {
+                    return false;
+                }
+
+                RecipeList.Entry[] entries = entriesValue as RecipeList.Entry[];
+                if (!ReferenceEquals(entries, ManyRecipeEntryArrayIdentityBuffer[i]))
+                {
+                    return false;
+                }
+
                 if (entries == null)
                 {
                     continue;
@@ -552,38 +749,42 @@ namespace OC2MenuManager
 
                 for (int j = 0; j < entries.Length; j++)
                 {
-                    RecipeList.Entry entry = entries.GetValue(j) as RecipeList.Entry;
-                    if (entry != null && entry.m_order != null)
+                    if (entryIndex >= orderedEntries.Count
+                        || !ReferenceEquals(entries[j], orderedEntries[entryIndex])
+                        || entries[j] == null
+                        || entries[j].m_order == null
+                        || entries[j].m_order.m_uID != ManyRecipeEntryIdIdentityBuffer[entryIndex])
                     {
-                        destination.Add(entry);
+                        return false;
                     }
+
+                    entryIndex++;
                 }
             }
 
-            if (destination.Count > 0 && !manyActivationLogged)
-            {
-                manyActivationLogged = true;
-                _MODEntry.LogInfo("[Compatibility] Recipe Extension adapter active; merged " + destination.Count + " generated entry/entries for the current level.");
-            }
-
-            return true;
+            return entryIndex == orderedEntries.Count;
         }
 
-        private static bool EnsureManyRecipeEntriesCache()
+        private static ManyRecipesSnapshotState EnsureManyRecipeEntriesCache()
         {
             if (manyRecipeEntriesCacheValid)
             {
-                return true;
+                return manyRecipesSnapshotState;
             }
 
             ManyRecipeEntriesCache.Clear();
-            if (!TryCollectManyRecipeEntries(ManyRecipeEntriesCache))
+            manyRecipesSnapshotState = CollectManyRecipeEntries(ManyRecipeEntriesCache);
+            if (!ManyRecipesSnapshotPolicy.ShouldCache(manyRecipesSnapshotState))
             {
-                return false;
+                ManyRecipeEntriesCache.Clear();
+                ManyRecipePatchIdentityBuffer.Clear();
+                ManyRecipeEntryArrayIdentityBuffer.Clear();
+                ManyRecipeEntryIdIdentityBuffer.Clear();
+                return manyRecipesSnapshotState;
             }
 
             manyRecipeEntriesCacheValid = true;
-            return true;
+            return manyRecipesSnapshotState;
         }
 
         private static bool TryReadCustomDIYRecipe(object recipeSource, out DIYRecipeDescriptor descriptor)
@@ -685,6 +886,50 @@ namespace OC2MenuManager
             }
         }
 
+        private static bool TryGetMemberValueStrict(object instance, string memberName, out object value)
+        {
+            value = null;
+            if (instance == null || string.IsNullOrEmpty(memberName))
+            {
+                return false;
+            }
+
+            Type type = instance.GetType();
+            FieldInfo field = AccessTools.Field(type, memberName);
+            if (field != null && !field.IsStatic)
+            {
+                try
+                {
+                    value = field.GetValue(instance);
+                    return true;
+                }
+                catch
+                {
+                    return false;
+                }
+            }
+
+            PropertyInfo property = AccessTools.Property(type, memberName);
+            if (property == null
+                || !property.CanRead
+                || property.GetGetMethod(true) == null
+                || property.GetGetMethod(true).IsStatic
+                || property.GetIndexParameters().Length != 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                value = property.GetValue(instance, null);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static string GetStringMember(object instance, string memberName)
         {
             return GetMemberValue(instance, memberName) as string;
@@ -723,6 +968,17 @@ namespace OC2MenuManager
             }
 
             diyContractWarningLogged = true;
+            _MODEntry.LogWarning("[Compatibility] " + message);
+        }
+
+        private static void LogManyRecipesContractWarning(string message)
+        {
+            if (manyContractWarningLogged || string.IsNullOrEmpty(message))
+            {
+                return;
+            }
+
+            manyContractWarningLogged = true;
             _MODEntry.LogWarning("[Compatibility] " + message);
         }
     }

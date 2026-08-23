@@ -123,6 +123,115 @@ public sealed class RuntimePolicyTests
             CarnivalRecipeSelectionPolicy.HasCompatibleCandidateShape(baseCount, extensionCount, frequencyCount));
     }
 
+    [Theory]
+    [InlineData(false, false, false, false, false, (int)ManyRecipesSnapshotState.Absent)]
+    [InlineData(true, true, false, false, false, (int)ManyRecipesSnapshotState.Disabled)]
+    [InlineData(true, true, true, true, true, (int)ManyRecipesSnapshotState.Ready)]
+    [InlineData(true, false, false, false, false, (int)ManyRecipesSnapshotState.ActiveUnavailable)]
+    [InlineData(true, true, true, false, true, (int)ManyRecipesSnapshotState.ActiveUnavailable)]
+    [InlineData(true, true, true, true, false, (int)ManyRecipesSnapshotState.ActiveUnavailable)]
+    public void ManyRecipesAdapterStateTransitionsFailClosed(
+        bool providerPresent,
+        bool contractValid,
+        bool enabled,
+        bool patchListAvailable,
+        bool entriesValid,
+        int expected)
+    {
+        Assert.Equal(
+            (ManyRecipesSnapshotState)expected,
+            ManyRecipesSnapshotPolicy.Classify(
+                providerPresent,
+                contractValid,
+                enabled,
+                patchListAvailable,
+                entriesValid));
+    }
+
+    [Fact]
+    public void FailedManyRecipesSnapshotsRemainRetryable()
+    {
+        Assert.True(ManyRecipesSnapshotPolicy.ShouldCache(ManyRecipesSnapshotState.Absent));
+        Assert.True(ManyRecipesSnapshotPolicy.ShouldCache(ManyRecipesSnapshotState.Disabled));
+        Assert.True(ManyRecipesSnapshotPolicy.ShouldCache(ManyRecipesSnapshotState.Ready));
+        Assert.False(ManyRecipesSnapshotPolicy.ShouldCache(ManyRecipesSnapshotState.ActiveUnavailable));
+    }
+
+    [Theory]
+    [InlineData(-1, false)]
+    [InlineData(0, false)]
+    [InlineData(1, true)]
+    [InlineData(21, true)]
+    public void EnabledManyRecipesRequiresAnInitializedProviderRegistry(int providerCount, bool expected)
+    {
+        Assert.Equal(expected, ManyRecipesSnapshotPolicy.IsProviderRegistryAvailable(providerCount));
+    }
+
+    [Theory]
+    [InlineData((int)ManyRecipesSnapshotState.Absent, 9, 0, 9, true)]
+    [InlineData((int)ManyRecipesSnapshotState.Disabled, 9, 0, 9, true)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, 9, 0, 9, true)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, 9, 3, 12, true)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, 9, 3, 11, false)]
+    [InlineData((int)ManyRecipesSnapshotState.Absent, 9, 3, 12, false)]
+    [InlineData((int)ManyRecipesSnapshotState.ActiveUnavailable, 9, 0, 9, false)]
+    [InlineData(99, 9, 0, 9, false)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, -1, 3, 2, false)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, 9, -1, 8, false)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, 9, 3, -1, false)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, int.MaxValue, 1, int.MaxValue, false)]
+    public void ManyRecipesRuntimeCandidatesRequireTheStateAppropriateExactShape(
+        int state,
+        int baseCount,
+        int extensionCount,
+        int frequencyCount,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            ManyRecipesSnapshotPolicy.HasExactRuntimeShape(
+                (ManyRecipesSnapshotState)state,
+                baseCount,
+                extensionCount,
+                frequencyCount));
+    }
+
+    [Fact]
+    public void ManyRecipesSnapshotIdentityPreservesOrderAndDuplicateEntries()
+    {
+        var orderedDuplicates = new[] { 8881400, 8881400, 8881401 };
+
+        Assert.True(ManyRecipesSnapshotPolicy.OrderedRecipeIdsMatch(
+            orderedDuplicates,
+            new[] { 8881400, 8881400, 8881401 }));
+        Assert.False(ManyRecipesSnapshotPolicy.OrderedRecipeIdsMatch(
+            orderedDuplicates,
+            new[] { 8881400, 8881401, 8881400 }));
+        Assert.Equal(2, new HashSet<int>(orderedDuplicates).Count);
+    }
+
+    [Theory]
+    [InlineData((int)ManyRecipesSnapshotState.ActiveUnavailable, 9, 0, 9, true)]
+    [InlineData(99, 9, 0, 9, true)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, 9, 3, 11, true)]
+    [InlineData((int)ManyRecipesSnapshotState.Ready, 9, 3, 12, false)]
+    [InlineData((int)ManyRecipesSnapshotState.Disabled, 9, 0, 8, false)]
+    public void NoMenuFailsClosedOnlyForAnUnsafeActiveManyRecipesSnapshot(
+        int state,
+        int baseCount,
+        int extensionCount,
+        int frequencyCount,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            ManyRecipesSnapshotPolicy.MustDisableNoMenu(
+                (ManyRecipesSnapshotState)state,
+                baseCount,
+                extensionCount,
+                frequencyCount));
+    }
+
     [Fact]
     public void CarnivalOpeningRulesRestrictOnlyTheOriginalBaseRecipes()
     {
@@ -249,27 +358,6 @@ public sealed class RuntimePolicyTests
         AssertWindow("1_6_Dynamic_Lvl_01_variant", 1, false, 153, 5, 153);
         AssertWindow("1_6_Dynamic_Lvl_01_variant", 2, false, 153, 0, 150);
         AssertWindow("1_6_Dynamic_Lvl_01_variant", 0, true, 153, 0, 153);
-    }
-
-    [Theory]
-    [InlineData(5, 153, 158, true)]
-    [InlineData(8, 149, 157, true)]
-    [InlineData(6, 153, 6, false)]
-    [InlineData(6, 153, 158, false)]
-    [InlineData(6, 0, 6, false)]
-    [InlineData(-1, 153, 152, false)]
-    [InlineData(6, -1, 5, false)]
-    [InlineData(6, 153, -1, false)]
-    [InlineData(int.MaxValue, 1, int.MaxValue, false)]
-    public void NoMenuAddsRecipeExtensionCandidatesOnlyForTheAuthoritativeRuntimeShape(
-        int baseCount,
-        int extensionCount,
-        int cumulativeCount,
-        bool expected)
-    {
-        Assert.Equal(
-            expected,
-            RecipeExtensionPhasePolicy.HasCompatibleRuntimeShape(baseCount, extensionCount, cumulativeCount));
     }
 
     [Fact]
@@ -536,11 +624,13 @@ public sealed class RuntimePolicyTests
     [Fact]
     public void SelectionDefaultsToAllButHonorsExplicitSceneSubsets()
     {
-        var selected = new HashSet<int> { 42 };
-        Assert.True(TrackingSelectionPolicy.IsTracked(false, null!, 999));
-        Assert.True(TrackingSelectionPolicy.IsTracked(true, selected, 42));
-        Assert.False(TrackingSelectionPolicy.IsTracked(true, selected, 999));
-        Assert.False(TrackingSelectionPolicy.IsTracked(true, null!, 42));
+        const int existingRecipeId = 42;
+        const int newlyGeneratedRecipeId = 8881401;
+        var selected = new HashSet<int> { existingRecipeId };
+        Assert.True(TrackingSelectionPolicy.IsTracked(false, null!, newlyGeneratedRecipeId));
+        Assert.True(TrackingSelectionPolicy.IsTracked(true, selected, existingRecipeId));
+        Assert.False(TrackingSelectionPolicy.IsTracked(true, selected, newlyGeneratedRecipeId));
+        Assert.False(TrackingSelectionPolicy.IsTracked(true, null!, existingRecipeId));
     }
 
     [Theory]

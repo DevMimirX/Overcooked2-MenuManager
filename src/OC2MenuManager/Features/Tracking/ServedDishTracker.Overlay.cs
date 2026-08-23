@@ -136,7 +136,7 @@ namespace OC2MenuManager
                         && row.OnMenu <= 0
                         && (!showPrepared || row.Prepared <= 0);
                     builder.Append(GetOverlayTodoPrefix(row, showPrepared)).Append(' ');
-                    builder.Append(GetOverlayDishNameText(row, showPrepared));
+                    builder.Append(GetOverlayDishNameText(scene, row, showPrepared));
                     builder.Append("  |  ");
                     builder.Append(WrapRichValue(row.Served.ToString(), GetOverlayServedValueColor(row, showPrepared)));
                     builder.Append("  |  ");
@@ -315,7 +315,11 @@ namespace OC2MenuManager
                 return servedCompare;
             }
 
-            return string.Compare(GetRecipeDisplayName(a.Recipe), GetRecipeDisplayName(b.Recipe), StringComparison.OrdinalIgnoreCase);
+            int nameCompare = string.Compare(
+                GetRecipeDisplayName(a.Recipe),
+                GetRecipeDisplayName(b.Recipe),
+                StringComparison.OrdinalIgnoreCase);
+            return nameCompare != 0 ? nameCompare : a.Recipe.Id.CompareTo(b.Recipe.Id);
         }
 
         private static int GetOverlayRowBucket(OverlayRow row, bool showPrepared)
@@ -494,23 +498,27 @@ namespace OC2MenuManager
                 return null;
             }
 
-            if (baseEntries.Length == cumulativeFrequencies.Length)
-            {
-                return baseEntries;
-            }
-
             ProbabilityExtensionEntriesBuffer.Clear();
             string levelConfigName = scene != null && scene.RuntimeLevelConfig != null
                 ? scene.RuntimeLevelConfig.name
                 : (scene != null ? scene.LevelConfigName : string.Empty);
-            OptionalRecipeAdapters.AppendManyRecipeEntries(
+            ManyRecipesSnapshotState extensionState = OptionalRecipeAdapters.AppendManyRecipeEntries(
                 ProbabilityExtensionEntriesBuffer,
                 levelConfigName,
                 phaseIndex,
                 false);
-            if (baseEntries.Length + ProbabilityExtensionEntriesBuffer.Count != cumulativeFrequencies.Length)
+            if (!ManyRecipesSnapshotPolicy.HasExactRuntimeShape(
+                extensionState,
+                baseEntries.Length,
+                ProbabilityExtensionEntriesBuffer.Count,
+                cumulativeFrequencies.Length))
             {
                 return null;
+            }
+
+            if (ProbabilityExtensionEntriesBuffer.Count == 0)
+            {
+                return baseEntries;
             }
 
             if (ProbabilityEntriesBuffer.Length != cumulativeFrequencies.Length)
@@ -632,6 +640,16 @@ namespace OC2MenuManager
                 return false;
             }
 
+            // A failed optional-provider read is retryable, but it is never safe to
+            // fabricate a base-only probability while the provider may be active.
+            ManyRecipesSnapshotState extensionState = OptionalRecipeAdapters.GetManyRecipesSnapshotState();
+            if (extensionState == ManyRecipesSnapshotState.ActiveUnavailable
+                || scene == null
+                || scene.ManyRecipesState != extensionState)
+            {
+                return false;
+            }
+
             KitchenLevelConfigBase kitchenLevelConfig = scene.RuntimeLevelConfig as KitchenLevelConfigBase;
             RoundData roundData = kitchenLevelConfig != null ? kitchenLevelConfig.GetRoundData() as RoundData : null;
             if (roundData == null
@@ -702,7 +720,10 @@ namespace OC2MenuManager
                 ReconstructableRecipeIdsBuffer);
             if (!ProbabilityReconstructionPolicy.CanUseRandomBaseEntries(
                 run.ReconstructionComplete,
-                scene.ExtensionRecipeIds.Count > 0,
+                scene.ExtensionRecipeIds.Count > 0
+                    || ManyRecipesSnapshotPolicy.HasGeneratedEntries(
+                        scene.ManyRecipesState,
+                        scene.ManyRecipesOrderedEntryIds.Count),
                 baseRecipeIdsDistinct))
             {
                 return false;
@@ -887,9 +908,12 @@ namespace OC2MenuManager
             return row.Probability > 0d ? "[ - ]" : "[ x ]";
         }
 
-        private static string GetOverlayDishNameText(OverlayRow row, bool showPrepared)
+        private static string GetOverlayDishNameText(SceneInfo scene, OverlayRow row, bool showPrepared)
         {
-            string name = TruncateWithEllipsis(GetRecipeDisplayName(row.Recipe), GetMaxOverlayDishDisplayLength());
+            string name = GetOverlayRecipeDisplayName(
+                scene,
+                row.Recipe,
+                GetMaxOverlayDishDisplayLength());
             if (showPrepared)
             {
                 if (row.Prepared > 0)
@@ -904,6 +928,35 @@ namespace OC2MenuManager
             }
 
             return name;
+        }
+
+        private static string GetOverlayRecipeDisplayName(SceneInfo scene, RecipeInfo recipe, int maximumLength)
+        {
+            if (recipe == null)
+            {
+                return string.Empty;
+            }
+
+            string displayName = GetRecipeDisplayName(recipe);
+            if (scene == null || string.IsNullOrEmpty(displayName))
+            {
+                return TruncateWithEllipsis(displayName, maximumLength);
+            }
+
+            for (int i = 0; i < scene.OrderedRecipes.Count; i++)
+            {
+                RecipeInfo other = scene.OrderedRecipes[i];
+                if (other != null
+                    && other.Id != recipe.Id
+                    && string.Equals(GetRecipeDisplayName(other), displayName, StringComparison.OrdinalIgnoreCase))
+                {
+                    string idSuffix = " [" + recipe.Id + "]";
+                    int nameLength = Math.Max(1, maximumLength - idSuffix.Length);
+                    return TruncateWithEllipsis(displayName, nameLength) + idSuffix;
+                }
+            }
+
+            return TruncateWithEllipsis(displayName, maximumLength);
         }
 
         private static int GetMaxDishSelectorDisplayLength()

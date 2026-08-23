@@ -221,6 +221,19 @@ namespace OC2MenuManager
                 || settingsWindowVisible
                 || hasRuntimeState;
             bool inActiveRound = needsRoundState && IsInActiveRound();
+            if (inActiveRound && (runtimeEnabled || settingsWindowVisible) && !NoMenuMode.IsActiveForRound)
+            {
+                try
+                {
+                    RetryManyRecipesCatalogIfNeeded(true);
+                }
+                catch (Exception ex)
+                {
+                    nextManyRecipesCatalogRetryFrame = Time.frameCount + ManyRecipesCatalogRetryIntervalFrames;
+                    LogTrackingHookFailure("retrying the Recipe Extension catalog", ex);
+                }
+            }
+
             bool shouldTintMenuTickets = IsMenuTicketTintEnabled();
             if (shouldTintMenuTickets != lastMenuTicketTintEnabled)
             {

@@ -64,6 +64,7 @@ namespace OC2MenuManager
         private const int SceneRefreshIntervalOutOfRound = 120;
         private const int DiscoveryFlushIntervalFrames = 900;
         private const int ControllerLookupRetryIntervalFrames = 120;
+        private const int ManyRecipesCatalogRetryIntervalFrames = 120;
         private const int OverlayRefreshIntervalFrames = 24;
         private const int PreparedSourceRefreshIntervalFrames = 45;
         private const int MaxPreparedSourceRefreshesPerBatch = 1;
@@ -103,6 +104,7 @@ namespace OC2MenuManager
         private static readonly List<DIYRecipeDescriptor> DIYRecipeDescriptorsBuffer = new List<DIYRecipeDescriptor>();
         private static readonly List<RecipeList.Entry> RuntimeRecipeEntriesBuffer = new List<RecipeList.Entry>();
         private static readonly List<RecipeList.Entry> RuntimePhaseRecipeEntriesBuffer = new List<RecipeList.Entry>();
+        private static readonly List<int> RuntimeOrderedRecipeIdsBuffer = new List<int>();
         private static readonly HashSet<int> RuntimeRecipeIdsBuffer = new HashSet<int>();
         private static readonly List<int> StaleRecipeIdsBuffer = new List<int>();
         private static readonly List<SceneDirectoryData.SceneDirectoryEntry> AvailableSceneEntriesBuffer = new List<SceneDirectoryData.SceneDirectoryEntry>();
@@ -217,14 +219,14 @@ namespace OC2MenuManager
         private static string selectionFilePath;
         private static int nextSceneRefreshFrame;
         private static int nextDIYSceneRefreshFrame;
+        private static int nextManyRecipesCatalogRetryFrame;
         private static int idScanSceneCount;
         private static int idConflictCount;
         private static string idConflictSample = string.Empty;
         private static string lastIdScanLog = string.Empty;
         private static string lastConfigSyncError = string.Empty;
         private static string lastDIYCatalogStatusSignature = string.Empty;
-        private static string preferredSceneName = string.Empty;
-        private static string selectedSceneName = string.Empty;
+        private static string configuredSceneName = string.Empty;
         private static string sceneSearchText = string.Empty;
         private static string cachedSceneSearchQuery = string.Empty;
         private static string diyCatalogDetail = string.Empty;
@@ -235,7 +237,8 @@ namespace OC2MenuManager
         private static int selectableDIYSceneCount;
         private static int diyCatalogAcceptedSceneCount;
         private static int diyCatalogRejectedEntryCount;
-        private static int sceneDropdownKeyboardIndex = -1;
+        private static string sceneDropdownKeyboardSceneName = string.Empty;
+        private static bool sceneDropdownRetargetFirstResult;
         private static int cachedSelectableKnownScenesRevision = -1;
         private static bool cachedSelectableLockedToRound;
         private static string cachedSelectableCurrentSceneName = string.Empty;
@@ -318,7 +321,7 @@ namespace OC2MenuManager
         private static bool settingsWindowVisible;
         private static bool sceneDropdownExpanded;
         private static bool sceneSearchFocusRequested;
-        private static bool sceneDropdownScrollToKeyboard;
+        private static SceneDropdownScrollRequest sceneDropdownScrollRequest;
         private static bool diyCatalogHasSnapshot;
         private static bool diyCatalogUsingRetainedSnapshot;
         private static bool diyCatalogStatusHadIssue;
@@ -334,8 +337,11 @@ namespace OC2MenuManager
         private static string preparedSourceSceneName = string.Empty;
         private static string preparedCandidateSceneName = string.Empty;
         private static Rect settingsWindowRect = new Rect(140f, 90f, SettingsWindowDefaultWidth, SettingsWindowDefaultHeight);
+        private static Rect sceneDropdownScreenRect;
         private static Vector2 settingsWindowScrollPosition = Vector2.zero;
         private static Vector2 sceneDropdownScrollPosition = Vector2.zero;
+        private static float pendingSceneDropdownWheelDelta;
+        private static bool sceneDropdownScreenRectValid;
         private static bool preparedCandidateRecipeIdsDirty = true;
         private static int overlayRowsVersion;
 

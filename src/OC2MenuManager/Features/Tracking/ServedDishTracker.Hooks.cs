@@ -36,6 +36,19 @@ namespace OC2MenuManager
             TryResetRoundRuntimeState("return to start screen");
         }
 
+        [HarmonyPatch(typeof(GameUtils), "LoadScene", new Type[] { typeof(string), typeof(UnityEngine.SceneManagement.LoadSceneMode) })]
+        [HarmonyPrefix]
+        private static void GameUtils_LoadScene_Tracker_Prefix(UnityEngine.SceneManagement.LoadSceneMode mode)
+        {
+            // Build 20236421 also performs full scene replacements directly through
+            // GameUtils when NetworkUtils disables the loading screen. Keep additive
+            // InGameMenu loads intact while clearing round-owned state on replacements.
+            if (mode == UnityEngine.SceneManagement.LoadSceneMode.Single)
+            {
+                TryResetRoundRuntimeState("direct scene load");
+            }
+        }
+
         private static void TryResetRoundRuntimeState(string reason)
         {
             try
@@ -56,6 +69,7 @@ namespace OC2MenuManager
             ReconstructionReadyTeams.Clear();
             AuthoritativeOrderControllersByTeam.Clear();
             OptionalRecipeAdapters.InvalidateManyRecipeEntries();
+            nextManyRecipesCatalogRetryFrame = 0;
             InvalidateProbabilityMap();
             cachedClientFlowController = null;
             cachedKitchenFlowController = null;

@@ -317,6 +317,18 @@ namespace OC2MenuManager
         }
 
         [HarmonyPrefix]
+        [HarmonyPatch(typeof(GameUtils), "LoadScene", new[] { typeof(string), typeof(UnityEngine.SceneManagement.LoadSceneMode) })]
+        private static void GameUtils_LoadScene_NoMenu_Prefix(UnityEngine.SceneManagement.LoadSceneMode mode)
+        {
+            // NetworkUtils can bypass LoadingScreenFlow when a transition does not
+            // request a loading screen. Additive UI scenes must not end the round.
+            if (mode == UnityEngine.SceneManagement.LoadSceneMode.Single)
+            {
+                TryResetRoundState(true, "direct scene load");
+            }
+        }
+
+        [HarmonyPrefix]
         [HarmonyPatch(typeof(ServerKitchenFlowControllerBase), "OnFoodDelivered")]
         private static void ServerKitchenFlowControllerBase_OnFoodDelivered_Prefix(
             ServerKitchenFlowControllerBase __instance,
@@ -952,13 +964,27 @@ namespace OC2MenuManager
             }
 
             NoMenuExtensionEntriesBuffer.Clear();
-            ServedDishTracker.AppendRecipeExtensionEntries(
+            ManyRecipesSnapshotState extensionState = ServedDishTracker.AppendRecipeExtensionEntries(
                 NoMenuExtensionEntriesBuffer,
                 levelConfig,
                 dynamicRoundData == null,
                 Math.Max(0, phaseIndex));
             int cumulativeCandidateCount = GetRuntimeCandidateCount(orderController);
-            if (RecipeExtensionPhasePolicy.HasCompatibleRuntimeShape(
+            if (ManyRecipesSnapshotPolicy.MustDisableNoMenu(
+                extensionState,
+                baseCandidateCount,
+                NoMenuExtensionEntriesBuffer.Count,
+                cumulativeCandidateCount))
+            {
+                NoMenuRecipeEntriesBuffer.Clear();
+                NoMenuRecipeIdsBuffer.Clear();
+                NoMenuExtensionEntriesBuffer.Clear();
+                DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
+                return NoMenuRecipeEntriesBuffer;
+            }
+
+            if (ManyRecipesSnapshotPolicy.HasExactRuntimeShape(
+                extensionState,
                 baseCandidateCount,
                 NoMenuExtensionEntriesBuffer.Count,
                 cumulativeCandidateCount))

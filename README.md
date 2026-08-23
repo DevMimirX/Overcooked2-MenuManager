@@ -27,7 +27,7 @@ User guides:
 - `tools`: build, dependency-audit, version, and packaging scripts
 - `.github/workflows`: pull-request CI and tag-only releases
 
-The optional OC2DIYLevel and Recipe Extension integrations use audited soft-dependency metadata plus guarded reflection. Recipe Extension's generated pool, six-order option, prepared containers, No Menu behavior, and Carnival weighting are supported. Their absence is a supported no-op, and neither optional DLL becomes a runtime assembly dependency.
+The optional OC2DIYLevel and Recipe Extension integrations use audited soft-dependency metadata plus guarded reflection. Recipe Extension's ordered generated pool, duplicate-entry balancing, six-order option, prepared containers, No Menu behavior, and Carnival weighting are supported. Generated dishes are merged after round synchronization without changing explicit saved subsets. An absent or disabled provider is a supported no-op; an unreadable active snapshot makes only dependent probabilities/guesses and No Menu fail closed. Neither optional DLL becomes a runtime assembly dependency.
 
 Runtime work is event-driven: team probability/overlay caches are invalidated by order, phase, catalog, or rule changes; prepared maintenance sleeps between queued callbacks and staged recovery; and recipe-heavy compatibility paths reuse their working buffers.
 
@@ -41,9 +41,9 @@ Run from PowerShell:
 
 The script restores the .NET Framework reference assemblies, builds the plugin, runs unit tests, validates the assembly dependency allowlist, and creates:
 
-- `artifacts/Overcooked2-MenuManager-v1.1.2.zip`
-- `artifacts/Overcooked2-MenuManager-v1.1.2-symbols.zip`
-- `artifacts/Overcooked2-MenuManager-v1.1.2-SHA256SUMS.txt`
+- `artifacts/Overcooked2-MenuManager-v1.1.3.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.3-symbols.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.3-SHA256SUMS.txt`
 
 All entries under `third_party/refs` are marked non-copy-local and are excluded from packages. To audit the target game build without committing its full DLL, run:
 
@@ -55,4 +55,4 @@ See [the reference provenance note](third_party/README.md) and [the runtime smok
 
 ## Releases
 
-Pushes and pull requests run CI without publishing a release. A tag must exactly match `PluginMetadata.Version`—currently `v1.1.2`—before the release workflow will publish the two validated zip files and their SHA256 checksum manifest.
+Pushes and pull requests run CI without publishing a release. A tag must exactly match `PluginMetadata.Version`—currently `v1.1.3`—before the release workflow will publish the two validated zip files and their SHA256 checksum manifest.

@@ -36,7 +36,10 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 1. Open the inline selector with the full base-game and 46-scene DIY catalog; verify it uses about 55% of the settings-window height and remains bounded between 160 and 420 pixels.
 2. Verify the result count, Clear, Refresh, mouse wheel, Up/Down, Page Up/Down, Home/End, Enter, Escape, and single-click selection behaviors.
 3. Confirm the current/highlighted item scrolls into view, the search persists between scene selections, and closing the settings window clears it.
-4. Test a 1696x349 or equivalent short viewport. Verify the settings window is fully clamped on-screen, its outer content remains scrollable, and the scene list remains usable.
+4. Scroll away from the selected scene and keep the dropdown open for at least three 120-frame catalog polls. Verify mouse-wheel and scrollbar positions do not jump, and that wheel input over the scene list does not move the outer settings view; press Refresh and verify the position is preserved or only clamped if results shrink.
+5. Select `s_rw_5`, play it, then finish or leave the round. Select another DIY and a base-game scene and verify each choice and dish panel survive repeated catalog polls. During an active round, verify the selector remains locked and restores the last explicit selection afterward.
+6. Change a search while scrolled and verify it starts at the first result. Enter only spaces, scroll away, press Clear, and verify both the list and keyboard target return to the first result. Reorder catalog entries in a disposable provider profile and verify the keyboard target follows its scene ID.
+7. Test a 1696x349 or equivalent short viewport. Verify the settings window is fully clamped on-screen, its outer content remains scrollable, and the scene list remains usable.
 
 ## Recipe Extension and large pools
 
@@ -52,6 +55,11 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 10. Disable Menu Manager history tracking while keeping Recipe Extension enabled. Fill the available real-order slots and verify every incoming real ticket still receives capacity and removes normally.
 11. On `Day_3_4`, test Good Menu alone and Good Menu plus Good Cake. Verify generated recipes remain eligible, opening restrictions affect only the original Carnival indices, and forced-cake checkpoints select the original cake entries without corrupting extension frequencies.
 12. Enable the fixed/TAS Carnival menu and verify its exact base-recipe sequence still takes precedence over Recipe Extension.
+13. Verify generated dishes appear automatically in both `F6` and the in-round overlay after server/client synchronization, without pressing Refresh. Confirm identical display names with different IDs remain separate and show their IDs.
+14. With no saved subset for a scene, start a round and verify all newly generated IDs are tracked. Save an explicit subset, regenerate a different pool, and verify newly discovered IDs are unchecked; re-enable a previously disabled pool and verify its saved IDs return unchanged.
+15. In a disposable copy of Recipe Extension, simulate a null or empty `recipePatches` list, a null provider object, an invalid non-null `entries` array, and a list that changes during collection. Verify each active failure logs once, remains retryable, exposes no partial rows, renders probability as `—`, suppresses guesses, and disables No Menu for that round. Let a transient failure recover while the round remains active and verify the catalog/probabilities appear after the bounded retry. Confirm null arrays for unused categories remain valid.
+16. In private online, enable Recipe Extension on both clients and verify generated orders are tracked; ambiguous remote probability remains `—`. In public online, verify Recipe Extension's own disabled state produces no generated rows.
+17. Enter Horde with both mods enabled. Verify Menu Manager creates no tracking overlay or No Menu state, throws no compatibility exception, and does not alter Recipe Extension's Horde behavior.
 
 ## No Menu lifecycle
 
@@ -64,7 +72,8 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 7. Enter boss, tutorial, survival, Horde, pre-timer-order, public-online, and private-online cases. Verify No Menu stays inactive, the normal menu remains visible, and the settings status gives the reason.
 8. Exercise local couch versus and verify both teams can deliver the same numeric synthetic order ID without colliding.
 9. Force or simulate an injected-order failure and verify the server/client ghost ticket is cleaned, normal progression/UI is restored, and No Menu disables for the remainder of the round.
-10. Leave the kitchen and verify recipe bars and ordinary order progression are restored for the next normal round.
+10. Exercise a no-loading-screen full scene transition (the direct `GameUtils.LoadScene` path) and verify prior-round synthetic IDs, ticket state, hidden recipe bars, and disabled auto-progression do not leak into the next scene. Also verify additive `InGameMenu` loading does not reset the active round.
+11. Leave the kitchen and verify recipe bars and ordinary order progression are restored for the next normal round.
 
 ## Team and probability behavior
 
@@ -73,6 +82,7 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 3. Expire the same ticket repeatedly, then trigger a failed delivery whose message carries a stale order ID. Verify neither event changes served history or active-menu counts.
 4. Test ordinary, scripted-manual, scripted random fallback, dynamic phase reset, Carnival Good Menu/Good Cake checkpoints, and the fixed TAS sequence/fallback.
 5. In a remote state that cannot be reconstructed unambiguously (for example duplicate entry IDs or unknown Carnival authority), verify probability renders as `—` and guesses are suppressed.
+6. Make an enabled Recipe Extension snapshot disagree with the authoritative cumulative-frequency length. Verify Carnival control returns to Recipe Extension, while Menu Manager probability remains `—` and no guesses are created.
 
 ## Audited base build
 

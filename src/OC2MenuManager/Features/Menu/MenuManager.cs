@@ -164,8 +164,10 @@ namespace OC2MenuManager
                 }
 
                 CarnivalExtensionEntriesBuffer.Clear();
-                if (!OptionalRecipeAdapters.TryGetManyRecipeEntries(CarnivalExtensionEntriesBuffer)
-                    || !CarnivalRecipeSelectionPolicy.HasCompatibleCandidateShape(
+                ManyRecipesSnapshotState extensionState = OptionalRecipeAdapters.TryGetManyRecipeEntries(
+                    CarnivalExtensionEntriesBuffer);
+                if (!ManyRecipesSnapshotPolicy.HasExactRuntimeShape(
+                        extensionState,
                         baseEntries.Length,
                         CarnivalExtensionEntriesBuffer.Count,
                         instance.CumulativeFrequencies.Length))

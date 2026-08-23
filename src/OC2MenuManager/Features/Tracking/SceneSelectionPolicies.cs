@@ -1,6 +1,6 @@
-// Defines side-effect-free scene-selector layout, filtering, and DIY catalog
-// snapshot policies. The game-facing tracker owns all mutable UI/provider state;
-// these policies only validate inputs and calculate deterministic decisions.
+// Defines side-effect-free scene-selection ownership, navigation, layout,
+// filtering, and DIY catalog snapshot policies. The game-facing tracker owns
+// all mutable UI/provider state; these policies calculate deterministic choices.
 using System;
 using System.Collections.Generic;
 
@@ -8,10 +8,29 @@ using System.Collections.Generic;
 
 namespace OC2MenuManager
 {
+    /// <summary>Identifies the user or data event that may affect list navigation.</summary>
+    internal enum SceneDropdownNavigationEvent
+    {
+        CatalogRefreshed,
+        DropdownOpened,
+        SearchChanged,
+        KeyboardMoved,
+        UserScrolled
+    }
+
+    /// <summary>Describes a one-shot list-position change requested by navigation.</summary>
+    internal enum SceneDropdownScrollRequest
+    {
+        None,
+        ResetToTop,
+        RevealKeyboardTarget
+    }
+
     /// <summary>
-    /// Owns the searchable scene-list contract and viewport calculations used by
-    /// the IMGUI selector. Search is ordinal and case-insensitive, source ordering
-    /// is preserved by callers, and invalid layout inputs fail to empty ranges.
+    /// Owns configured-versus-active scene resolution and the searchable scene-list
+    /// contract used by the IMGUI selector. Search is ordinal and case-insensitive,
+    /// automatic scrolling follows explicit navigation only, and invalid layout
+    /// inputs fail to empty ranges.
     /// </summary>
     internal static class SceneSelectionPolicy
     {
@@ -37,6 +56,85 @@ namespace OC2MenuManager
                 || Contains(displayName, normalizedQuery)
                 || Contains(englishDisplayName, normalizedQuery)
                 || Contains(chineseDisplayName, normalizedQuery);
+        }
+
+        internal static string ResolveEffectiveSceneName(
+            bool inActiveRound,
+            string activeSceneName,
+            string configuredSceneName,
+            bool configuredSceneAvailable,
+            string fallbackSceneName)
+        {
+            if (inActiveRound && !string.IsNullOrEmpty(activeSceneName))
+            {
+                return activeSceneName;
+            }
+
+            if (configuredSceneAvailable && !string.IsNullOrEmpty(configuredSceneName))
+            {
+                return configuredSceneName;
+            }
+
+            return fallbackSceneName ?? string.Empty;
+        }
+
+        internal static string ResolveConfiguredSceneName(
+            bool inActiveRound,
+            string configuredSceneName,
+            bool configuredSceneAvailable,
+            string effectiveSceneName)
+        {
+            if (inActiveRound
+                || (!string.IsNullOrEmpty(configuredSceneName) && !configuredSceneAvailable))
+            {
+                return configuredSceneName ?? string.Empty;
+            }
+
+            return effectiveSceneName ?? string.Empty;
+        }
+
+        internal static string ResolveKeyboardTargetSceneName(
+            bool retargetFirstResult,
+            string previousTargetSceneName,
+            bool previousTargetAvailable,
+            string selectedSceneName,
+            bool selectedSceneAvailable,
+            string firstResultSceneName)
+        {
+            if (!retargetFirstResult && previousTargetAvailable && !string.IsNullOrEmpty(previousTargetSceneName))
+            {
+                return previousTargetSceneName;
+            }
+
+            if (!retargetFirstResult && selectedSceneAvailable && !string.IsNullOrEmpty(selectedSceneName))
+            {
+                return selectedSceneName;
+            }
+
+            return firstResultSceneName ?? string.Empty;
+        }
+
+        internal static SceneDropdownScrollRequest UpdateScrollRequest(
+            SceneDropdownScrollRequest currentRequest,
+            SceneDropdownNavigationEvent navigationEvent)
+        {
+            if (navigationEvent == SceneDropdownNavigationEvent.UserScrolled)
+            {
+                return SceneDropdownScrollRequest.None;
+            }
+
+            if (navigationEvent == SceneDropdownNavigationEvent.SearchChanged)
+            {
+                return SceneDropdownScrollRequest.ResetToTop;
+            }
+
+            if (navigationEvent == SceneDropdownNavigationEvent.DropdownOpened
+                || navigationEvent == SceneDropdownNavigationEvent.KeyboardMoved)
+            {
+                return SceneDropdownScrollRequest.RevealKeyboardTarget;
+            }
+
+            return currentRequest;
         }
 
         internal static float CalculateDropdownHeight(
@@ -166,6 +264,45 @@ namespace OC2MenuManager
             }
 
             return Math.Max(0f, Math.Min(maximumScrollOffset, scrollOffset));
+        }
+
+        internal static float CalculateClampedScrollOffset(
+            int itemCount,
+            float currentScrollOffset,
+            float viewportHeight,
+            float rowHeight)
+        {
+            if (itemCount <= 0
+                || !IsFinite(currentScrollOffset)
+                || !IsFinite(viewportHeight)
+                || !IsFinite(rowHeight)
+                || viewportHeight <= 0f
+                || rowHeight <= 0f)
+            {
+                return 0f;
+            }
+
+            float maximumScrollOffset = Math.Max(0f, itemCount * rowHeight - viewportHeight);
+            return Math.Max(0f, Math.Min(maximumScrollOffset, currentScrollOffset));
+        }
+
+        internal static float CalculateWheelScrollOffset(
+            int itemCount,
+            float currentScrollOffset,
+            float wheelDelta,
+            float viewportHeight,
+            float rowHeight)
+        {
+            if (!IsFinite(wheelDelta))
+            {
+                return CalculateClampedScrollOffset(itemCount, currentScrollOffset, viewportHeight, rowHeight);
+            }
+
+            return CalculateClampedScrollOffset(
+                itemCount,
+                currentScrollOffset + wheelDelta * rowHeight,
+                viewportHeight,
+                rowHeight);
         }
 
         private static bool Contains(string value, string query)
