@@ -23,6 +23,33 @@ namespace OC2MenuManager
     }
 
     /// <summary>
+    /// Classifies whether the optional provider supplied a trustworthy catalog,
+    /// a usable partial catalog, or no replaceable data for this refresh.
+    /// </summary>
+    internal enum DIYLevelCatalogReadState
+    {
+        Unavailable,
+        Loading,
+        Complete,
+        Partial,
+        Error
+    }
+
+    /// <summary>
+    /// Reports provider-level counts and the first diagnostic while descriptors
+    /// remain in the caller-owned list. A partial read can still replace a snapshot.
+    /// </summary>
+    internal struct DIYLevelCatalogReadResult
+    {
+        public DIYLevelCatalogReadState State;
+        public int SourceLevelSetCount;
+        public int SourceLevelCount;
+        public int AcceptedSceneCount;
+        public int RejectedEntryCount;
+        public string Detail;
+    }
+
+    /// <summary>
     /// Carries a DIY recipe's stable identity and an optional hydrated base-game
     /// definition; custom DIY recipes intentionally remain metadata-only pre-round.
     /// </summary>
@@ -48,6 +75,7 @@ namespace OC2MenuManager
         private const string ManyRecipesPluginTypeName = "OC2ManyRecipes.ManyRecipesPlugin";
 
         private static readonly List<RecipeList.Entry> ManyRecipeEntriesCache = new List<RecipeList.Entry>();
+        private static readonly HashSet<string> DIYAcceptedSceneNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         private static Type diyManagerType;
         private static PropertyInfo diyIsInitializedProperty;
@@ -65,18 +93,25 @@ namespace OC2MenuManager
         private static bool manyActivationLogged;
         private static bool manyRecipeEntriesCacheValid;
 
-        internal static bool TryGetDIYLevels(List<DIYLevelDescriptor> destination, out string error)
+        internal static bool TryGetDIYLevels(List<DIYLevelDescriptor> destination, out DIYLevelCatalogReadResult result)
         {
-            error = null;
+            result = new DIYLevelCatalogReadResult();
+            result.State = DIYLevelCatalogReadState.Error;
             if (destination == null)
             {
-                error = "No destination was provided.";
+                result.Detail = "No destination was provided.";
                 return false;
             }
 
             destination.Clear();
+            DIYAcceptedSceneNames.Clear();
+            string error;
             if (!TryResolveDIYContract(out error))
             {
+                result.State = diyManagerType == null
+                    ? DIYLevelCatalogReadState.Unavailable
+                    : DIYLevelCatalogReadState.Error;
+                result.Detail = error;
                 return false;
             }
 
@@ -87,14 +122,16 @@ namespace OC2MenuManager
             }
             catch (Exception ex)
             {
-                error = "Could not read DIY initialization state: " + ex.GetType().Name + ": " + ex.Message;
-                LogDIYContractWarning(error);
+                result.State = DIYLevelCatalogReadState.Error;
+                result.Detail = "Could not read DIY initialization state: " + ex.GetType().Name + ": " + ex.Message;
+                LogDIYContractWarning(result.Detail);
                 return false;
             }
 
             if (!initialized)
             {
-                error = "DIY Level metadata is still loading.";
+                result.State = DIYLevelCatalogReadState.Loading;
+                result.Detail = "DIY Level metadata is still loading.";
                 return false;
             }
 
@@ -105,50 +142,106 @@ namespace OC2MenuManager
             }
             catch (Exception ex)
             {
-                error = "Could not read DIY level metadata: " + ex.GetType().Name + ": " + ex.Message;
-                LogDIYContractWarning(error);
+                result.State = DIYLevelCatalogReadState.Error;
+                result.Detail = "Could not read DIY level metadata: " + ex.GetType().Name + ": " + ex.Message;
+                LogDIYContractWarning(result.Detail);
                 return false;
             }
 
             if (levelSetInfos == null)
             {
-                error = "DIY Level metadata is not available yet.";
+                result.State = DIYLevelCatalogReadState.Loading;
+                result.Detail = "DIY Level metadata is not available yet.";
                 return false;
             }
 
-            for (int i = 0; i < levelSetInfos.Count; i++)
+            int levelSetCount;
+            try
             {
-                object levelSetInfo = GetPairValue(levelSetInfos[i]);
-                if (levelSetInfo == null)
+                levelSetCount = levelSetInfos.Count;
+            }
+            catch (Exception ex)
+            {
+                result.State = DIYLevelCatalogReadState.Error;
+                result.Detail = "Could not read the DIY level-set count: " + ex.GetType().Name + ": " + ex.Message;
+                LogDIYContractWarning(result.Detail);
+                return false;
+            }
+
+            result.SourceLevelSetCount = levelSetCount;
+            string firstRejectedEntry = null;
+            for (int i = 0; i < levelSetCount; i++)
+            {
+                object levelSetEntry;
+                try
+                {
+                    levelSetEntry = levelSetInfos[i];
+                }
+                catch (Exception ex)
                 {
                     destination.Clear();
-                    error = "DIY level set " + (i + 1) + " of " + levelSetInfos.Count + " could not be read.";
-                    LogDIYContractWarning(error);
+                    result.State = DIYLevelCatalogReadState.Error;
+                    result.Detail = "DIY level metadata changed while it was being read: "
+                        + ex.GetType().Name + ": " + ex.Message;
+                    LogDIYContractWarning(result.Detail);
                     return false;
+                }
+
+                object levelSetInfo = GetPairValue(levelSetEntry);
+                if (levelSetInfo == null)
+                {
+                    result.RejectedEntryCount++;
+                    if (firstRejectedEntry == null)
+                    {
+                        firstRejectedEntry = "level set " + (i + 1) + " of " + levelSetCount + " could not be read";
+                    }
+                    continue;
                 }
 
                 Array levelInfos = GetMemberValue(levelSetInfo, "levelInfos") as Array;
                 if (levelInfos == null)
                 {
-                    destination.Clear();
-                    error = "DIY level set " + (i + 1) + " of " + levelSetInfos.Count + " does not expose its levels.";
-                    LogDIYContractWarning(error);
-                    return false;
+                    result.RejectedEntryCount++;
+                    if (firstRejectedEntry == null)
+                    {
+                        firstRejectedEntry = "level set " + (i + 1) + " of " + levelSetCount + " does not expose its levels";
+                    }
+                    continue;
                 }
 
                 string englishLevelSetName = GetLocalizedString(levelSetInfo, "levelSetName", "levelSetNameZH");
                 string chineseLevelSetName = GetLocalizedString(levelSetInfo, "levelSetNameZH", "levelSetName");
                 for (int j = 0; j < levelInfos.Length; j++)
                 {
-                    object levelInfo = levelInfos.GetValue(j);
-                    string sceneName = GetStringMember(levelInfo, "sceneName");
-                    if (string.IsNullOrEmpty(sceneName))
+                    result.SourceLevelCount++;
+                    object levelInfo;
+                    try
                     {
-                        destination.Clear();
-                        error = "DIY level " + (j + 1) + " of " + levelInfos.Length
-                            + " in level set " + (i + 1) + " has no scene name.";
-                        LogDIYContractWarning(error);
-                        return false;
+                        levelInfo = levelInfos.GetValue(j);
+                    }
+                    catch (Exception ex)
+                    {
+                        result.RejectedEntryCount++;
+                        if (firstRejectedEntry == null)
+                        {
+                            firstRejectedEntry = "level " + (j + 1) + " in set " + (i + 1)
+                                + " could not be read: " + ex.GetType().Name + ": " + ex.Message;
+                        }
+                        continue;
+                    }
+
+                    string sceneName = GetStringMember(levelInfo, "sceneName");
+                    if (!DIYCatalogRefreshPolicy.TryAcceptSceneName(sceneName, DIYAcceptedSceneNames))
+                    {
+                        result.RejectedEntryCount++;
+                        if (firstRejectedEntry == null)
+                        {
+                            firstRejectedEntry = !string.IsNullOrEmpty(sceneName) && DIYAcceptedSceneNames.Contains(sceneName)
+                                ? "duplicate scene name '" + sceneName + "' in level set " + (i + 1)
+                                : "level " + (j + 1) + " of " + levelInfos.Length
+                                    + " in level set " + (i + 1) + " has no usable scene name";
+                        }
+                        continue;
                     }
 
                     string englishLevelName = GetLocalizedString(levelInfo, "levelName", "levelNameZH");
@@ -162,10 +255,25 @@ namespace OC2MenuManager
                 }
             }
 
+            result.AcceptedSceneCount = destination.Count;
+            result.State = result.RejectedEntryCount > 0
+                ? DIYLevelCatalogReadState.Partial
+                : DIYLevelCatalogReadState.Complete;
+            if (result.RejectedEntryCount > 0)
+            {
+                result.Detail = "Skipped " + result.RejectedEntryCount
+                    + " invalid or duplicate DIY metadata entr"
+                    + (result.RejectedEntryCount == 1 ? "y" : "ies")
+                    + ". First issue: " + firstRejectedEntry + ".";
+            }
+
             if (!diyActivationLogged)
             {
                 diyActivationLogged = true;
-                _MODEntry.LogInfo("[Compatibility] DIY Level adapter active; discovered " + destination.Count + " scene(s).");
+                _MODEntry.LogInfo("[Compatibility] DIY Level adapter active; discovered "
+                    + destination.Count + " scene(s) from " + result.SourceLevelSetCount
+                    + " level set(s) and " + result.SourceLevelCount + " metadata level entr"
+                    + (result.SourceLevelCount == 1 ? "y" : "ies") + ".");
             }
 
             return true;

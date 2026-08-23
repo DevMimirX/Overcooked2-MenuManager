@@ -178,7 +178,7 @@ namespace OC2MenuManager
             TryResetRoundRuntimeState("shutdown");
             overlayVisible = false;
             settingsWindowVisible = false;
-            sceneDropdownExpanded = false;
+            CloseSceneDropdown(true);
             capturingHotkey = false;
         }
 
@@ -193,9 +193,16 @@ namespace OC2MenuManager
 
             if (settingsWindowVisible && Input.GetKeyDown(KeyCode.Escape))
             {
-                settingsWindowVisible = false;
-                sceneDropdownExpanded = false;
-                capturingHotkey = false;
+                if (sceneDropdownExpanded)
+                {
+                    CloseSceneDropdown(false);
+                }
+                else
+                {
+                    settingsWindowVisible = false;
+                    CloseSceneDropdown(true);
+                    capturingHotkey = false;
+                }
             }
 
             bool runtimeEnabled = enabled != null && enabled.Value;

@@ -21,13 +21,22 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 ## Optional DIY integration
 
 1. Run the standalone profile without OC2DIYLevel and open/refresh the scene selector; verify no error is logged.
-2. Install OC2DIYLevel separately and restart. Before launching a DIY level, verify all DIY scenes appear after frontend initialization.
-3. Keep `.png`, `.txt`, and other sidecar files beside the DIY bundles; verify they never appear as scenes in the selector.
-4. Before launching `s_rw_5`, select it and verify all 50 configured dishes are available, including both original and custom recipes.
-5. Save a tracked subset, restart without launching the level, and verify the subset persists.
-6. Launch the level and verify custom placeholder names are upgraded to their runtime definitions without duplicate dish IDs; prepared matching and guess tickets should work afterward.
-7. Change or replace a DIY metadata bundle in the disposable profile, restart, and verify removed recipes do not remain in that scene.
-8. Remove OC2DIYLevel again and verify Menu Manager still loads normally.
+2. Install the audited OC2DIYLevel binary separately and restart. Before launching a DIY level, verify its frontend metadata reports 46 scenes and the selector's DIY count is 46.
+3. Search `s_rw_` and verify the five results are exactly `s_rw_1` through `s_rw_5`; repeat with one Chinese and one English metadata name, then select each result with one click.
+4. Keep `.png`, `.txt`, and other sidecar files beside the DIY bundles; verify they never appear as scenes in the selector and no Menu Manager directory enumeration appears in an I/O trace.
+5. Before launching `s_rw_5`, select it and verify all 50 configured dishes are available, including both original and custom recipes.
+6. Save a tracked subset, restart without launching the level, and verify the subset persists.
+7. Launch the level and verify custom placeholder names are upgraded to their runtime definitions without duplicate dish IDs; prepared matching and guess tickets should work afterward.
+8. In a disposable provider stub/profile, exercise a partial malformed catalog, a duplicate scene ID, and a temporary read failure. Verify valid scenes remain, failures are summarized once, and the last successful snapshot survives only the temporary/untrustworthy reads.
+9. Remove a valid DIY scene from authoritative metadata and refresh; verify the removed scene does not leak back from the hydrated scene cache. An authoritative empty catalog must also replace the prior snapshot.
+10. Remove OC2DIYLevel again and verify Menu Manager still loads normally.
+
+## Scene selector usability
+
+1. Open the inline selector with the full base-game and 46-scene DIY catalog; verify it uses about 55% of the settings-window height and remains bounded between 160 and 420 pixels.
+2. Verify the result count, Clear, Refresh, mouse wheel, Up/Down, Page Up/Down, Home/End, Enter, Escape, and single-click selection behaviors.
+3. Confirm the current/highlighted item scrolls into view, the search persists between scene selections, and closing the settings window clears it.
+4. Test a 1696x349 or equivalent short viewport. Verify the settings window is fully clamped on-screen, its outer content remains scrollable, and the scene list remains usable.
 
 ## Recipe Extension and large pools
 
@@ -82,7 +91,7 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 7. Disable history tracking and close `F6`; verify no controller lookup, ticket registration/reorder, prepared maintenance, or overlay rebuild remains in the steady-state frame path. Real-ticket admission and invalid `ReleaseTable` protection must still work.
 8. On a non-16:9 resolution, verify DPI recalculation occurs only after an actual width/height change.
 9. Dirty one prepared source and verify its delivered composition is simplified once per refresh, while recipe simplifications are reused.
-10. Keep the settings window open and verify scene/category selector models are reused between source or selection changes.
+10. Keep the settings window open and verify scene/category selector models are reused between source or selection changes; with the full scene dropdown open, only visible rows plus one overscan row per edge should be drawn.
 
 ## Log expectations
 

@@ -143,6 +143,7 @@ This section controls what the tracker is allowed to care about.
 What you can do here:
 
 - choose a scene
+- search by scene ID or either Chinese/English metadata name
 - pick tracked dishes for that scene
 - use scene-specific category buttons such as cake, burger, pizza, and so on
 - use bulk actions such as select all, clear, or refresh
@@ -152,8 +153,10 @@ Important behavior:
 - outside a round, you can browse scenes freely
 - during a round, the scene selector locks to the current scene
 - this lock is intentional so you do not accidentally edit another level mid-run
+- the expanded selector shows filtered/total and DIY counts; mouse wheel, arrow keys, Page Up/Down, Home/End, and Enter are supported
+- the search remains active while you configure several scenes and clears when the settings window closes
 
-DIY scenes appear once OC2DIYLevel finishes loading its frontend metadata. Only scenes confirmed by that metadata are listed, so screenshots, text files, and other files beside the bundles are ignored. Selecting a scene lazily loads its recipes; a failed preload is retried automatically while the window is open, and the retry button forces another attempt. You no longer need to launch a DIY level once just to configure it.
+DIY scenes appear once OC2DIYLevel finishes loading its frontend metadata. Menu Manager never scans the game directory, enumerates the `levels` folder, or loads DIY asset bundles itself. It accepts only OC2DIYLevel's in-memory catalog, so screenshots, text files, and other files beside the bundles are ignored. A temporary provider failure keeps the last valid catalog visible, while malformed or duplicate metadata entries are skipped and reported without hiding valid scenes. Selecting a scene lazily loads its recipes; a failed preload is retried automatically while the window is open, and the retry button forces another attempt. You no longer need to launch a DIY level once just to configure it.
 
 Recipe Extension dishes are generated from the real level at round initialization, so they appear in the current scene selector after that round starts. Press `Refresh` if a recently changed optional-mod configuration has not appeared yet.
 
@@ -483,6 +486,7 @@ Why:
 - prepared-source matching remains the heaviest optional feature
 - prepared maintenance runs only when a source changes, a prune is due, or a delayed recovery stage is scheduled; it is not a recipe scan performed every frame
 - scene/controller discovery is cached, and recovery scans are delayed and split across frames
+- the scene search model is rebuilt only when its query or source catalog changes, and the expanded list draws only visible rows
 - ticket layout is left to the game; Menu Manager only reorders membership when the real/guess set changes
 - each team's next-order probabilities and sorted overlay rows are rebuilt once after an order/phase/rule change, then shared by the overlay, prepared matching, and guess tickets
 - Recipe Extension's ordered generated-entry list is reflected once after round synchronization, then reused; large-pool expansion and remote reconstruction also reuse working buffers instead of allocating temporary collections on every refresh
@@ -536,6 +540,10 @@ Try:
 ### A DIY scene is listed but has no dishes
 
 Keep the settings window open briefly so the automatic retry can run, or press `Retry DIY Recipe Load` to retry immediately. Check the BepInEx log for one `[Compatibility]` warning if the installed DIY version exposes an unsupported contract or a recipe cannot be preloaded completely.
+
+### A DIY scene seems to be missing
+
+Open the scene selector and search for its scene ID, such as `s_rw_`. The count line distinguishes filtered, total, and DIY scenes, while the OC2DIYLevel status line shows whether metadata is ready, partial, loading, or using the last valid snapshot. Press `Refresh` to request another in-memory metadata read. Menu Manager deliberately does not fall back to scanning DIY folders.
 
 ### Recipe Extension dishes do not appear
 

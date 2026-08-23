@@ -88,24 +88,37 @@ namespace OC2MenuManager
                 return CachedDIYScenes;
             }
 
+            nextDIYSceneRefreshFrame = Time.frameCount + 120;
+            DIYLevelCatalogReadResult readResult;
+            bool readSucceeded = OptionalRecipeAdapters.TryGetDIYLevels(DIYLevelDescriptorsBuffer, out readResult);
+            DIYCatalogSnapshotAction snapshotAction = DIYCatalogRefreshPolicy.EvaluateSnapshot(
+                readSucceeded,
+                DIYLevelDescriptorsBuffer.Count,
+                readResult.RejectedEntryCount);
+
             List<SceneInfo> scenes = DIYScenesRefreshBuffer;
             scenes.Clear();
-            AddDIYScenesFromRuntimeManager(scenes);
+            if (snapshotAction == DIYCatalogSnapshotAction.Replace)
+            {
+                BuildDIYScenesFromDescriptors(scenes);
+                CachedDIYScenes.Clear();
+                CachedDIYScenes.AddRange(scenes);
+                diyCatalogHasSnapshot = true;
+            }
 
-            CachedDIYScenes.Clear();
-            CachedDIYScenes.AddRange(scenes);
-            nextDIYSceneRefreshFrame = Time.frameCount + 120;
+            diyCatalogReadState = readResult.State;
+            diyCatalogUsingRetainedSnapshot = snapshotAction == DIYCatalogSnapshotAction.Retain && diyCatalogHasSnapshot;
+            diyCatalogAcceptedSceneCount = diyCatalogHasSnapshot
+                ? CachedDIYScenes.Count
+                : Math.Max(0, readResult.AcceptedSceneCount);
+            diyCatalogRejectedEntryCount = Math.Max(0, readResult.RejectedEntryCount);
+            diyCatalogDetail = readResult.Detail ?? string.Empty;
+            LogDIYCatalogStatusTransition();
             return CachedDIYScenes;
         }
 
-        private static void AddDIYScenesFromRuntimeManager(List<SceneInfo> scenes)
+        private static void BuildDIYScenesFromDescriptors(List<SceneInfo> scenes)
         {
-            string error;
-            if (!OptionalRecipeAdapters.TryGetDIYLevels(DIYLevelDescriptorsBuffer, out error))
-            {
-                return;
-            }
-
             for (int i = 0; i < DIYLevelDescriptorsBuffer.Count; i++)
             {
                 DIYLevelDescriptor descriptor = DIYLevelDescriptorsBuffer[i];
@@ -131,6 +144,8 @@ namespace OC2MenuManager
                 scene.DisplayName = UseChinese()
                     ? descriptor.ChineseDisplayName
                     : descriptor.EnglishDisplayName;
+                scene.EnglishDisplayName = descriptor.EnglishDisplayName;
+                scene.ChineseDisplayName = descriptor.ChineseDisplayName;
                 scene.IsDIY = true;
                 scene.DIYLevelInfo = descriptor.LevelInfo;
                 bool retryFailedHydration = scene.DIYHydrationAttempted
@@ -147,6 +162,39 @@ namespace OC2MenuManager
 
                 AddDIYSceneIfMissing(scenes, scene);
             }
+        }
+
+        private static void LogDIYCatalogStatusTransition()
+        {
+            string signature = ((int)diyCatalogReadState) + "|"
+                + diyCatalogUsingRetainedSnapshot + "|"
+                + diyCatalogAcceptedSceneCount + "|"
+                + diyCatalogRejectedEntryCount + "|"
+                + diyCatalogDetail;
+            if (string.Equals(signature, lastDIYCatalogStatusSignature, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            bool hasIssue = diyCatalogUsingRetainedSnapshot
+                || diyCatalogReadState == DIYLevelCatalogReadState.Partial
+                || diyCatalogReadState == DIYLevelCatalogReadState.Error;
+            if (hasIssue && (diyCatalogUsingRetainedSnapshot || diyCatalogReadState == DIYLevelCatalogReadState.Partial))
+            {
+                string retainedText = diyCatalogUsingRetainedSnapshot
+                    ? " Using the last valid snapshot of " + diyCatalogAcceptedSceneCount + " scene(s)."
+                    : string.Empty;
+                _MODEntry.LogWarning("[Compatibility] DIY Level catalog status: "
+                    + diyCatalogReadState + ". " + diyCatalogDetail + retainedText);
+            }
+            else if (diyCatalogStatusHadIssue && diyCatalogReadState == DIYLevelCatalogReadState.Complete)
+            {
+                _MODEntry.LogInfo("[Compatibility] DIY Level catalog refresh recovered with "
+                    + diyCatalogAcceptedSceneCount + " scene(s).");
+            }
+
+            diyCatalogStatusHadIssue = hasIssue;
+            lastDIYCatalogStatusSignature = signature;
         }
 
         private static void AddDIYSceneIfMissing(List<SceneInfo> scenes, SceneInfo scene)
@@ -281,7 +329,11 @@ namespace OC2MenuManager
             CachedSceneInfosBuffer.AddRange(SceneCache.Values);
             for (int i = 0; i < CachedSceneInfosBuffer.Count; i++)
             {
-                AddScene(scenes, seenScenes, CachedSceneInfosBuffer[i]);
+                SceneInfo cachedScene = CachedSceneInfosBuffer[i];
+                if (cachedScene != null && !cachedScene.IsDIY)
+                {
+                    AddScene(scenes, seenScenes, cachedScene);
+                }
             }
         }
 
@@ -462,6 +514,8 @@ namespace OC2MenuManager
             SceneInfo scene = new SceneInfo();
             scene.SceneName = sceneName;
             scene.DisplayName = displayName;
+            scene.EnglishDisplayName = displayName;
+            scene.ChineseDisplayName = displayName;
             MergeLevelConfigIntoScene(scene, levelConfig);
             return scene;
         }

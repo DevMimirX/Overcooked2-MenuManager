@@ -1,3 +1,6 @@
+// Owns the standalone tracker settings window, including responsive bounds and
+// the searchable virtualized scene selector. UI state remains session-only;
+// persistent configuration and gameplay state stay in their dedicated partials.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -32,7 +35,7 @@ namespace OC2MenuManager
 
             lastSettingsWindowToggleFrame = Time.frameCount;
             settingsWindowVisible = !settingsWindowVisible;
-            sceneDropdownExpanded = false;
+            CloseSceneDropdown(!settingsWindowVisible);
             if (settingsWindowVisible)
             {
                 nextTrackedSceneRefreshPollFrame = 0;
@@ -224,25 +227,52 @@ namespace OC2MenuManager
 
         private static void CenterSettingsWindow()
         {
-            float width = Mathf.Max(SettingsWindowMinWidth, SettingsWindowDefaultWidth * Mathf.Max(1f, _MODEntry.dpiScaleFactor));
-            float height = Mathf.Max(SettingsWindowMinHeight, SettingsWindowDefaultHeight * Mathf.Max(1f, _MODEntry.dpiScaleFactor));
-            float x = Mathf.Max(SettingsWindowMargin, (Screen.width - width) * 0.5f);
-            float y = Mathf.Max(SettingsWindowMargin, (Screen.height - height) * 0.5f);
+            float dpiScale = Mathf.Max(1f, _MODEntry.dpiScaleFactor);
+            float width = SceneSelectionPolicy.CalculateFittedWindowDimension(
+                Screen.width,
+                SettingsWindowMargin,
+                SettingsWindowDefaultWidth * dpiScale,
+                SettingsWindowMinWidth);
+            float height = SceneSelectionPolicy.CalculateFittedWindowDimension(
+                Screen.height,
+                SettingsWindowMargin,
+                SettingsWindowDefaultHeight * dpiScale,
+                SettingsWindowMinHeight);
+            float x = SceneSelectionPolicy.CalculateClampedWindowPosition(
+                Screen.width,
+                width,
+                SettingsWindowMargin,
+                (Screen.width - width) * 0.5f);
+            float y = SceneSelectionPolicy.CalculateClampedWindowPosition(
+                Screen.height,
+                height,
+                SettingsWindowMargin,
+                (Screen.height - height) * 0.5f);
             settingsWindowRect = new Rect(x, y, width, height);
         }
 
         private static void EnsureSettingsWindowRect()
         {
-            if (settingsWindowRect.width < SettingsWindowMinWidth || settingsWindowRect.height < SettingsWindowMinHeight)
-            {
-                settingsWindowRect.width = Mathf.Max(SettingsWindowMinWidth, settingsWindowRect.width);
-                settingsWindowRect.height = Mathf.Max(SettingsWindowMinHeight, settingsWindowRect.height);
-            }
-
-            float maxX = Mathf.Max(SettingsWindowMargin, Screen.width - settingsWindowRect.width - SettingsWindowMargin);
-            float maxY = Mathf.Max(SettingsWindowMargin, Screen.height - settingsWindowRect.height - SettingsWindowMargin);
-            settingsWindowRect.x = Mathf.Clamp(settingsWindowRect.x, SettingsWindowMargin, maxX);
-            settingsWindowRect.y = Mathf.Clamp(settingsWindowRect.y, SettingsWindowMargin, maxY);
+            settingsWindowRect.width = SceneSelectionPolicy.CalculateFittedWindowDimension(
+                Screen.width,
+                SettingsWindowMargin,
+                settingsWindowRect.width,
+                SettingsWindowMinWidth);
+            settingsWindowRect.height = SceneSelectionPolicy.CalculateFittedWindowDimension(
+                Screen.height,
+                SettingsWindowMargin,
+                settingsWindowRect.height,
+                SettingsWindowMinHeight);
+            settingsWindowRect.x = SceneSelectionPolicy.CalculateClampedWindowPosition(
+                Screen.width,
+                settingsWindowRect.width,
+                SettingsWindowMargin,
+                settingsWindowRect.x);
+            settingsWindowRect.y = SceneSelectionPolicy.CalculateClampedWindowPosition(
+                Screen.height,
+                settingsWindowRect.height,
+                SettingsWindowMargin,
+                settingsWindowRect.y);
         }
 
         private static void DrawSettingsWindow(int windowId)
@@ -264,7 +294,7 @@ namespace OC2MenuManager
             if (GUILayout.Button(Ui("关闭", "Close"), GUILayout.Width(72f)))
             {
                 settingsWindowVisible = false;
-                sceneDropdownExpanded = false;
+                CloseSceneDropdown(true);
                 capturingHotkey = false;
             }
             GUILayout.EndHorizontal();
@@ -521,51 +551,368 @@ namespace OC2MenuManager
                 string buttonText = GetSceneSelectorValue(selectedSceneInfo);
                 if (GUILayout.Button(buttonText, GUILayout.ExpandWidth(true)))
                 {
-                    sceneDropdownExpanded = !sceneDropdownExpanded;
+                    if (sceneDropdownExpanded)
+                    {
+                        CloseSceneDropdown(false);
+                    }
+                    else
+                    {
+                        sceneDropdownExpanded = true;
+                        sceneSearchFocusRequested = true;
+                        cachedSceneSearchRevision = -1;
+                        sceneDropdownScrollToKeyboard = true;
+                    }
                 }
             }
             GUILayout.EndHorizontal();
 
             if (locked)
             {
+                if (sceneDropdownExpanded)
+                {
+                    CloseSceneDropdown(false);
+                }
                 DrawInfoText(Ui("当前在关卡内，关卡选择已自动锁定为本局关卡。", "The scene selector is locked to the current round."));
             }
             else if (sceneDropdownExpanded)
             {
-                sceneDropdownScrollPosition = GUILayout.BeginScrollView(sceneDropdownScrollPosition, GUILayout.MinHeight(88f), GUILayout.MaxHeight(SceneDropdownMaxHeight));
-                if (selectableScenes == null || selectableScenes.Count == 0)
-                {
-                    GUILayout.Label(Ui(NoSceneSelectorValue, "No scenes available yet"));
-                }
-                else
-                {
-                    for (int i = 0; i < selectableScenes.Count; i++)
-                    {
-                        SceneInfo selectableScene = selectableScenes[i];
-                        if (selectableScene == null)
-                        {
-                            continue;
-                        }
+                float listHeight = SceneSelectionPolicy.CalculateDropdownHeight(
+                    settingsWindowRect.height,
+                    SceneDropdownHeightRatio,
+                    SceneDropdownMinHeight,
+                    SceneDropdownMaxHeight);
+                List<SceneInfo> filteredScenes = GetFilteredSelectableScenes(selectableScenes);
+                SceneInfo sceneToSelect = HandleSceneDropdownKeyboard(filteredScenes, listHeight);
 
-                        bool isCurrent = string.Equals(selectedSceneName, selectableScene.SceneName, StringComparison.OrdinalIgnoreCase);
-                        string label = GetSceneSelectorValue(selectableScene);
-                        if (GUILayout.Button((isCurrent ? "✓ " : string.Empty) + label, GUILayout.ExpandWidth(true)))
-                        {
-                            if (!isCurrent)
-                            {
-                                selectedSceneName = selectableScene.SceneName;
-                                preferredSceneName = selectableScene.SceneName;
-                                SyncSceneSelectorConfigEntry();
-                            }
+                DrawSceneSearchControls();
+                filteredScenes = GetFilteredSelectableScenes(selectableScenes);
+                GUILayout.Label(
+                    Ui("显示 ", "Showing ") + filteredScenes.Count + " / " + (selectableScenes != null ? selectableScenes.Count : 0)
+                    + Ui("；DIY ", "; DIY ") + filteredDIYSceneCount + " / " + selectableDIYSceneCount);
+                DrawDIYCatalogStatus();
 
-                            sceneDropdownExpanded = false;
-                        }
-                    }
+                SceneInfo mouseSelection = DrawVirtualizedSceneList(filteredScenes, listHeight);
+                if (sceneToSelect == null)
+                {
+                    sceneToSelect = mouseSelection;
                 }
-                GUILayout.EndScrollView();
+
+                if (sceneToSelect != null)
+                {
+                    SelectSceneFromDropdown(sceneToSelect);
+                }
             }
 
             GUILayout.EndVertical();
+        }
+
+        private static void DrawSceneSearchControls()
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(Ui("搜索", "Search"), GUILayout.Width(72f));
+            GUI.SetNextControlName(SceneSearchControlName);
+            string nextSearchText = GUILayout.TextField(sceneSearchText ?? string.Empty, GUILayout.ExpandWidth(true));
+            if (!string.Equals(nextSearchText, sceneSearchText, StringComparison.Ordinal))
+            {
+                sceneSearchText = nextSearchText;
+                cachedSceneSearchRevision = -1;
+                sceneDropdownScrollPosition = Vector2.zero;
+            }
+
+            if (GUILayout.Button(Ui("清除", "Clear"), GUILayout.Width(58f)))
+            {
+                sceneSearchText = string.Empty;
+                cachedSceneSearchRevision = -1;
+                sceneDropdownScrollPosition = Vector2.zero;
+                sceneSearchFocusRequested = true;
+            }
+
+            if (GUILayout.Button(Ui("刷新", "Refresh"), GUILayout.Width(66f)))
+            {
+                nextDIYSceneRefreshFrame = 0;
+                RefreshKnownScenes(true);
+                SyncSceneSelectorConfigEntry();
+                cachedSceneSearchRevision = -1;
+                sceneSearchFocusRequested = true;
+            }
+            GUILayout.EndHorizontal();
+
+            if (sceneSearchFocusRequested)
+            {
+                GUI.FocusControl(SceneSearchControlName);
+                sceneSearchFocusRequested = false;
+            }
+        }
+
+        private static List<SceneInfo> GetFilteredSelectableScenes(List<SceneInfo> selectableScenes)
+        {
+            string normalizedQuery = SceneSelectionPolicy.NormalizeQuery(sceneSearchText);
+            if (cachedSceneSearchRevision == selectableScenesRevision
+                && string.Equals(cachedSceneSearchQuery, normalizedQuery, StringComparison.Ordinal))
+            {
+                return FilteredSelectableScenesBuffer;
+            }
+
+            FilteredSelectableScenesBuffer.Clear();
+            filteredDIYSceneCount = 0;
+            selectableDIYSceneCount = 0;
+            if (selectableScenes != null)
+            {
+                for (int i = 0; i < selectableScenes.Count; i++)
+                {
+                    SceneInfo scene = selectableScenes[i];
+                    if (scene == null)
+                    {
+                        continue;
+                    }
+
+                    if (scene.IsDIY)
+                    {
+                        selectableDIYSceneCount++;
+                    }
+
+                    if (!SceneSelectionPolicy.Matches(
+                        normalizedQuery,
+                        scene.SceneName,
+                        scene.DisplayName,
+                        scene.EnglishDisplayName,
+                        scene.ChineseDisplayName))
+                    {
+                        continue;
+                    }
+
+                    FilteredSelectableScenesBuffer.Add(scene);
+                    if (scene.IsDIY)
+                    {
+                        filteredDIYSceneCount++;
+                    }
+                }
+            }
+
+            cachedSceneSearchQuery = normalizedQuery;
+            cachedSceneSearchRevision = selectableScenesRevision;
+            sceneDropdownKeyboardIndex = FindSceneIndex(FilteredSelectableScenesBuffer, selectedSceneName);
+            if (sceneDropdownKeyboardIndex < 0 && FilteredSelectableScenesBuffer.Count > 0)
+            {
+                sceneDropdownKeyboardIndex = 0;
+            }
+            sceneDropdownScrollToKeyboard = true;
+            return FilteredSelectableScenesBuffer;
+        }
+
+        private static SceneInfo HandleSceneDropdownKeyboard(List<SceneInfo> filteredScenes, float listHeight)
+        {
+            Event currentEvent = Event.current;
+            if (currentEvent == null || currentEvent.type != EventType.KeyDown || filteredScenes == null || filteredScenes.Count == 0)
+            {
+                return null;
+            }
+
+            int nextIndex = sceneDropdownKeyboardIndex;
+            int pageSize = Math.Max(1, (int)(Math.Max(1f, listHeight - 4f) / SceneDropdownRowHeight) - 1);
+            if (currentEvent.keyCode == KeyCode.UpArrow)
+            {
+                nextIndex--;
+            }
+            else if (currentEvent.keyCode == KeyCode.DownArrow)
+            {
+                nextIndex++;
+            }
+            else if (currentEvent.keyCode == KeyCode.PageUp)
+            {
+                nextIndex -= pageSize;
+            }
+            else if (currentEvent.keyCode == KeyCode.PageDown)
+            {
+                nextIndex += pageSize;
+            }
+            else if (currentEvent.keyCode == KeyCode.Home)
+            {
+                nextIndex = 0;
+            }
+            else if (currentEvent.keyCode == KeyCode.End)
+            {
+                nextIndex = filteredScenes.Count - 1;
+            }
+            else if (currentEvent.keyCode == KeyCode.Return || currentEvent.keyCode == KeyCode.KeypadEnter)
+            {
+                if (sceneDropdownKeyboardIndex >= 0 && sceneDropdownKeyboardIndex < filteredScenes.Count)
+                {
+                    currentEvent.Use();
+                    return filteredScenes[sceneDropdownKeyboardIndex];
+                }
+                return null;
+            }
+            else
+            {
+                return null;
+            }
+
+            sceneDropdownKeyboardIndex = Math.Max(0, Math.Min(filteredScenes.Count - 1, nextIndex));
+            sceneDropdownScrollToKeyboard = true;
+            currentEvent.Use();
+            return null;
+        }
+
+        private static SceneInfo DrawVirtualizedSceneList(List<SceneInfo> filteredScenes, float listHeight)
+        {
+            if (filteredScenes == null || filteredScenes.Count == 0)
+            {
+                GUILayout.Label(Ui("没有匹配的关卡。可清除搜索或刷新 OC2DIYLevel 元数据。", "No matching scenes. Clear the search or refresh OC2DIYLevel metadata."), GUI.skin.box, GUILayout.Height(Mathf.Min(listHeight, 72f)));
+                return null;
+            }
+
+            if (sceneDropdownScrollToKeyboard && sceneDropdownKeyboardIndex >= 0)
+            {
+                sceneDropdownScrollPosition.y = SceneSelectionPolicy.CalculateScrollOffsetForItem(
+                    sceneDropdownKeyboardIndex,
+                    filteredScenes.Count,
+                    sceneDropdownScrollPosition.y,
+                    Math.Max(1f, listHeight - 4f),
+                    SceneDropdownRowHeight);
+                sceneDropdownScrollToKeyboard = false;
+            }
+
+            Rect listRect = GUILayoutUtility.GetRect(1f, listHeight, GUILayout.ExpandWidth(true), GUILayout.Height(listHeight));
+            GUI.Box(listRect, GUIContent.none);
+            Rect viewportRect = new Rect(
+                listRect.x + 2f,
+                listRect.y + 2f,
+                Mathf.Max(1f, listRect.width - 4f),
+                Mathf.Max(1f, listRect.height - 4f));
+            float contentHeight = Mathf.Max(viewportRect.height, filteredScenes.Count * SceneDropdownRowHeight);
+            float scrollbarWidth = contentHeight > viewportRect.height
+                ? Mathf.Max(16f, GUI.skin.verticalScrollbar.fixedWidth)
+                : 0f;
+            Rect contentRect = new Rect(
+                0f,
+                0f,
+                Mathf.Max(1f, viewportRect.width - scrollbarWidth),
+                contentHeight);
+
+            sceneDropdownScrollPosition = GUI.BeginScrollView(viewportRect, sceneDropdownScrollPosition, contentRect);
+            int firstIndex;
+            int endIndexExclusive;
+            SceneSelectionPolicy.CalculateVisibleRange(
+                filteredScenes.Count,
+                sceneDropdownScrollPosition.y,
+                viewportRect.height,
+                SceneDropdownRowHeight,
+                SceneDropdownOverscanRows,
+                out firstIndex,
+                out endIndexExclusive);
+
+            SceneInfo selectedScene = null;
+            for (int i = firstIndex; i < endIndexExclusive; i++)
+            {
+                SceneInfo selectableScene = filteredScenes[i];
+                bool isCurrent = string.Equals(selectedSceneName, selectableScene.SceneName, StringComparison.OrdinalIgnoreCase);
+                bool isKeyboardTarget = i == sceneDropdownKeyboardIndex;
+                string label = (isKeyboardTarget ? "> " : string.Empty)
+                    + (isCurrent ? "✓ " : string.Empty)
+                    + GetSceneSelectorValue(selectableScene);
+                Rect rowRect = new Rect(
+                    1f,
+                    i * SceneDropdownRowHeight + 1f,
+                    Mathf.Max(1f, contentRect.width - 2f),
+                    SceneDropdownRowHeight - 2f);
+                if (GUI.Button(rowRect, label))
+                {
+                    sceneDropdownKeyboardIndex = i;
+                    selectedScene = selectableScene;
+                    break;
+                }
+            }
+            GUI.EndScrollView();
+            return selectedScene;
+        }
+
+        private static void DrawDIYCatalogStatus()
+        {
+            string statusText;
+            if (diyCatalogUsingRetainedSnapshot)
+            {
+                statusText = Ui(
+                    "OC2DIYLevel 刷新失败；继续使用上次有效的 " + diyCatalogAcceptedSceneCount + " 个关卡。",
+                    "OC2DIYLevel refresh failed; using the last valid " + diyCatalogAcceptedSceneCount + " scenes.");
+            }
+            else if (diyCatalogReadState == DIYLevelCatalogReadState.Complete)
+            {
+                statusText = Ui(
+                    "OC2DIYLevel 元数据：" + diyCatalogAcceptedSceneCount + " 个关卡。",
+                    "OC2DIYLevel metadata: " + diyCatalogAcceptedSceneCount + " scenes.");
+            }
+            else if (diyCatalogReadState == DIYLevelCatalogReadState.Partial)
+            {
+                statusText = Ui(
+                    "OC2DIYLevel 元数据：" + diyCatalogAcceptedSceneCount + " 个关卡；跳过 " + diyCatalogRejectedEntryCount + " 个无效或重复条目。",
+                    "OC2DIYLevel metadata: " + diyCatalogAcceptedSceneCount + " scenes; skipped " + diyCatalogRejectedEntryCount + " invalid or duplicate entries.");
+            }
+            else if (diyCatalogReadState == DIYLevelCatalogReadState.Loading)
+            {
+                statusText = Ui("OC2DIYLevel 元数据仍在加载。", "OC2DIYLevel metadata is still loading.");
+            }
+            else if (diyCatalogReadState == DIYLevelCatalogReadState.Unavailable)
+            {
+                statusText = Ui("未检测到 OC2DIYLevel 元数据；原版关卡仍可使用。", "OC2DIYLevel metadata was not detected; base-game scenes remain available.");
+            }
+            else
+            {
+                statusText = Ui("OC2DIYLevel 元数据暂时不可用；请点击刷新。", "OC2DIYLevel metadata is temporarily unavailable; press Refresh.");
+            }
+
+            GUILayout.Label(statusText);
+        }
+
+        private static int FindSceneIndex(List<SceneInfo> scenes, string sceneName)
+        {
+            if (scenes == null || string.IsNullOrEmpty(sceneName))
+            {
+                return -1;
+            }
+
+            for (int i = 0; i < scenes.Count; i++)
+            {
+                SceneInfo scene = scenes[i];
+                if (scene != null && string.Equals(scene.SceneName, sceneName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private static void SelectSceneFromDropdown(SceneInfo scene)
+        {
+            if (scene == null || string.IsNullOrEmpty(scene.SceneName))
+            {
+                return;
+            }
+
+            if (!string.Equals(selectedSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+            {
+                selectedSceneName = scene.SceneName;
+                preferredSceneName = scene.SceneName;
+                SyncSceneSelectorConfigEntry();
+            }
+
+            CloseSceneDropdown(false);
+        }
+
+        private static void CloseSceneDropdown(bool clearSearch)
+        {
+            sceneDropdownExpanded = false;
+            sceneSearchFocusRequested = false;
+            sceneDropdownKeyboardIndex = -1;
+            sceneDropdownScrollToKeyboard = false;
+            if (clearSearch)
+            {
+                sceneSearchText = string.Empty;
+                cachedSceneSearchQuery = string.Empty;
+                cachedSceneSearchRevision = -1;
+                sceneDropdownScrollPosition = Vector2.zero;
+            }
         }
 
         private static void DrawSectionHeader(string title)

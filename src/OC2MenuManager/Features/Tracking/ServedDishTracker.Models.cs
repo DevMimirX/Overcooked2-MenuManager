@@ -48,10 +48,16 @@ namespace OC2MenuManager
             public AssembledDefinitionNode SimplifiedUnwrappedDefinition;
         }
 
+        /// <summary>
+        /// Owns one scene's stable identity, bilingual selector aliases, provider
+        /// metadata, and incrementally hydrated recipe catalog.
+        /// </summary>
         private sealed class SceneInfo
         {
             public string SceneName;
             public string DisplayName;
+            public string EnglishDisplayName;
+            public string ChineseDisplayName;
             public string LevelConfigName;
             public LevelConfigBase RuntimeLevelConfig;
             public List<int>[] PhaseRecipeIds;
