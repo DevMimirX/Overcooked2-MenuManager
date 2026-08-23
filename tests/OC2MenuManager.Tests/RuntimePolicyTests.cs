@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using OC2MenuManager.Infrastructure;
 using Xunit;
 
+#pragma warning disable CA1861
+
 namespace OC2MenuManager.Tests;
 
 public sealed class RuntimePolicyTests
@@ -249,6 +251,27 @@ public sealed class RuntimePolicyTests
         AssertWindow("1_6_Dynamic_Lvl_01_variant", 0, true, 153, 0, 153);
     }
 
+    [Theory]
+    [InlineData(5, 153, 158, true)]
+    [InlineData(8, 149, 157, true)]
+    [InlineData(6, 153, 6, false)]
+    [InlineData(6, 153, 158, false)]
+    [InlineData(6, 0, 6, false)]
+    [InlineData(-1, 153, 152, false)]
+    [InlineData(6, -1, 5, false)]
+    [InlineData(6, 153, -1, false)]
+    [InlineData(int.MaxValue, 1, int.MaxValue, false)]
+    public void NoMenuAddsRecipeExtensionCandidatesOnlyForTheAuthoritativeRuntimeShape(
+        int baseCount,
+        int extensionCount,
+        int cumulativeCount,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            RecipeExtensionPhasePolicy.HasCompatibleRuntimeShape(baseCount, extensionCount, cumulativeCount));
+    }
+
     [Fact]
     public void LargeRecipePoolProducesFiniteNormalizedProbabilities()
     {
@@ -274,6 +297,223 @@ public sealed class RuntimePolicyTests
         Assert.Equal(0d, ProbabilityPolicy.CalculateRawWeight(int.MaxValue, 0, 0));
         Assert.Equal(0d, ProbabilityPolicy.Normalize(double.NaN, 1d));
         Assert.Equal(0d, ProbabilityPolicy.Normalize(1d, 0d));
+    }
+
+    [Fact]
+    public void EntryProbabilitiesPreserveDuplicateRecipeEntriesBeforeAggregation()
+    {
+        var recipeIds = new[] { 10, 10, 20 };
+        var frequencies = new[] { 1, 0, 0 };
+        var entryProbabilities = new double[recipeIds.Length];
+        var byRecipe = new Dictionary<int, double>();
+
+        Assert.True(ProbabilityPolicy.TryCalculateEntryProbabilities(recipeIds, frequencies, entryProbabilities));
+        Assert.True(ProbabilityPolicy.TryAggregateByRecipe(recipeIds, entryProbabilities, byRecipe));
+
+        Assert.Equal(0d, entryProbabilities[0]);
+        Assert.Equal(0.5d, entryProbabilities[1], 12);
+        Assert.Equal(0.5d, entryProbabilities[2], 12);
+        Assert.Equal(0.5d, byRecipe[10], 12);
+        Assert.Equal(0.5d, byRecipe[20], 12);
+    }
+
+    [Fact]
+    public void ScriptedManualOrdersAreDeterministicThenFallBackToEntryBalancing()
+    {
+        var manualRecipeIds = new[] { 7, 8 };
+
+        Assert.True(ProbabilityPolicy.TryGetScriptedManualRecipe(0, manualRecipeIds, out var first));
+        Assert.Equal(7, first);
+        Assert.True(ProbabilityPolicy.TryGetScriptedManualRecipe(1, manualRecipeIds, out var second));
+        Assert.Equal(8, second);
+        Assert.False(ProbabilityPolicy.TryGetScriptedManualRecipe(2, manualRecipeIds, out _));
+
+        var probabilities = new double[2];
+        Assert.True(ProbabilityPolicy.TryCalculateEntryProbabilities(
+            new[] { 20, 30 },
+            new[] { 0, 0 },
+            probabilities));
+        Assert.Equal(0.5d, probabilities[0], 12);
+        Assert.Equal(0.5d, probabilities[1], 12);
+    }
+
+    [Fact]
+    public void DynamicPhaseChangesResetOnlyWhenThePhaseActuallyChanges()
+    {
+        Assert.False(DynamicPhasePolicy.ShouldReset(2, 2));
+        Assert.True(DynamicPhasePolicy.ShouldReset(1, 2));
+        Assert.True(DynamicPhasePolicy.ShouldReset(2, 0));
+    }
+
+    [Fact]
+    public void FixedTasSequenceUsesCumulativePositionAndFallsBackWhenExhausted()
+    {
+        var recipeIds = new[] { 100, 200, 300 };
+        var sequence = new[] { 2, 0, 1 };
+
+        Assert.True(ProbabilityPolicy.TryGetSequenceRecipe(
+            recipeIds,
+            new[] { 1, 1, 0 },
+            sequence,
+            out var selected));
+        Assert.Equal(200, selected);
+
+        Assert.False(ProbabilityPolicy.TryGetSequenceRecipe(
+            recipeIds,
+            new[] { 1, 1, 1 },
+            sequence,
+            out _));
+
+        var fallback = new double[recipeIds.Length];
+        Assert.True(ProbabilityPolicy.TryCalculateEntryProbabilities(recipeIds, new[] { 1, 1, 1 }, fallback));
+        Assert.All(fallback, probability => Assert.True(ProbabilityPolicy.IsFinite(probability)));
+    }
+
+    [Fact]
+    public void RemoteProbabilityReconstructionCollectsOnlyDistinctRecipeIds()
+    {
+        var buffer = new HashSet<int>();
+
+        Assert.True(ProbabilityPolicy.TryCollectDistinctRecipeIds(new[] { 1, 2, 3 }, buffer));
+        Assert.Equal(3, buffer.Count);
+        Assert.False(ProbabilityPolicy.TryCollectDistinctRecipeIds(new[] { 1, 2, 1 }, buffer));
+        Assert.Empty(buffer);
+        Assert.False(ProbabilityPolicy.TryCollectDistinctRecipeIds(Array.Empty<int>(), buffer));
+        Assert.False(ProbabilityPolicy.TryCollectDistinctRecipeIds(new[] { 1 }, null!));
+    }
+
+    [Theory]
+    [InlineData(true, false, true, true)]
+    [InlineData(false, false, true, false)]
+    [InlineData(true, true, true, false)]
+    [InlineData(true, false, false, false)]
+    public void RemoteRandomProbabilityFailsClosedWhenEntryStateIsAmbiguous(
+        bool historyComplete,
+        bool hasExtensionEntries,
+        bool baseRecipeIdsDistinct,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            ProbabilityReconstructionPolicy.CanUseRandomBaseEntries(
+                historyComplete,
+                hasExtensionEntries,
+                baseRecipeIdsDistinct));
+    }
+
+    [Fact]
+    public void OnlySuccessfulDeliveryChangesServedAndOnMenuCounts()
+    {
+        var served = 0;
+        var onMenu = 1;
+        foreach (var lifecycleEvent in new[]
+                 {
+                     OrderLifecycleEvent.Expired,
+                     OrderLifecycleEvent.FailedDelivery,
+                     OrderLifecycleEvent.Expired
+                 })
+        {
+            var effect = OrderLifecyclePolicy.GetEffect(lifecycleEvent);
+            if (effect.IncrementServed)
+            {
+                served++;
+            }
+
+            if (effect.DecrementOnMenu)
+            {
+                onMenu--;
+            }
+        }
+
+        Assert.Equal(0, served);
+        Assert.Equal(1, onMenu);
+
+        var success = OrderLifecyclePolicy.GetEffect(OrderLifecycleEvent.SuccessfulDelivery);
+        Assert.True(success.IncrementServed);
+        Assert.True(success.DecrementOnMenu);
+        if (success.IncrementServed)
+        {
+            served++;
+        }
+
+        if (success.DecrementOnMenu)
+        {
+            onMenu--;
+        }
+
+        Assert.Equal(1, served);
+        Assert.Equal(0, onMenu);
+    }
+
+    [Fact]
+    public void TeamScopedOrderKeysAllowIdenticalNumericIds()
+    {
+        var teamOne = new TeamScopedOrderKey(0, 42u);
+        var teamTwo = new TeamScopedOrderKey(1, 42u);
+        var keys = new HashSet<TeamScopedOrderKey> { teamOne, teamTwo };
+
+        Assert.NotEqual(teamOne, teamTwo);
+        Assert.Equal(2, keys.Count);
+        Assert.Contains(new TeamScopedOrderKey(0, 42u), keys);
+        Assert.Contains(new TeamScopedOrderKey(1, 42u), keys);
+    }
+
+    [Fact]
+    public void VersusHistoriesAndProbabilitiesRemainIndependentPerTeam()
+    {
+        var activeOrders = new Dictionary<TeamScopedOrderKey, int>
+        {
+            [new TeamScopedOrderKey(0, 1u)] = 10,
+            [new TeamScopedOrderKey(1, 1u)] = 20
+        };
+        var servedByTeam = new Dictionary<int, Dictionary<int, int>>
+        {
+            [0] = new Dictionary<int, int>(),
+            [1] = new Dictionary<int, int>()
+        };
+
+        var successfulKey = new TeamScopedOrderKey(0, 1u);
+        var successfulRecipe = activeOrders[successfulKey];
+        var effect = OrderLifecyclePolicy.GetEffect(OrderLifecycleEvent.SuccessfulDelivery);
+        if (effect.IncrementServed)
+        {
+            servedByTeam[0][successfulRecipe] = 1;
+        }
+
+        if (effect.DecrementOnMenu)
+        {
+            activeOrders.Remove(successfulKey);
+        }
+
+        Assert.False(activeOrders.ContainsKey(successfulKey));
+        Assert.True(activeOrders.ContainsKey(new TeamScopedOrderKey(1, 1u)));
+        Assert.Equal(1, servedByTeam[0][10]);
+        Assert.Empty(servedByTeam[1]);
+
+        var teamOneProbabilities = new double[2];
+        var teamTwoProbabilities = new double[2];
+        Assert.True(ProbabilityPolicy.TryCalculateEntryProbabilities(
+            new[] { 10, 20 }, new[] { 1, 0 }, teamOneProbabilities));
+        Assert.True(ProbabilityPolicy.TryCalculateEntryProbabilities(
+            new[] { 10, 20 }, new[] { 0, 1 }, teamTwoProbabilities));
+        Assert.NotEqual(teamOneProbabilities[0], teamTwoProbabilities[0]);
+        Assert.NotEqual(teamOneProbabilities[1], teamTwoProbabilities[1]);
+    }
+
+    [Theory]
+    [InlineData(false, false, false, (int)SyntheticTransactionOutcome.NotInjected)]
+    [InlineData(true, false, false, (int)SyntheticTransactionOutcome.Success)]
+    [InlineData(true, true, false, (int)SyntheticTransactionOutcome.CompensateAndDisable)]
+    [InlineData(true, false, true, (int)SyntheticTransactionOutcome.CompensateAndDisable)]
+    public void SyntheticTransactionsVerifyOriginalRemovalAndCompensateFailures(
+        bool injected,
+        bool stillActive,
+        bool originalThrew,
+        int expected)
+    {
+        Assert.Equal(
+            (SyntheticTransactionOutcome)expected,
+            SyntheticTransactionPolicy.Evaluate(injected, stillActive, originalThrew));
     }
 
     [Fact]
@@ -310,7 +550,7 @@ public sealed class RuntimePolicyTests
     [InlineData(true, true, false, true, false, false, false, true, (int)NoMenuIneligibility.Tutorial)]
     [InlineData(true, true, false, false, true, false, false, true, (int)NoMenuIneligibility.Survival)]
     [InlineData(true, true, false, false, false, true, false, true, (int)NoMenuIneligibility.PreTimerOrders)]
-    [InlineData(true, true, false, false, false, false, true, true, (int)NoMenuIneligibility.PublicOnline)]
+    [InlineData(true, true, false, false, false, false, true, true, (int)NoMenuIneligibility.OnlineSession)]
     [InlineData(true, true, false, false, false, false, false, false, (int)NoMenuIneligibility.MissingRuntimeContract)]
     [InlineData(true, true, false, false, false, false, false, true, (int)NoMenuIneligibility.None)]
     public void NoMenuEligibilityFailsClosed(
@@ -320,23 +560,39 @@ public sealed class RuntimePolicyTests
         bool tutorial,
         bool survival,
         bool preTimer,
-        bool publicOnline,
+        bool inOnlineSession,
         bool contract,
         int expected)
     {
         Assert.Equal(
             (NoMenuIneligibility)expected,
-            NoMenuRoundPolicy.Evaluate(requested, kitchen, boss, tutorial, survival, preTimer, publicOnline, contract));
+            NoMenuRoundPolicy.Evaluate(requested, kitchen, boss, tutorial, survival, preTimer, inOnlineSession, contract));
     }
 
     [Theory]
-    [InlineData(false, false, true)]
-    [InlineData(false, true, true)]
-    [InlineData(true, true, true)]
-    [InlineData(true, false, false)]
-    public void NoMenuClientFallbackRequiresLocalAuthority(bool inSession, bool isHost, bool expected)
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public void NoMenuClientInitializationDefersToAnAuthoritativeServerFlow(bool hasServerFlow, bool expected)
     {
-        Assert.Equal(expected, NoMenuClientAuthorityPolicy.ShouldInitializeLocalRoundState(inSession, isHost));
+        Assert.Equal(expected, NoMenuClientAuthorityPolicy.ShouldInitializeLocalRoundState(hasServerFlow));
+    }
+
+    [Fact]
+    public void NoMenuAllowsLocalStandardDynamicAndVersusButBlocksPrivateAndPublicOnline()
+    {
+        for (var localCase = 0; localCase < 3; localCase++)
+        {
+            Assert.Equal(
+                NoMenuIneligibility.None,
+                NoMenuRoundPolicy.Evaluate(true, true, false, false, false, false, false, true));
+        }
+
+        for (var onlineVisibility = 0; onlineVisibility < 2; onlineVisibility++)
+        {
+            Assert.Equal(
+                NoMenuIneligibility.OnlineSession,
+                NoMenuRoundPolicy.Evaluate(true, true, false, false, false, false, true, true));
+        }
     }
 
     [Theory]

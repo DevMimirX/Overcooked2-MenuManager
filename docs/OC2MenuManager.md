@@ -23,6 +23,12 @@ Main features:
 - `Overcooked! 2`
 - `BepInEx`
 
+Compatibility target: Steam build `20236421`. Maintainers can verify the reference manifest/hash and compile against that exact build without copying the full game DLL into the repository:
+
+```powershell
+.\tools\Test-BaseGameCompatibility.ps1 -ReferenceRoot 'C:\path\to\Overcooked2-BaseGame\build-20236421'
+```
+
 ## Optional Mod Compatibility
 
 - `OC2DIYLevel` 0.8-style and newer recipe-helper contracts are supported.
@@ -33,7 +39,7 @@ Main features:
   - Its generated recipes are added after the extension creates them for the round.
   - Its two special dynamic-level phase filters are preserved.
   - Real orders always keep their slots; active real and guess tickets are capped at ten whenever the level itself stays within that limit.
-  - A served or expired real ticket always completes removal even if another mod previously assigned it an invalid UI table index.
+  - A successfully served real ticket always completes removal even if another mod previously assigned it an invalid UI table index. Expiration follows the base game: the same ticket remains active and its timer resets.
   - On Carnival, non-fixed Good Menu and Good Cake rules use the full generated pool while applying their special restrictions only to the original Carnival recipes. The fixed/TAS sequence remains base-recipe-only.
 
 Both integrations are optional. If an optional mod is absent or changes to an unknown reflection contract, only that integration is disabled and Menu Manager continues to run.
@@ -147,7 +153,7 @@ Important behavior:
 - during a round, the scene selector locks to the current scene
 - this lock is intentional so you do not accidentally edit another level mid-run
 
-DIY scenes appear once OC2DIYLevel finishes loading its frontend metadata. Selecting one lazily loads its recipes; the window shows a loading or error message and a retry button if metadata is not ready. You no longer need to launch a DIY level once just to configure it.
+DIY scenes appear once OC2DIYLevel finishes loading its frontend metadata. Only scenes confirmed by that metadata are listed, so screenshots, text files, and other files beside the bundles are ignored. Selecting a scene lazily loads its recipes; a failed preload is retried automatically while the window is open, and the retry button forces another attempt. You no longer need to launch a DIY level once just to configure it.
 
 Recipe Extension dishes are generated from the real level at round initialization, so they appear in the current scene selector after that round starts. Press `Refresh` if a recently changed optional-mod configuration has not appeared yet.
 
@@ -290,13 +296,13 @@ These are special gameplay-related toggles.
 #### No Menu Mode
 
 - changes apply at the next round boundary; the status line reports active, pending, or unsupported state
-- supports standard and dynamic campaign kitchens plus versus kitchens
-- disables normal order generation and safely clears startup orders for the active round
+- supports standard and dynamic campaign kitchens plus local couch-versus kitchens
+- disables normal order generation only after verifying that the round has no special startup orders
 - accepts any recipe valid for the current round; dynamic levels follow the game's current phase
 - supports DIY and Recipe Extension recipes
-- preserves normal score/combo callbacks and returns the delivered plate once
+- injects a temporary team-scoped order and lets the original delivery pipeline handle plate return, matching, combo, scoring, game-mode callbacks, and client messages
 - suspends Menu Manager’s overlay, prepared tracking, ticket tinting, and guess tickets while active
-- boss, tutorial, survival, Horde, pre-timer-order, and public-online rounds retain their normal menu and show the reason
+- boss, tutorial, survival, Horde, pre-timer-order, and every online round (public or private) retain their normal menu and show the reason
 
 ### Overlay
 
@@ -351,6 +357,8 @@ It shows:
 - served count
 - next-order probability
 - prepared count when prepared tracking is enabled
+
+Campaign presentation remains a single section. Couch versus displays independent `Team 1` and `Team 2` history/probability sections; prepared counts remain shared across the kitchen. If an authoritative next-order state is unavailable and cannot be reconstructed unambiguously, probability is shown as `—` and no guess ticket is created from it.
 
 ### Overlay Legend
 
@@ -473,9 +481,12 @@ If the mod feels heavy, try these changes first:
 Why:
 
 - prepared-source matching remains the heaviest optional feature
-- scene/controller discovery is cached, prepared sources are normally event-driven, and recovery scans are delayed and staged
+- prepared maintenance runs only when a source changes, a prune is due, or a delayed recovery stage is scheduled; it is not a recipe scan performed every frame
+- scene/controller discovery is cached, and recovery scans are delayed and split across frames
 - ticket layout is left to the game; Menu Manager only reorders membership when the real/guess set changes
-- large recipe pools use cached selector groups and finite, duplicate-safe probability calculations
+- each team's next-order probabilities and sorted overlay rows are rebuilt once after an order/phase/rule change, then shared by the overlay, prepared matching, and guess tickets
+- Recipe Extension's ordered generated-entry list is reflected once after round synchronization, then reused; large-pool expansion and remote reconstruction also reuse working buffers instead of allocating temporary collections on every refresh
+- when history tracking is disabled and no tracker state needs cleanup, the frame update exits after hotkey/discovery housekeeping
 
 ## Troubleshooting
 
@@ -524,7 +535,7 @@ Try:
 
 ### A DIY scene is listed but has no dishes
 
-Wait for OC2DIYLevel to finish loading, select the scene, and press `Retry DIY Recipe Load`. Check the BepInEx log for one `[Compatibility]` warning if the installed DIY version exposes an unsupported contract.
+Keep the settings window open briefly so the automatic retry can run, or press `Retry DIY Recipe Load` to retry immediately. Check the BepInEx log for one `[Compatibility]` warning if the installed DIY version exposes an unsupported contract or a recipe cannot be preloaded completely.
 
 ### Recipe Extension dishes do not appear
 
@@ -532,7 +543,7 @@ They are generated at round initialization rather than in the frontend. Start th
 
 ### A served order remains visible
 
-Version 1.1.0 reserves a valid UI table before every real ticket, including when history tracking is disabled. It also guards the base game's unchecked table release so a ticket inherited from an already-full UI can still animate out and be destroyed. If this still occurs, keep the BepInEx log and note the level, active real-order count, Recipe Extension options, and `Max Guess Count`.
+Version 1.1.1 reserves a valid UI table before every real ticket, including when history tracking is disabled. It also guards the base game's unchecked table release so a successfully delivered ticket inherited from an already-full UI can still animate out and be destroyed. Expired tickets intentionally remain and reset, matching build 20236421. If a delivered ticket remains, keep the BepInEx log and note the level, active real-order count, Recipe Extension options, and `Max Guess Count`.
 
 ## Summary
 

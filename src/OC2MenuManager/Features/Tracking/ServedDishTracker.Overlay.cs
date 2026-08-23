@@ -1,3 +1,6 @@
+// Builds the history overlay and next-order probabilities from authoritative
+// round state. Probability and sorted-row results are cached per team and are
+// rebuilt only after the runtime emits an explicit state invalidation.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -21,14 +24,28 @@ namespace OC2MenuManager
     {
         private static void ResetProbabilityState(int phaseIndex)
         {
-            if (currentRun == null)
+            if (RunsByTeam.Count == 0)
             {
                 return;
             }
 
-            currentRun.CurrentPhaseIndex = Math.Max(0, phaseIndex);
-            currentRun.TotalAdded = 0;
-            currentRun.AddedCounts.Clear();
+            foreach (RunInfo run in RunsByTeam.Values)
+            {
+                if (run == null)
+                {
+                    continue;
+                }
+
+                int nextPhase = Math.Max(0, phaseIndex);
+                if (!DynamicPhasePolicy.ShouldReset(run.CurrentPhaseIndex, nextPhase))
+                {
+                    continue;
+                }
+
+                run.CurrentPhaseIndex = nextPhase;
+                run.TotalAdded = 0;
+                run.AddedCounts.Clear();
+            }
             InvalidateProbabilityMap();
             InvalidatePreparedCandidates(true);
             InvalidateOverlay();
@@ -50,24 +67,36 @@ namespace OC2MenuManager
                 return string.Empty;
             }
 
-            bool showPrepared = IsPreparedTrackingEnabled();
-            RunInfo run = EnsureRun(scene);
-            List<OverlayRow> rows = BuildAndSortOverlayRows(scene, run, showPrepared);
-
             bool chinese = UseChinese();
-            if (rows.Count == 0)
+            List<TeamID> activeTeams = GetActiveTeamIds();
+            if (activeTeams.Count == 0)
             {
-                OverlayRenderRowsBuffer.Clear();
-                return chinese
-                ? "历史菜单追踪\n当前关卡没有勾选任何追踪菜品。\n请打开 OC2MenuManager 独立窗口勾选需要追踪的菜品。"
-                : "Menu History Tracker\nNo dishes are tracked for this scene.\nOpen the standalone OC2MenuManager window to choose tracked dishes.";
+                activeTeams.Add(TeamID.One);
             }
 
+            bool showPrepared = IsPreparedTrackingEnabled();
             StringBuilder builder = OverlayTextBuilder;
             builder.Length = 0;
             builder.Append(TruncateWithEllipsis(GetOverlaySceneLabel(scene), GetMaxOverlaySceneDisplayLength())).Append(" | ");
             builder.Append(chinese ? "已追踪 " : "Tracking ");
-            builder.Append(rows.Count).Append('/').Append(scene.OrderedRecipes.Count).Append('\n');
+            int trackedRecipeCount = 0;
+            for (int i = 0; i < scene.OrderedRecipes.Count; i++)
+            {
+                if (scene.OrderedRecipes[i] != null && IsTracked(scene, scene.OrderedRecipes[i].Id))
+                {
+                    trackedRecipeCount++;
+                }
+            }
+
+            if (trackedRecipeCount == 0)
+            {
+                OverlayRenderRowsBuffer.Clear();
+                return chinese
+                    ? "历史菜单追踪\n当前关卡没有勾选任何追踪菜品。\n请打开 OC2MenuManager 独立窗口勾选需要追踪的菜品。"
+                    : "Menu History Tracker\nNo dishes are tracked for this scene.\nOpen the standalone OC2MenuManager window to choose tracked dishes.";
+            }
+
+            builder.Append(trackedRecipeCount).Append('/').Append(scene.OrderedRecipes.Count).Append('\n');
             builder.Append(chinese
                 ? "按下单出现概率排序，复杂的菜优先"
                 : "Sorted by next-order probability; harder dishes first").Append('\n');
@@ -81,42 +110,67 @@ namespace OC2MenuManager
             overlayHeaderText = builder.ToString().TrimEnd();
             builder.Length = 0;
 
-            int maxRows = Math.Min(rows.Count, Math.Max(1, overlayMaxDisplayDishes != null ? overlayMaxDisplayDishes.Value : 12));
-            for (int i = 0; i < maxRows; i++)
+            int renderIndex = 0;
+            int maxRowsPerTeam = Math.Max(1, overlayMaxDisplayDishes != null ? overlayMaxDisplayDishes.Value : 12);
+            bool separateTeams = activeTeams.Count > 1;
+            for (int teamIndex = 0; teamIndex < activeTeams.Count; teamIndex++)
             {
-                OverlayRow row = rows[i];
-                bool isDeferredTodo = row.Probability <= 0d && row.OnMenu <= 0 && (!showPrepared || row.Prepared <= 0);
-                builder.Append(GetOverlayTodoPrefix(row, showPrepared)).Append(' ');
-                builder.Append(GetOverlayDishNameText(row, showPrepared));
-                builder.Append("  |  ");
-                builder.Append(WrapRichValue(row.Served.ToString(), GetOverlayServedValueColor(row, showPrepared)));
-                builder.Append("  |  ");
-                builder.Append(WrapRichValue((row.Probability * 100d).ToString("0.0") + "%", GetOverlayProbabilityValueColor(row, showPrepared)));
-                OverlayRenderRow renderRow = GetOrCreateOverlayRenderRow(i);
-                renderRow.Text = builder.ToString();
-                renderRow.BackgroundColor = GetOverlayRowBackgroundColor(row, showPrepared);
-                renderRow.HasBackground = renderRow.BackgroundColor.a > 0f;
-                renderRow.TextTint = GetOverlayRowTextTint(row, showPrepared);
-                renderRow.HasStrikeThrough = isDeferredTodo;
-                builder.Length = 0;
+                TeamID teamId = activeTeams[teamIndex];
+                RunInfo run = EnsureRun(scene, teamId);
+                List<OverlayRow> rows = BuildAndSortOverlayRows(scene, run, showPrepared);
+                if (separateTeams)
+                {
+                    OverlayRenderRow teamHeader = GetOrCreateOverlayRenderRow(renderIndex++);
+                    teamHeader.Text = chinese
+                        ? (teamId == TeamID.Two ? "—— 队伍 2 ——" : "—— 队伍 1 ——")
+                        : (teamId == TeamID.Two ? "— Team 2 —" : "— Team 1 —");
+                    teamHeader.TextTint = new Color(0.82f, 0.90f, 1f, 1f);
+                }
+
+                int maxRows = Math.Min(rows.Count, maxRowsPerTeam);
+                for (int i = 0; i < maxRows; i++)
+                {
+                    OverlayRow row = rows[i];
+                    bool isDeferredTodo = row.ProbabilityAvailable
+                        && row.Probability <= 0d
+                        && row.OnMenu <= 0
+                        && (!showPrepared || row.Prepared <= 0);
+                    builder.Append(GetOverlayTodoPrefix(row, showPrepared)).Append(' ');
+                    builder.Append(GetOverlayDishNameText(row, showPrepared));
+                    builder.Append("  |  ");
+                    builder.Append(WrapRichValue(row.Served.ToString(), GetOverlayServedValueColor(row, showPrepared)));
+                    builder.Append("  |  ");
+                    string probabilityText = row.ProbabilityAvailable
+                        ? (row.Probability * 100d).ToString("0.0") + "%"
+                        : "—";
+                    builder.Append(WrapRichValue(probabilityText, GetOverlayProbabilityValueColor(row, showPrepared)));
+                    OverlayRenderRow renderRow = GetOrCreateOverlayRenderRow(renderIndex++);
+                    renderRow.Text = builder.ToString();
+                    renderRow.BackgroundColor = GetOverlayRowBackgroundColor(row, showPrepared);
+                    renderRow.HasBackground = renderRow.BackgroundColor.a > 0f;
+                    renderRow.TextTint = GetOverlayRowTextTint(row, showPrepared);
+                    renderRow.HasStrikeThrough = isDeferredTodo;
+                    builder.Length = 0;
+                }
+
+                if (rows.Count > maxRows)
+                {
+                    OverlayRenderRow moreRow = GetOrCreateOverlayRenderRow(renderIndex++);
+                    moreRow.Text = (chinese ? "+ 还有 " : "+ ")
+                        + (rows.Count - maxRows)
+                        + (chinese ? " 个追踪菜品未显示" : " more tracked dishes");
+                    moreRow.TextTint = new Color(1f, 1f, 1f, 0.72f);
+                }
             }
 
-            if (OverlayRenderRowsBuffer.Count > maxRows)
+            if (OverlayRenderRowsBuffer.Count > renderIndex)
             {
-                for (int i = maxRows; i < OverlayRenderRowsBuffer.Count; i++)
+                for (int i = renderIndex; i < OverlayRenderRowsBuffer.Count; i++)
                 {
                     OverlayRenderRowsBuffer[i].Reset();
                 }
 
-                OverlayRenderRowsBuffer.RemoveRange(maxRows, OverlayRenderRowsBuffer.Count - maxRows);
-            }
-
-            if (rows.Count > maxRows)
-            {
-                builder.Length = 0;
-                builder.Append(chinese ? "+ 还有 " : "+ ").Append(rows.Count - maxRows);
-                builder.Append(chinese ? " 个追踪菜品未显示" : " more tracked dishes");
-                overlayFooterText = builder.ToString();
+                OverlayRenderRowsBuffer.RemoveRange(renderIndex, OverlayRenderRowsBuffer.Count - renderIndex);
             }
 
             builder.Length = 0;
@@ -136,41 +190,27 @@ namespace OC2MenuManager
                     builder.Append(OverlayRenderRowsBuffer[i].Text);
                 }
             }
-            if (!string.IsNullOrEmpty(overlayFooterText))
-            {
-                if (builder.Length > 0)
-                {
-                    builder.Append('\n');
-                }
-
-                builder.Append(overlayFooterText);
-            }
-
             return builder.ToString().TrimEnd();
         }
 
         private static List<OverlayRow> BuildAndSortOverlayRows(SceneInfo scene, RunInfo run, bool showPrepared)
         {
-            List<OverlayRow> rows = OverlayRowsBuffer;
             if (scene == null || run == null)
             {
-                rows.Clear();
-                cachedOverlayRowsSceneName = string.Empty;
-                cachedOverlayRowsShowPrepared = showPrepared;
-                cachedOverlayRowsVersion = overlayRowsVersion;
-                return rows;
+                EmptyOverlayRowsBuffer.Clear();
+                return EmptyOverlayRowsBuffer;
             }
 
-            if (cachedOverlayRowsVersion == overlayRowsVersion
-                && cachedOverlayRowsShowPrepared == showPrepared
-                && string.Equals(cachedOverlayRowsSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+            List<OverlayRow> rows = run.OverlayRows;
+            if (run.OverlayRowsVersion == overlayRowsVersion
+                && run.OverlayRowsShowPrepared == showPrepared)
             {
                 return rows;
             }
 
             rows.Clear();
-            Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene);
-            Dictionary<int, int> menuOrderByRecipeId = BuildMenuOrderMap(scene);
+            Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene, run.TeamId);
+            Dictionary<int, int> menuOrderByRecipeId = BuildMenuOrderMap(scene, run.TeamId);
             Dictionary<int, double> probabilityByRecipeId = GetProbabilityMap(scene, run);
             int rowCount = 0;
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
@@ -181,9 +221,10 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                OverlayRow row = GetOrCreateOverlayRow(rowCount);
+                OverlayRow row = GetOrCreateOverlayRow(rows, rowCount);
                 row.Recipe = recipe;
                 row.Probability = GetProbability(probabilityByRecipeId, recipe.Id);
+                row.ProbabilityAvailable = run.ProbabilityAvailable;
                 row.Served = GetCount(run.ServedCounts, recipe.Id);
                 row.Prepared = showPrepared ? GetCount(PreparedCountsByRecipe, recipe.Id) : 0;
                 row.OnMenu = GetCount(currentMenuCounts, recipe.Id);
@@ -201,15 +242,31 @@ namespace OC2MenuManager
                 rows.RemoveRange(rowCount, rows.Count - rowCount);
             }
 
-            rows.Sort(delegate(OverlayRow a, OverlayRow b)
-            {
-                return CompareOverlayRows(a, b, showPrepared);
-            });
+            rows.Sort(showPrepared ? OverlayRowsWithPreparedComparison : OverlayRowsWithoutPreparedComparison);
 
-            cachedOverlayRowsSceneName = scene.SceneName ?? string.Empty;
-            cachedOverlayRowsShowPrepared = showPrepared;
-            cachedOverlayRowsVersion = overlayRowsVersion;
+            run.OverlayRowsShowPrepared = showPrepared;
+            run.OverlayRowsVersion = overlayRowsVersion;
             return rows;
+        }
+
+        private static int CompareOverlayRowsWithPrepared(OverlayRow a, OverlayRow b)
+        {
+            return CompareOverlayRows(a, b, true);
+        }
+
+        private static int CompareOverlayRowsWithoutPrepared(OverlayRow a, OverlayRow b)
+        {
+            return CompareOverlayRows(a, b, false);
+        }
+
+        private static OverlayRow GetOrCreateOverlayRow(List<OverlayRow> rows, int index)
+        {
+            while (rows.Count <= index)
+            {
+                rows.Add(new OverlayRow());
+            }
+
+            return rows[index];
         }
 
         private static int CompareOverlayRows(OverlayRow a, OverlayRow b, bool showPrepared)
@@ -275,12 +332,12 @@ namespace OC2MenuManager
             }
 
             bool prepared = showPrepared && row.Prepared > 0;
-            if (!prepared && row.Probability > 0d)
+            if (!prepared && row.ProbabilityAvailable && row.Probability > 0d)
             {
                 return 1;
             }
 
-            if (!prepared && row.Probability <= 0d)
+            if (!prepared)
             {
                 return 2;
             }
@@ -298,80 +355,450 @@ namespace OC2MenuManager
             if (scene == null || run == null)
             {
                 ProbabilityByRecipeBuffer.Clear();
-                probabilityMapDirty = true;
-                probabilityMapSceneName = string.Empty;
                 return ProbabilityByRecipeBuffer;
             }
 
-            if (!probabilityMapDirty
-                && string.Equals(probabilityMapSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+            if (!run.ProbabilityDirty)
             {
-                return ProbabilityByRecipeBuffer;
+                return run.ProbabilityByRecipeId;
             }
 
-            probabilityMapSceneName = scene.SceneName;
-            probabilityMapDirty = false;
-            return BuildProbabilityMap(scene, run);
+            BuildProbabilityMap(scene, run, run.ProbabilityByRecipeId);
+            run.ProbabilityDirty = false;
+            return run.ProbabilityByRecipeId;
         }
 
-        private static Dictionary<int, double> BuildProbabilityMap(SceneInfo scene, RunInfo run)
+        private static Dictionary<int, double> BuildProbabilityMap(
+            SceneInfo scene,
+            RunInfo run,
+            Dictionary<int, double> probabilityByRecipeId)
         {
-            Dictionary<int, double> probabilityByRecipeId = ProbabilityByRecipeBuffer;
             probabilityByRecipeId.Clear();
+            run.ProbabilityAvailable = false;
             if (scene == null || run == null || scene.OrderedRecipes.Count == 0)
             {
                 return probabilityByRecipeId;
             }
 
-            List<int> activeRecipeIds = GetActiveRecipeIds(scene, run);
-            if (activeRecipeIds == null || activeRecipeIds.Count == 0)
+            try
             {
-                return probabilityByRecipeId;
+                if (TryBuildAuthoritativeProbabilityMap(scene, run, probabilityByRecipeId)
+                    || TryBuildReconstructedProbabilityMap(scene, run, probabilityByRecipeId))
+                {
+                    run.ProbabilityAvailable = true;
+                    return probabilityByRecipeId;
+                }
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("rebuilding recipe probabilities", ex);
             }
 
-            UniqueProbabilityRecipeIdsBuffer.Clear();
-            UniqueProbabilityRecipeIdSetBuffer.Clear();
-            for (int i = 0; i < activeRecipeIds.Count; i++)
+            probabilityByRecipeId.Clear();
+            return probabilityByRecipeId;
+        }
+
+        private static bool TryBuildAuthoritativeProbabilityMap(
+            SceneInfo scene,
+            RunInfo run,
+            Dictionary<int, double> probabilityByRecipeId)
+        {
+            ServerOrderControllerBase orderController;
+            if (!AuthoritativeOrderControllersByTeam.TryGetValue(run.TeamId, out orderController)
+                || orderController == null
+                || ServerRoundDataField == null
+                || ServerRoundInstanceDataField == null
+                || RoundInstanceRecipeCountField == null
+                || RoundInstanceCumulativeFrequenciesField == null)
             {
-                int recipeId = activeRecipeIds[i];
-                if (scene.RecipesById.ContainsKey(recipeId) && UniqueProbabilityRecipeIdSetBuffer.Add(recipeId))
+                return false;
+            }
+
+            try
+            {
+                RoundData roundData = ServerRoundDataField.GetValue(orderController) as RoundData;
+                object instanceData = ServerRoundInstanceDataField.GetValue(orderController);
+                if (roundData == null || instanceData == null)
                 {
-                    UniqueProbabilityRecipeIdsBuffer.Add(recipeId);
+                    return false;
+                }
+
+                Type roundDataType = roundData.GetType();
+                if (roundDataType != typeof(RoundData)
+                    && roundDataType != typeof(ScriptedRoundData)
+                    && roundDataType != typeof(DynamicRoundData))
+                {
+                    return false;
+                }
+
+                int recipeCount = (int)RoundInstanceRecipeCountField.GetValue(instanceData);
+                int[] cumulativeFrequencies = RoundInstanceCumulativeFrequenciesField.GetValue(instanceData) as int[];
+                RecipeList.Entry[] entries = GetAuthoritativeEntries(scene, roundData, instanceData, cumulativeFrequencies);
+                return TryBuildProbabilityFromEntries(
+                    scene,
+                    roundData,
+                    recipeCount,
+                    entries,
+                    cumulativeFrequencies,
+                    probabilityByRecipeId);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static RecipeList.Entry[] GetAuthoritativeEntries(
+            SceneInfo scene,
+            RoundData roundData,
+            object instanceData,
+            int[] cumulativeFrequencies)
+        {
+            RecipeList.Entry[] baseEntries = null;
+            int phaseIndex = 0;
+            DynamicRoundData dynamicRoundData = roundData as DynamicRoundData;
+            if (dynamicRoundData != null)
+            {
+                if (DynamicRoundInstanceCurrentPhaseField == null
+                    || dynamicRoundData.Phases == null
+                    || dynamicRoundData.Phases.Length == 0)
+                {
+                    return null;
+                }
+
+                phaseIndex = (int)DynamicRoundInstanceCurrentPhaseField.GetValue(instanceData);
+                if (phaseIndex < 0 || phaseIndex >= dynamicRoundData.Phases.Length)
+                {
+                    return null;
+                }
+
+                DynamicRoundData.Phase phase = dynamicRoundData.Phases[phaseIndex];
+                baseEntries = phase != null && phase.Recipes != null ? phase.Recipes.m_recipes : null;
+            }
+            else
+            {
+                baseEntries = roundData.m_recipes != null ? roundData.m_recipes.m_recipes : null;
+            }
+
+            return ExpandEntriesToFrequencyShape(scene, baseEntries, cumulativeFrequencies, phaseIndex);
+        }
+
+        private static RecipeList.Entry[] ExpandEntriesToFrequencyShape(
+            SceneInfo scene,
+            RecipeList.Entry[] baseEntries,
+            int[] cumulativeFrequencies,
+            int phaseIndex)
+        {
+            if (baseEntries == null || cumulativeFrequencies == null || baseEntries.Length > cumulativeFrequencies.Length)
+            {
+                return null;
+            }
+
+            if (baseEntries.Length == cumulativeFrequencies.Length)
+            {
+                return baseEntries;
+            }
+
+            ProbabilityExtensionEntriesBuffer.Clear();
+            string levelConfigName = scene != null && scene.RuntimeLevelConfig != null
+                ? scene.RuntimeLevelConfig.name
+                : (scene != null ? scene.LevelConfigName : string.Empty);
+            OptionalRecipeAdapters.AppendManyRecipeEntries(
+                ProbabilityExtensionEntriesBuffer,
+                levelConfigName,
+                phaseIndex,
+                false);
+            if (baseEntries.Length + ProbabilityExtensionEntriesBuffer.Count != cumulativeFrequencies.Length)
+            {
+                return null;
+            }
+
+            if (ProbabilityEntriesBuffer.Length != cumulativeFrequencies.Length)
+            {
+                ProbabilityEntriesBuffer = new RecipeList.Entry[cumulativeFrequencies.Length];
+            }
+
+            Array.Copy(baseEntries, ProbabilityEntriesBuffer, baseEntries.Length);
+            for (int i = 0; i < ProbabilityExtensionEntriesBuffer.Count; i++)
+            {
+                ProbabilityEntriesBuffer[baseEntries.Length + i] = ProbabilityExtensionEntriesBuffer[i];
+            }
+
+            return ProbabilityEntriesBuffer;
+        }
+
+        private static bool TryBuildProbabilityFromEntries(
+            SceneInfo scene,
+            RoundData roundData,
+            int recipeCount,
+            RecipeList.Entry[] entries,
+            int[] cumulativeFrequencies,
+            Dictionary<int, double> probabilityByRecipeId)
+        {
+            if (roundData == null || entries == null || cumulativeFrequencies == null || entries.Length != cumulativeFrequencies.Length)
+            {
+                return false;
+            }
+
+            ScriptedRoundData scriptedRoundData = roundData as ScriptedRoundData;
+            if (scriptedRoundData != null && scriptedRoundData.m_manualOrder != null && recipeCount < scriptedRoundData.m_manualOrder.Length)
+            {
+                RecipeList.Entry manualEntry = recipeCount >= 0 ? scriptedRoundData.m_manualOrder[recipeCount] : null;
+                return TrySetDeterministicProbability(scene, manualEntry, probabilityByRecipeId);
+            }
+
+            EnsureProbabilityBufferCapacity(entries.Length);
+            for (int i = 0; i < entries.Length; i++)
+            {
+                RecipeList.Entry entry = entries[i];
+                if (entry == null || entry.m_order == null)
+                {
+                    return false;
+                }
+
+                int recipeId = entry.m_order.m_uID;
+                if (scene == null || !scene.RecipesById.ContainsKey(recipeId))
+                {
+                    return false;
+                }
+
+                ProbabilityRecipeIdsBuffer[i] = recipeId;
+                ProbabilityCumulativeFrequenciesBuffer[i] = cumulativeFrequencies[i];
+            }
+
+            bool carnival = IsCarnivalScene(scene) && !(roundData is DynamicRoundData);
+            if (carnival && MenuManager.IsCarnivalMenuFixedEnabled)
+            {
+                int[] fixedSequence = MenuManager.carnivalMenu != null && MenuManager.carnivalMenu.Length > 0
+                    ? MenuManager.carnivalMenu[0]
+                    : null;
+                int fixedRecipeId;
+                if (ProbabilityPolicy.TryGetSequenceRecipe(
+                    ProbabilityRecipeIdsBuffer,
+                    ProbabilityCumulativeFrequenciesBuffer,
+                    fixedSequence,
+                    out fixedRecipeId))
+                {
+                    probabilityByRecipeId[fixedRecipeId] = 1d;
+                    return true;
                 }
             }
 
-            if (UniqueProbabilityRecipeIdsBuffer.Count == 0)
+            if (carnival && MenuManager.IsCarnivalMenuGoodEnabled && !MenuManager.IsCarnivalMenuFixedEnabled)
             {
-                return probabilityByRecipeId;
+                int baseRecipeCount = roundData.m_recipes != null && roundData.m_recipes.m_recipes != null
+                    ? roundData.m_recipes.m_recipes.Length
+                    : 0;
+                if (!CarnivalRecipeSelectionPolicy.TryCalculateWeights(
+                    ProbabilityCumulativeFrequenciesBuffer,
+                    baseRecipeCount,
+                    MenuManager.IsCarnivalCakeGoodEnabled,
+                    ProbabilityCarnivalWeightsBuffer))
+                {
+                    return false;
+                }
+
+                for (int i = 0; i < ProbabilityCarnivalWeightsBuffer.Length; i++)
+                {
+                    ProbabilityRawWeightsBuffer[i] = ProbabilityCarnivalWeightsBuffer[i];
+                }
+
+                if (!ProbabilityPolicy.TryNormalizeEntryWeights(ProbabilityRawWeightsBuffer, ProbabilityEntryValuesBuffer))
+                {
+                    return false;
+                }
+            }
+            else if (!ProbabilityPolicy.TryCalculateEntryProbabilities(
+                ProbabilityRecipeIdsBuffer,
+                ProbabilityCumulativeFrequenciesBuffer,
+                ProbabilityEntryValuesBuffer))
+            {
+                return false;
             }
 
-            double totalWeight = 0d;
-            Dictionary<int, double> weightsByRecipeId = ProbabilityWeightsByRecipeBuffer;
-            weightsByRecipeId.Clear();
-            for (int i = 0; i < UniqueProbabilityRecipeIdsBuffer.Count; i++)
-            {
-                int id = UniqueProbabilityRecipeIdsBuffer[i];
-                double weight = ProbabilityPolicy.CalculateRawWeight(
-                    run.TotalAdded,
-                    UniqueProbabilityRecipeIdsBuffer.Count,
-                    GetCount(run.AddedCounts, id));
+            return ProbabilityPolicy.TryAggregateByRecipe(
+                ProbabilityRecipeIdsBuffer,
+                ProbabilityEntryValuesBuffer,
+                probabilityByRecipeId);
+        }
 
-                totalWeight += weight;
-                double existingWeight;
-                weightsByRecipeId[id] = weightsByRecipeId.TryGetValue(id, out existingWeight) ? existingWeight + weight : weight;
+        private static bool TryBuildReconstructedProbabilityMap(
+            SceneInfo scene,
+            RunInfo run,
+            Dictionary<int, double> probabilityByRecipeId)
+        {
+            if (run == null || !run.ReconstructionComplete)
+            {
+                return false;
             }
 
-            if (!ProbabilityPolicy.IsFinite(totalWeight) || totalWeight <= 0d)
+            KitchenLevelConfigBase kitchenLevelConfig = scene.RuntimeLevelConfig as KitchenLevelConfigBase;
+            RoundData roundData = kitchenLevelConfig != null ? kitchenLevelConfig.GetRoundData() as RoundData : null;
+            if (roundData == null
+                || (roundData.GetType() != typeof(RoundData)
+                    && roundData.GetType() != typeof(ScriptedRoundData)
+                    && roundData.GetType() != typeof(DynamicRoundData)))
             {
-                return probabilityByRecipeId;
+                return false;
             }
 
-            foreach (KeyValuePair<int, double> pair in weightsByRecipeId)
+            if (IsCarnivalScene(scene))
             {
-                probabilityByRecipeId[pair.Key] = ProbabilityPolicy.Normalize(pair.Value, totalWeight);
+                return false;
             }
 
-            return probabilityByRecipeId;
+            ScriptedRoundData scriptedRoundData = roundData as ScriptedRoundData;
+            if (scriptedRoundData != null
+                && scriptedRoundData.m_manualOrder != null
+                && run.TotalAdded < scriptedRoundData.m_manualOrder.Length)
+            {
+                RecipeList.Entry manualEntry = run.TotalAdded >= 0 ? scriptedRoundData.m_manualOrder[run.TotalAdded] : null;
+                return TrySetDeterministicProbability(scene, manualEntry, probabilityByRecipeId);
+            }
+
+            RecipeList.Entry[] entries;
+            DynamicRoundData dynamicRoundData = roundData as DynamicRoundData;
+            if (dynamicRoundData != null)
+            {
+                if (dynamicRoundData.Phases == null || dynamicRoundData.Phases.Length == 0)
+                {
+                    return false;
+                }
+
+                int phaseIndex = Mathf.Clamp(run.CurrentPhaseIndex, 0, dynamicRoundData.Phases.Length - 1);
+                DynamicRoundData.Phase phase = dynamicRoundData.Phases[phaseIndex];
+                entries = phase != null && phase.Recipes != null ? phase.Recipes.m_recipes : null;
+            }
+            else
+            {
+                entries = roundData.m_recipes != null ? roundData.m_recipes.m_recipes : null;
+            }
+
+            if (entries == null || entries.Length == 0)
+            {
+                return false;
+            }
+
+            EnsureProbabilityBufferCapacity(entries.Length);
+            for (int i = 0; i < entries.Length; i++)
+            {
+                RecipeList.Entry entry = entries[i];
+                if (entry == null || entry.m_order == null)
+                {
+                    return false;
+                }
+
+                int recipeId = entry.m_order.m_uID;
+                if (scene == null || !scene.RecipesById.ContainsKey(recipeId))
+                {
+                    return false;
+                }
+
+                ProbabilityRecipeIdsBuffer[i] = recipeId;
+            }
+
+            bool baseRecipeIdsDistinct = ProbabilityPolicy.TryCollectDistinctRecipeIds(
+                ProbabilityRecipeIdsBuffer,
+                ReconstructableRecipeIdsBuffer);
+            if (!ProbabilityReconstructionPolicy.CanUseRandomBaseEntries(
+                run.ReconstructionComplete,
+                scene.ExtensionRecipeIds.Count > 0,
+                baseRecipeIdsDistinct))
+            {
+                return false;
+            }
+
+            ReconstructedRecipeCountsBuffer.Clear();
+            foreach (KeyValuePair<int, int> pair in run.AddedCounts)
+            {
+                ReconstructedRecipeCountsBuffer[pair.Key] = pair.Value;
+            }
+
+            if (scriptedRoundData != null && scriptedRoundData.m_manualOrder != null)
+            {
+                for (int i = 0; i < scriptedRoundData.m_manualOrder.Length; i++)
+                {
+                    RecipeList.Entry manualEntry = scriptedRoundData.m_manualOrder[i];
+                    if (manualEntry == null || manualEntry.m_order == null)
+                    {
+                        return false;
+                    }
+
+                    int manualRecipeId = manualEntry.m_order.m_uID;
+                    int existing = GetCount(ReconstructedRecipeCountsBuffer, manualRecipeId);
+                    if (existing <= 0)
+                    {
+                        return false;
+                    }
+
+                    ReconstructedRecipeCountsBuffer[manualRecipeId] = existing - 1;
+                }
+            }
+
+            foreach (KeyValuePair<int, int> pair in ReconstructedRecipeCountsBuffer)
+            {
+                if (pair.Value > 0 && !ReconstructableRecipeIdsBuffer.Contains(pair.Key))
+                {
+                    return false;
+                }
+            }
+
+            for (int i = 0; i < entries.Length; i++)
+            {
+                ProbabilityCumulativeFrequenciesBuffer[i] = GetCount(ReconstructedRecipeCountsBuffer, ProbabilityRecipeIdsBuffer[i]);
+            }
+
+            if (!ProbabilityPolicy.TryCalculateEntryProbabilities(
+                ProbabilityRecipeIdsBuffer,
+                ProbabilityCumulativeFrequenciesBuffer,
+                ProbabilityEntryValuesBuffer))
+            {
+                return false;
+            }
+
+            return ProbabilityPolicy.TryAggregateByRecipe(
+                ProbabilityRecipeIdsBuffer,
+                ProbabilityEntryValuesBuffer,
+                probabilityByRecipeId);
+        }
+
+        private static bool TrySetDeterministicProbability(
+            SceneInfo scene,
+            RecipeList.Entry entry,
+            Dictionary<int, double> probabilityByRecipeId)
+        {
+            if (scene == null
+                || entry == null
+                || entry.m_order == null
+                || !scene.RecipesById.ContainsKey(entry.m_order.m_uID))
+            {
+                return false;
+            }
+
+            probabilityByRecipeId.Clear();
+            probabilityByRecipeId[entry.m_order.m_uID] = 1d;
+            return true;
+        }
+
+        private static void EnsureProbabilityBufferCapacity(int count)
+        {
+            if (ProbabilityRecipeIdsBuffer.Length != count)
+            {
+                ProbabilityRecipeIdsBuffer = new int[count];
+                ProbabilityCumulativeFrequenciesBuffer = new int[count];
+                ProbabilityEntryValuesBuffer = new double[count];
+                ProbabilityRawWeightsBuffer = new double[count];
+                ProbabilityCarnivalWeightsBuffer = new float[count];
+            }
+        }
+
+        private static bool IsCarnivalScene(SceneInfo scene)
+        {
+            string levelConfigName = scene != null && scene.RuntimeLevelConfig != null
+                ? scene.RuntimeLevelConfig.name
+                : (scene != null ? scene.LevelConfigName : string.Empty);
+            return !string.IsNullOrEmpty(levelConfigName)
+                && levelConfigName.StartsWith("Day_3_4", StringComparison.Ordinal);
         }
 
         private static double GetProbability(Dictionary<int, double> probabilityByRecipeId, int recipeId)
@@ -452,6 +879,11 @@ namespace OC2MenuManager
                 return "[   ]";
             }
 
+            if (!row.ProbabilityAvailable)
+            {
+                return "[ ? ]";
+            }
+
             return row.Probability > 0d ? "[ - ]" : "[ x ]";
         }
 
@@ -530,7 +962,10 @@ namespace OC2MenuManager
                 return baseColor;
             }
 
-            bool isDeferredTodo = row.Probability <= 0d && row.OnMenu <= 0 && (!showPrepared || row.Prepared <= 0);
+            bool isDeferredTodo = row.ProbabilityAvailable
+                && row.Probability <= 0d
+                && row.OnMenu <= 0
+                && (!showPrepared || row.Prepared <= 0);
             if (!isDeferredTodo)
             {
                 return baseColor;
@@ -552,7 +987,10 @@ namespace OC2MenuManager
                 return new Color(0.22f, 0.58f, 0.22f, 0.28f);
             }
 
-            if (row.Probability <= 0d && row.OnMenu <= 0 && (!showPrepared || row.Prepared <= 0))
+            if (row.ProbabilityAvailable
+                && row.Probability <= 0d
+                && row.OnMenu <= 0
+                && (!showPrepared || row.Prepared <= 0))
             {
                 return new Color(0f, 0f, 0f, 0.22f);
             }
@@ -572,7 +1010,7 @@ namespace OC2MenuManager
                 return new Color(1f, 1f, 1f, 0.88f);
             }
 
-            if (row.Probability <= 0d && row.OnMenu <= 0)
+            if (row.ProbabilityAvailable && row.Probability <= 0d && row.OnMenu <= 0)
             {
                 return new Color(1f, 1f, 1f, 0.42f);
             }
@@ -593,11 +1031,53 @@ namespace OC2MenuManager
             return WrapRichValue(preparedCount.ToString(), color);
         }
 
+        private static List<TeamID> GetActiveTeamIds()
+        {
+            ActiveTeamIdsBuffer.Clear();
+            ClientKitchenFlowControllerBase flowController = GetKitchenFlowController();
+            if (flowController == null)
+            {
+                ActiveTeamIdsBuffer.Add(TeamID.One);
+                return ActiveTeamIdsBuffer;
+            }
+
+            VisitedOrderControllersBuffer.Clear();
+            for (int i = 0; i < SupportedTeamIds.Length; i++)
+            {
+                ClientTeamMonitor monitor;
+                try
+                {
+                    monitor = flowController.GetMonitorForTeam(SupportedTeamIds[i]);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (monitor == null
+                    || monitor.OrdersController == null
+                    || !VisitedOrderControllersBuffer.Add(monitor.OrdersController))
+                {
+                    continue;
+                }
+
+                ActiveTeamIdsBuffer.Add(SupportedTeamIds[i]);
+            }
+
+            if (ActiveTeamIdsBuffer.Count == 0)
+            {
+                ActiveTeamIdsBuffer.Add(TeamID.One);
+            }
+
+            return ActiveTeamIdsBuffer;
+        }
+
         private static Dictionary<int, int> GetCurrentOnMenuCounts(SceneInfo scene)
         {
+            CombinedOnMenuCountsBuffer.Clear();
             if (scene == null)
             {
-                return CurrentOnMenuCounts;
+                return CombinedOnMenuCountsBuffer;
             }
 
             if (!string.Equals(currentOnMenuCountsSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase)
@@ -606,10 +1086,34 @@ namespace OC2MenuManager
                 RebuildCurrentOnMenuCounts(scene.SceneName);
             }
 
-            return CurrentOnMenuCounts;
+            foreach (Dictionary<int, int> teamCounts in CurrentOnMenuCountsByTeam.Values)
+            {
+                foreach (KeyValuePair<int, int> pair in teamCounts)
+                {
+                    CombinedOnMenuCountsBuffer[pair.Key] = GetCount(CombinedOnMenuCountsBuffer, pair.Key) + pair.Value;
+                }
+            }
+
+            return CombinedOnMenuCountsBuffer;
         }
 
-        private static Dictionary<int, int> BuildMenuOrderMap(SceneInfo scene)
+        private static Dictionary<int, int> GetCurrentOnMenuCounts(SceneInfo scene, TeamID teamId)
+        {
+            if (scene == null)
+            {
+                return GetOrCreateOnMenuCounts(teamId);
+            }
+
+            if (!string.Equals(currentOnMenuCountsSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase)
+                || currentOnMenuCountsDirty)
+            {
+                RebuildCurrentOnMenuCounts(scene.SceneName);
+            }
+
+            return GetOrCreateOnMenuCounts(teamId);
+        }
+
+        private static Dictionary<int, int> BuildMenuOrderMap(SceneInfo scene, TeamID teamId)
         {
             MenuOrderByRecipeBuffer.Clear();
             if (scene == null || TicketWidgetsByInstanceId.Count == 0)
@@ -620,7 +1124,12 @@ namespace OC2MenuManager
             foreach (KeyValuePair<int, TicketWidgetState> pair in TicketWidgetsByInstanceId)
             {
                 TicketWidgetState state = pair.Value;
-                if (state == null || state.Widget == null || state.IsReferenceTicket || state.Order < 0 || !IsTracked(scene, state.RecipeId))
+                if (state == null
+                    || state.Widget == null
+                    || state.IsReferenceTicket
+                    || state.TeamId != teamId
+                    || state.Order < 0
+                    || !IsTracked(scene, state.RecipeId))
                 {
                     continue;
                 }
@@ -637,7 +1146,7 @@ namespace OC2MenuManager
 
         private static void RebuildCurrentOnMenuCounts(string sceneName)
         {
-            CurrentOnMenuCounts.Clear();
+            CurrentOnMenuCountsByTeam.Clear();
             currentOnMenuCountsSceneName = sceneName ?? string.Empty;
             currentOnMenuCountsDirty = false;
 
@@ -649,12 +1158,12 @@ namespace OC2MenuManager
 
             HashSet<ClientOrderControllerBase> visitedControllers = VisitedOrderControllersBuffer;
             visitedControllers.Clear();
-            for (int i = 0; i < TeamIds.Length; i++)
+            for (int i = 0; i < SupportedTeamIds.Length; i++)
             {
                 ClientTeamMonitor monitor;
                 try
                 {
-                    monitor = flowController.GetMonitorForTeam(TeamIds[i]);
+                    monitor = flowController.GetMonitorForTeam(SupportedTeamIds[i]);
                 }
                 catch
                 {
@@ -672,6 +1181,7 @@ namespace OC2MenuManager
                     continue;
                 }
 
+                Dictionary<int, int> teamCounts = GetOrCreateOnMenuCounts(SupportedTeamIds[i]);
                 for (int j = 0; j < activeOrders.Count; j++)
                 {
                     object activeOrder = activeOrders[j];
@@ -689,7 +1199,7 @@ namespace OC2MenuManager
                     }
 
                     int recipeId = recipeEntry.m_order.m_uID;
-                    CurrentOnMenuCounts[recipeId] = GetCount(CurrentOnMenuCounts, recipeId) + 1;
+                    teamCounts[recipeId] = GetCount(teamCounts, recipeId) + 1;
                 }
             }
         }

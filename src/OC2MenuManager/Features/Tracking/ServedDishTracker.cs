@@ -1,3 +1,6 @@
+// Hosts tracker configuration and the lightweight Unity frame/GUI entrypoints.
+// Gameplay work is delegated to event-driven partials and scheduled maintenance
+// so enabling the tracker does not turn recipe scans into per-frame work.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -196,11 +199,20 @@ namespace OC2MenuManager
             }
 
             bool runtimeEnabled = enabled != null && enabled.Value;
-            bool needsRoundState = runtimeEnabled
-                || settingsWindowVisible
-                || PreparedSourcesByInstanceId.Count > 0
+            bool hasRuntimeState = HasPreparedRuntimeState()
                 || ReferenceTicketStates.Count > 0
                 || TicketWidgetsByInstanceId.Count > 0;
+            if (!runtimeEnabled && !settingsWindowVisible && !hasRuntimeState)
+            {
+                lastMenuTicketTintEnabled = false;
+                overlayVisible = false;
+                FlushDiscoveryReportIfDue();
+                return;
+            }
+
+            bool needsRoundState = runtimeEnabled
+                || settingsWindowVisible
+                || hasRuntimeState;
             bool inActiveRound = needsRoundState && IsInActiveRound();
             bool shouldTintMenuTickets = IsMenuTicketTintEnabled();
             if (shouldTintMenuTickets != lastMenuTicketTintEnabled)
@@ -211,18 +223,18 @@ namespace OC2MenuManager
 
             if (IsPreparedTrackingEnabled())
             {
-                RefreshPreparedState(inActiveRound);
+                if (ShouldRefreshPreparedState(inActiveRound))
+                {
+                    RefreshPreparedState(inActiveRound);
+                }
             }
-            else if (PreparedSourcesByInstanceId.Count > 0
-                || PreparedCountsByRecipe.Count > 0
-                || PreparedSourceComponentByHandlerId.Count > 0
-                || PreparedCookStateBySourceId.Count > 0)
+            else if (HasPreparedRuntimeState())
             {
                 ClearPreparedState();
                 InvalidateOverlay();
             }
 
-            if (!enabled.Value || !inActiveRound || NoMenuMode.IsActiveForRound)
+            if (!runtimeEnabled || !inActiveRound || NoMenuMode.IsActiveForRound)
             {
                 if (ReferenceTicketStates.Count > 0)
                 {
@@ -292,19 +304,29 @@ namespace OC2MenuManager
                 }
             }
 
-            if (!inActiveRound && Time.frameCount >= nextDiscoveryFlushFrame)
+            if (!inActiveRound)
             {
-                try
-                {
-                    DishNameCatalog.FlushDiscoveryReport();
-                }
-                catch (Exception ex)
-                {
-                    _MODEntry.LogWarning("[ServedDishTracker] Failed to flush discovery report: " + ex.GetType().Name + ": " + ex.Message);
-                }
-
-                nextDiscoveryFlushFrame = Time.frameCount + DiscoveryFlushIntervalFrames;
+                FlushDiscoveryReportIfDue();
             }
+        }
+
+        private static void FlushDiscoveryReportIfDue()
+        {
+            if (Time.frameCount < nextDiscoveryFlushFrame)
+            {
+                return;
+            }
+
+            try
+            {
+                DishNameCatalog.FlushDiscoveryReport();
+            }
+            catch (Exception ex)
+            {
+                _MODEntry.LogWarning("[ServedDishTracker] Failed to flush discovery report: " + ex.GetType().Name + ": " + ex.Message);
+            }
+
+            nextDiscoveryFlushFrame = Time.frameCount + DiscoveryFlushIntervalFrames;
         }
 
         internal static void OnNoMenuRoundStateChanged(bool active)

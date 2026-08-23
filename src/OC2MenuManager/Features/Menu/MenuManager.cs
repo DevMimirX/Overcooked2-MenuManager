@@ -1,3 +1,6 @@
+// Owns Carnival menu selection rules and their optional Recipe Extension
+// integration. Harmony prefixes fail open so an integration fault never blocks
+// the base game's recipe selection or mutates non-Carnival rounds.
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -7,6 +10,11 @@ using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
 {
+    /// <summary>
+    /// Coordinates user-configured Carnival selection rules at the RoundData boundary.
+    /// Fixed sequences have highest precedence; weighted integration intervenes only
+    /// when the reflected runtime candidate shape exactly matches Recipe Extension.
+    /// </summary>
     public class MenuManager
     {
         public static Harmony HarmonyInstance { get; set; }
@@ -21,6 +29,7 @@ namespace OC2MenuManager
         private static readonly List<RecipeList.Entry> CarnivalExtensionEntriesBuffer = new List<RecipeList.Entry>();
         private static RecipeList.Entry[] CarnivalCandidateEntriesBuffer = new RecipeList.Entry[0];
         private static float[] CarnivalCandidateWeightsBuffer = new float[0];
+        private static bool carnivalPatchFailureLogged;
 
         public static int[][] carnivalMenu;
 
@@ -49,6 +58,9 @@ namespace OC2MenuManager
             isCarnivalMenuGood = _MODEntry.SettingsConfig.Bind<bool>("00-功能开关", "麻团好菜单", true, "第一道菜没有葱，前两道菜不是蛋糕");
             isCarnivalCakeGood = _MODEntry.SettingsConfig.Bind<bool>("00-功能开关", "麻团好蛋糕", true, "出蛋糕概率提高20%；47单前必出11蛋糕，50单前必出12蛋糕；55单前必出13蛋糕，56单前必出14蛋糕");
             isCarnivalMenuFixed = _MODEntry.SettingsConfig.Bind<bool>("00-功能开关", "麻团TAS菜单", false, "固定麻团菜单为TAS专用菜单");
+            isCarnivalMenuGood.SettingChanged += delegate { ServedDishTracker.NotifyProbabilityRuleChanged(); };
+            isCarnivalCakeGood.SettingChanged += delegate { ServedDishTracker.NotifyProbabilityRuleChanged(); };
+            isCarnivalMenuFixed.SettingChanged += delegate { ServedDishTracker.NotifyProbabilityRuleChanged(); };
             carnivalMenu = new int[1][];
             carnivalMenu[0] = new int[] {
                 3,5,7,8,1,4,6,0,2,5,6,2,1,4,8,7,3,0,7,3,1,4,0,6,2,8,5,8,
@@ -81,6 +93,10 @@ namespace OC2MenuManager
             }
         }
 
+        /// <summary>
+        /// Implements the deterministic and combined-pool Carnival selectors while
+        /// preserving the base RoundData instance counters used by the game.
+        /// </summary>
         public class FixedMenuRoundData : RoundData
         {
             public static RecipeList.Entry[] GetNextRecipeFixed(RoundData roundData, RoundInstanceDataBase _data)
@@ -226,56 +242,87 @@ namespace OC2MenuManager
         [HarmonyPriority(Priority.First)]
         public static bool RoundDataGetNextRecipePatch(RoundData __instance, ref RecipeList.Entry[] __result, RoundInstanceDataBase _data)
         {
-            if (!IsCarnivalLevel())
+            try
             {
+                if (!IsCarnivalLevel())
+                {
+                    return true;
+                }
+
+                if (IsCarnivalMenuFixedEnabled)
+                {
+                    __result = FixedMenuRoundData.GetNextRecipeFixed(__instance, _data);
+                    return __result == null;
+                }
+
+                if (IsCarnivalMenuGoodEnabled
+                    && FixedMenuRoundData.TryGetNextRecipeWithRecipeExtension(
+                        __instance,
+                        _data,
+                        IsCarnivalCakeGoodEnabled,
+                        out __result))
+                {
+                    return false;
+                }
+
                 return true;
             }
-
-            if (IsCarnivalMenuFixedEnabled)
+            catch (Exception ex)
             {
-                __result = FixedMenuRoundData.GetNextRecipeFixed(__instance, _data);
-                return __result == null;
+                LogCarnivalPatchFailure("selecting the next recipe", ex);
+                __result = null;
+                return true;
             }
-
-            if (IsCarnivalMenuGoodEnabled
-                && FixedMenuRoundData.TryGetNextRecipeWithRecipeExtension(
-                    __instance,
-                    _data,
-                    IsCarnivalCakeGoodEnabled,
-                    out __result))
-            {
-                return false;
-            }
-
-            return true;
         }
 
         [HarmonyPrefix]
         [HarmonyPatch(typeof(RoundData), "GetWeight")]
         public static bool RoundDataGetWeightPatch(ref float __result, RoundData __instance, object _instance, int _recipeIndex)
         {
-            if (IsCarnivalLevel() && IsCarnivalMenuGoodEnabled && !IsCarnivalMenuFixedEnabled)
+            try
             {
-                int[] cumulativeFrequencies = GetRoundInstanceCumulativeFrequencies(_instance);
-                RecipeList.Entry[] baseEntries = __instance != null && __instance.m_recipes != null
-                    ? __instance.m_recipes.m_recipes
-                    : null;
-                float weight;
-                if (baseEntries == null
-                    || !CarnivalRecipeSelectionPolicy.TryCalculateWeight(
-                        cumulativeFrequencies,
-                        baseEntries.Length,
-                        _recipeIndex,
-                        IsCarnivalCakeGoodEnabled,
-                        out weight))
+                if (IsCarnivalLevel() && IsCarnivalMenuGoodEnabled && !IsCarnivalMenuFixedEnabled)
                 {
-                    return true;
+                    int[] cumulativeFrequencies = GetRoundInstanceCumulativeFrequencies(_instance);
+                    RecipeList.Entry[] baseEntries = __instance != null && __instance.m_recipes != null
+                        ? __instance.m_recipes.m_recipes
+                        : null;
+                    float weight;
+                    if (baseEntries == null
+                        || !CarnivalRecipeSelectionPolicy.TryCalculateWeight(
+                            cumulativeFrequencies,
+                            baseEntries.Length,
+                            _recipeIndex,
+                            IsCarnivalCakeGoodEnabled,
+                            out weight))
+                    {
+                        return true;
+                    }
+
+                    __result = weight;
+                    return false;
                 }
 
-                __result = weight;
-                return false;
+                return true;
             }
-            return true;
+            catch (Exception ex)
+            {
+                LogCarnivalPatchFailure("calculating a recipe weight", ex);
+                return true;
+            }
+        }
+
+        private static void LogCarnivalPatchFailure(string operation, Exception exception)
+        {
+            if (carnivalPatchFailureLogged || exception == null)
+            {
+                return;
+            }
+
+            carnivalPatchFailureLogged = true;
+            _MODEntry.LogWarning("[MenuManager] Carnival integration failed while " + operation
+                + "; base-game selection was allowed to continue: "
+                + exception.GetType().Name + ": " + exception.Message);
         }
 
         private static bool IsCarnivalLevel()

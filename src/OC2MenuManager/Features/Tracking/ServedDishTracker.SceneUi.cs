@@ -1,11 +1,11 @@
+// Discovers base-game and DIY scenes and owns scene/catalog hydration. Settings
+// refreshes reuse discovery buffers; DIY recipes are loaded lazily from the
+// optional mod's authoritative frontend metadata.
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
 using System.Collections;
 using System.Reflection;
 using System.Text;
-using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
 using OrderController;
@@ -21,7 +21,8 @@ namespace OC2MenuManager
     {
         private static List<SceneDirectoryData.SceneDirectoryEntry> GetAvailableSceneEntries()
         {
-            List<SceneDirectoryData.SceneDirectoryEntry> entries = new List<SceneDirectoryData.SceneDirectoryEntry>();
+            List<SceneDirectoryData.SceneDirectoryEntry> entries = AvailableSceneEntriesBuffer;
+            entries.Clear();
 
             try
             {
@@ -40,7 +41,9 @@ namespace OC2MenuManager
             return entries;
         }
 
-        private static void AddEntries(List<SceneDirectoryData.SceneDirectoryEntry> entryList, List<SceneDirectoryData.SceneDirectoryEntry> entries)
+        private static void AddEntries(
+            List<SceneDirectoryData.SceneDirectoryEntry> entryList,
+            IList<SceneDirectoryData.SceneDirectoryEntry> entries)
         {
             if (entryList == null || entries == null)
             {
@@ -66,7 +69,7 @@ namespace OC2MenuManager
                 return;
             }
 
-            AddEntries(entryList, sceneDirectory.Scenes.ToList());
+            AddEntries(entryList, sceneDirectory.Scenes);
         }
 
         private static void AddFrontendSessionEntries(List<SceneDirectoryData.SceneDirectoryEntry> entryList, GameSession.GameType gameType)
@@ -85,11 +88,9 @@ namespace OC2MenuManager
                 return CachedDIYScenes;
             }
 
-            List<SceneInfo> scenes = new List<SceneInfo>();
-            if (!AddDIYScenesFromRuntimeManager(scenes))
-            {
-                AddDIYScenesFromFileSystem(scenes);
-            }
+            List<SceneInfo> scenes = DIYScenesRefreshBuffer;
+            scenes.Clear();
+            AddDIYScenesFromRuntimeManager(scenes);
 
             CachedDIYScenes.Clear();
             CachedDIYScenes.AddRange(scenes);
@@ -97,12 +98,12 @@ namespace OC2MenuManager
             return CachedDIYScenes;
         }
 
-        private static bool AddDIYScenesFromRuntimeManager(List<SceneInfo> scenes)
+        private static void AddDIYScenesFromRuntimeManager(List<SceneInfo> scenes)
         {
             string error;
             if (!OptionalRecipeAdapters.TryGetDIYLevels(DIYLevelDescriptorsBuffer, out error))
             {
-                return false;
+                return;
             }
 
             for (int i = 0; i < DIYLevelDescriptorsBuffer.Count; i++)
@@ -132,92 +133,19 @@ namespace OC2MenuManager
                     : descriptor.EnglishDisplayName;
                 scene.IsDIY = true;
                 scene.DIYLevelInfo = descriptor.LevelInfo;
-                if (metadataChanged)
+                bool retryFailedHydration = scene.DIYHydrationAttempted
+                    && scene.OrderedRecipes.Count == 0
+                    && !string.IsNullOrEmpty(scene.DIYHydrationError);
+                if (metadataChanged || retryFailedHydration)
                 {
                     scene.DIYHydrationAttempted = false;
-                    scene.DIYHydrationError = null;
+                    if (metadataChanged)
+                    {
+                        scene.DIYHydrationError = null;
+                    }
                 }
 
                 AddDIYSceneIfMissing(scenes, scene);
-            }
-
-            return true;
-        }
-
-        private static void AddDIYScenesFromFileSystem(List<SceneInfo> scenes)
-        {
-            string diyLevelsRoot = Path.Combine(Path.Combine(Paths.PluginPath, "OC2DIYLevel"), "levels");
-            if (!Directory.Exists(diyLevelsRoot))
-            {
-                return;
-            }
-
-            string[] directories;
-            try
-            {
-                directories = Directory.GetDirectories(diyLevelsRoot);
-            }
-            catch (Exception ex)
-            {
-                if (!diyFileSystemWarningLogged)
-                {
-                    diyFileSystemWarningLogged = true;
-                    _MODEntry.LogWarning("[ServedDishTracker] Unable to enumerate preloaded DIY level folders: " + ex.GetType().Name + ": " + ex.Message);
-                }
-                return;
-            }
-
-            for (int i = 0; i < directories.Length; i++)
-            {
-                string directory = directories[i];
-                string setName = Path.GetFileName(directory);
-                if (string.IsNullOrEmpty(setName))
-                {
-                    continue;
-                }
-
-                string[] files;
-                try
-                {
-                    files = Directory.GetFiles(directory);
-                }
-                catch
-                {
-                    continue;
-                }
-                for (int j = 0; j < files.Length; j++)
-                {
-                    string fileName = Path.GetFileName(files[j]);
-                    if (string.IsNullOrEmpty(fileName)
-                        || fileName.StartsWith("info", StringComparison.OrdinalIgnoreCase)
-                        || fileName.EndsWith(".manifest", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-
-                    SceneInfo scene = new SceneInfo();
-                    scene.SceneName = fileName;
-                    scene.DisplayName = "DIY " + setName + " - " + fileName + " [" + fileName + "]";
-                    scene.IsDIY = true;
-                    scene.DIYHydrationError = "DIY Level metadata is still loading or unavailable.";
-
-                    SceneInfo cachedScene;
-                    if (SceneCache.TryGetValue(scene.SceneName, out cachedScene) && cachedScene != null)
-                    {
-                        cachedScene.IsDIY = true;
-                        if (cachedScene.DIYLevelInfo == null)
-                        {
-                            cachedScene.DisplayName = scene.DisplayName;
-                            if (string.IsNullOrEmpty(cachedScene.DIYHydrationError))
-                            {
-                                cachedScene.DIYHydrationError = scene.DIYHydrationError;
-                            }
-                        }
-                        scene = cachedScene;
-                    }
-
-                    AddDIYSceneIfMissing(scenes, scene);
-                }
             }
         }
 
@@ -228,9 +156,14 @@ namespace OC2MenuManager
                 return;
             }
 
-            if (scenes.Any(existing => string.Equals(existing.SceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase)))
+            for (int i = 0; i < scenes.Count; i++)
             {
-                return;
+                SceneInfo existing = scenes[i];
+                if (existing != null
+                    && string.Equals(existing.SceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
             }
 
             scenes.Add(scene);
@@ -344,10 +277,11 @@ namespace OC2MenuManager
 
         private static void AddCachedScenes(List<SceneInfo> scenes, HashSet<string> seenScenes)
         {
-            SceneInfo[] cachedScenes = SceneCache.Values.ToArray();
-            for (int i = 0; i < cachedScenes.Length; i++)
+            CachedSceneInfosBuffer.Clear();
+            CachedSceneInfosBuffer.AddRange(SceneCache.Values);
+            for (int i = 0; i < CachedSceneInfosBuffer.Count; i++)
             {
-                AddScene(scenes, seenScenes, cachedScenes[i]);
+                AddScene(scenes, seenScenes, CachedSceneInfosBuffer[i]);
             }
         }
 
@@ -544,32 +478,48 @@ namespace OC2MenuManager
             bool changed = false;
 
             List<OrderDefinitionNode> recipes = levelConfig.GetAllRecipes();
-            if (recipes == null)
+            RuntimeRecipeIdsBuffer.Clear();
+            CampaignLevelConfigBase campaignLevelConfig = levelConfig as CampaignLevelConfigBase;
+            RoundData roundData = campaignLevelConfig != null ? campaignLevelConfig.GetRoundData() as RoundData : null;
+            ScriptedRoundData scriptedRoundData = roundData as ScriptedRoundData;
+            if (scriptedRoundData != null && scriptedRoundData.m_manualOrder != null)
             {
-                return false;
+                for (int i = 0; i < scriptedRoundData.m_manualOrder.Length; i++)
+                {
+                    RecipeList.Entry entry = scriptedRoundData.m_manualOrder[i];
+                    OrderDefinitionNode manualRecipe = entry != null ? entry.m_order : null;
+                    if (manualRecipe == null || manualRecipe.m_uID == 0)
+                    {
+                        continue;
+                    }
+
+                    RuntimeRecipeIdsBuffer.Add(manualRecipe.m_uID);
+                    changed |= EnsureRecipe(scene, manualRecipe);
+                }
             }
 
-            RuntimeRecipeIdsBuffer.Clear();
-            for (int i = 0; i < recipes.Count; i++)
+            if (recipes != null)
             {
-                OrderDefinitionNode recipe = recipes[i];
-                if (recipe == null || recipe.m_uID == 0)
+                for (int i = 0; i < recipes.Count; i++)
                 {
-                    continue;
-                }
+                    OrderDefinitionNode recipe = recipes[i];
+                    if (recipe == null || recipe.m_uID == 0)
+                    {
+                        continue;
+                    }
 
-                RuntimeRecipeIdsBuffer.Add(recipe.m_uID);
-                changed |= EnsureRecipe(scene, recipe);
+                    RuntimeRecipeIdsBuffer.Add(recipe.m_uID);
+                    changed |= EnsureRecipe(scene, recipe);
+                }
             }
 
             changed |= UpdateRecipeSourceIds(scene, scene.RuntimeRecipeIds, RuntimeRecipeIdsBuffer);
 
             List<int>[] previousPhaseRecipeIds = scene.PhaseRecipeIds;
             scene.PhaseRecipeIds = null;
-            CampaignLevelConfigBase campaignLevelConfig = levelConfig as CampaignLevelConfigBase;
             if (campaignLevelConfig != null)
             {
-                DynamicRoundData dynamicRoundData = campaignLevelConfig.GetRoundData() as DynamicRoundData;
+                DynamicRoundData dynamicRoundData = roundData as DynamicRoundData;
                 if (dynamicRoundData != null && dynamicRoundData.Phases != null && dynamicRoundData.Phases.Length > 0)
                 {
                     scene.PhaseRecipeIds = new List<int>[dynamicRoundData.Phases.Length];
@@ -810,9 +760,12 @@ namespace OC2MenuManager
             }
 
             scene.CatalogRevision++;
-            if (currentRun != null && string.Equals(currentRun.SceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+            foreach (RunInfo run in RunsByTeam.Values)
             {
-                InitializeRunCounts(currentRun, scene);
+                if (run != null && string.Equals(run.SceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+                {
+                    InitializeRunCounts(run, scene);
+                }
             }
 
             preparedCandidateRecipeIdsDirty = true;
@@ -824,6 +777,15 @@ namespace OC2MenuManager
 
         private static bool TryGetCurrentSceneInfo(out SceneInfo scene)
         {
+            if (cachedCurrentSceneInfoValid
+                && cachedCurrentSceneInfo != null
+                && cachedCurrentSceneInfo.RuntimeLevelConfig != null
+                && cachedCurrentSceneInfo.OrderedRecipes.Count > 0)
+            {
+                scene = cachedCurrentSceneInfo;
+                return true;
+            }
+
             if (Time.frameCount == cachedCurrentSceneInfoFrame)
             {
                 scene = cachedCurrentSceneInfo;
@@ -881,23 +843,34 @@ namespace OC2MenuManager
 
         private static RunInfo EnsureRun(SceneInfo scene)
         {
-            if (currentRun == null || !string.Equals(currentRun.SceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
+            return EnsureRun(scene, TeamID.One);
+        }
+
+        private static RunInfo EnsureRun(SceneInfo scene, TeamID teamId)
+        {
+            RunInfo run;
+            if (!RunsByTeam.TryGetValue(teamId, out run)
+                || run == null
+                || !string.Equals(run.SceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase))
             {
-                currentRun = new RunInfo();
-                currentRun.SceneName = scene.SceneName;
-                currentRun.CurrentPhaseIndex = 0;
-                InitializeRunCounts(currentRun, scene);
+                run = new RunInfo();
+                run.SceneName = scene.SceneName;
+                run.TeamId = teamId;
+                run.CurrentPhaseIndex = 0;
+                run.ReconstructionComplete = ReconstructionReadyTeams.Contains(teamId);
+                RunsByTeam[teamId] = run;
+                InitializeRunCounts(run, scene);
                 InvalidateProbabilityMap();
-                return currentRun;
+                return run;
             }
 
-            if (currentRun.AddedCounts.Count < scene.OrderedRecipes.Count || currentRun.ServedCounts.Count < scene.OrderedRecipes.Count)
+            if (run.AddedCounts.Count < scene.OrderedRecipes.Count || run.ServedCounts.Count < scene.OrderedRecipes.Count)
             {
-                InitializeRunCounts(currentRun, scene);
+                InitializeRunCounts(run, scene);
                 InvalidateProbabilityMap();
             }
 
-            return currentRun;
+            return run;
         }
 
         private static void InitializeRunCounts(RunInfo run, SceneInfo scene)
@@ -934,16 +907,6 @@ namespace OC2MenuManager
             return menuOrders != null && menuOrders.TryGetValue(recipeId, out value) ? value : int.MaxValue;
         }
 
-        private static OverlayRow GetOrCreateOverlayRow(int index)
-        {
-            while (OverlayRowsBuffer.Count <= index)
-            {
-                OverlayRowsBuffer.Add(new OverlayRow());
-            }
-
-            return OverlayRowsBuffer[index];
-        }
-
         private static OverlayRenderRow GetOrCreateOverlayRenderRow(int index)
         {
             while (OverlayRenderRowsBuffer.Count <= index)
@@ -951,7 +914,9 @@ namespace OC2MenuManager
                 OverlayRenderRowsBuffer.Add(new OverlayRenderRow());
             }
 
-            return OverlayRenderRowsBuffer[index];
+            OverlayRenderRow row = OverlayRenderRowsBuffer[index];
+            row.Reset();
+            return row;
         }
 
         private static bool IsHordeLevel(LevelConfigBase levelConfig)

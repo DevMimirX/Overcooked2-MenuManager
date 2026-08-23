@@ -1,3 +1,6 @@
+// Connects base-game order and scene lifecycle events to tracker state. Hooks
+// leave gameplay calls unchanged and avoid collecting probability-only state
+// while history tracking is disabled or No Menu owns the round.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -13,6 +16,7 @@ using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
 using UnityEngine;
 using UnityEngine.UI;
+using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
 {
@@ -48,7 +52,10 @@ namespace OC2MenuManager
         private static void ResetRoundRuntimeState()
         {
             ClearTicketWidgetState();
-            currentRun = null;
+            RunsByTeam.Clear();
+            ReconstructionReadyTeams.Clear();
+            AuthoritativeOrderControllersByTeam.Clear();
+            OptionalRecipeAdapters.InvalidateManyRecipeEntries();
             InvalidateProbabilityMap();
             cachedClientFlowController = null;
             cachedKitchenFlowController = null;
@@ -66,6 +73,7 @@ namespace OC2MenuManager
             invalidTableReleaseWarningLogged = false;
             ticketAdmissionFailureWarningLogged = false;
             referenceTicketAddFailureLogged = false;
+            trackingHookFailureWarningLogged = false;
             ClearOnMenuCounts();
             ClearPreparedState();
             ClearReferenceTickets();
@@ -74,169 +82,251 @@ namespace OC2MenuManager
 
         [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnOrderAdded")]
         [HarmonyPostfix]
-        private static void ClientKitchenFlowControllerBase_OnOrderAdded_Postfix(Serialisable _orderData)
+        private static void ClientKitchenFlowControllerBase_OnOrderAdded_Postfix(TeamID _teamID, Serialisable _orderData)
         {
-            if (!enabled.Value || NoMenuMode.IsActiveForRound)
+            try
             {
-                return;
-            }
+                if (enabled == null || !enabled.Value)
+                {
+                    MarkProbabilityReconstructionIncomplete(_teamID);
+                    return;
+                }
 
-            ServerOrderData orderData = _orderData as ServerOrderData;
-            if (orderData == null || orderData.RecipeListEntry == null || orderData.RecipeListEntry.m_order == null)
-            {
-                return;
-            }
+                if (NoMenuMode.IsActiveForRound)
+                {
+                    return;
+                }
 
-            if (NoMenuMode.IsSyntheticOrder(orderData.ID))
-            {
-                return;
-            }
+                ServerOrderData orderData = _orderData as ServerOrderData;
+                if (orderData == null || orderData.RecipeListEntry == null || orderData.RecipeListEntry.m_order == null)
+                {
+                    MarkProbabilityReconstructionIncomplete(_teamID);
+                    return;
+                }
 
-            SceneInfo scene;
-            if (!TryGetCurrentSceneInfo(out scene))
-            {
-                return;
-            }
+                if (NoMenuMode.IsSyntheticOrder(_teamID, orderData.ID))
+                {
+                    return;
+                }
 
-            scene.RuntimeRecipeIds.Add(orderData.RecipeListEntry.m_order.m_uID);
-            if (EnsureRecipe(scene, orderData.RecipeListEntry.m_order))
-            {
-                NotifyRecipeCatalogChanged(scene);
+                SceneInfo scene;
+                if (!TryGetCurrentSceneInfo(out scene))
+                {
+                    MarkProbabilityReconstructionIncomplete(_teamID);
+                    currentOnMenuCountsDirty = true;
+                    InvalidatePreparedCandidates(true);
+                    InvalidateOverlay();
+                    return;
+                }
+
+                scene.RuntimeRecipeIds.Add(orderData.RecipeListEntry.m_order.m_uID);
+                if (EnsureRecipe(scene, orderData.RecipeListEntry.m_order))
+                {
+                    NotifyRecipeCatalogChanged(scene);
+                }
+                RunInfo run = EnsureRun(scene, _teamID);
+                int recipeId = orderData.RecipeListEntry.m_order.m_uID;
+                run.TotalAdded++;
+                run.AddedCounts[recipeId] = GetCount(run.AddedCounts, recipeId) + 1;
+                InvalidateProbabilityMap();
+                IncrementOnMenuCount(scene.SceneName, _teamID, recipeId);
+                InvalidateOverlay();
             }
-            RunInfo run = EnsureRun(scene);
-            int recipeId = orderData.RecipeListEntry.m_order.m_uID;
-            run.TotalAdded++;
-            run.AddedCounts[recipeId] = GetCount(run.AddedCounts, recipeId) + 1;
-            InvalidateProbabilityMap();
-            IncrementOnMenuCount(scene.SceneName, recipeId);
-            InvalidateOverlay();
+            catch (Exception ex)
+            {
+                MarkProbabilityReconstructionIncomplete(_teamID);
+                currentOnMenuCountsDirty = true;
+                InvalidatePreparedCandidates(true);
+                InvalidateOverlay();
+                LogTrackingHookFailure("recording an added order", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnSuccessfulDelivery")]
         [HarmonyPrefix]
-        private static void ClientKitchenFlowControllerBase_OnSuccessfulDelivery_Prefix(ClientKitchenFlowControllerBase __instance, TeamID _teamID, OrderID _orderID)
+        private static void ClientKitchenFlowControllerBase_OnSuccessfulDelivery_Prefix(
+            ClientKitchenFlowControllerBase __instance,
+            TeamID _teamID,
+            OrderID _orderID,
+            out int __state)
         {
-            if (!enabled.Value || __instance == null || NoMenuMode.IsActiveForRound || NoMenuMode.IsSyntheticOrder(_orderID))
+            __state = 0;
+            try
             {
-                return;
-            }
+                if (enabled == null
+                    || !enabled.Value
+                    || __instance == null
+                    || NoMenuMode.IsActiveForRound
+                    || NoMenuMode.IsSyntheticOrder(_teamID, _orderID))
+                {
+                    return;
+                }
 
-            ClientTeamMonitor monitor = __instance.GetMonitorForTeam(_teamID);
-            if (monitor == null || monitor.OrdersController == null)
-            {
-                return;
-            }
+                ClientTeamMonitor monitor = __instance.GetMonitorForTeam(_teamID);
+                if (monitor == null || monitor.OrdersController == null)
+                {
+                    return;
+                }
 
-            RecipeList.Entry entry;
-            if (!TryGetClientRecipe(monitor.OrdersController, _orderID, out entry))
-            {
-                return;
-            }
+                RecipeList.Entry entry;
+                if (!TryGetClientRecipe(monitor.OrdersController, _orderID, out entry))
+                {
+                    return;
+                }
 
-            SceneInfo scene;
-            if (!TryGetCurrentSceneInfo(out scene))
-            {
-                return;
-            }
+                __state = entry.m_order.m_uID;
 
-            scene.RuntimeRecipeIds.Add(entry.m_order.m_uID);
-            if (EnsureRecipe(scene, entry.m_order))
-            {
-                NotifyRecipeCatalogChanged(scene);
+                SceneInfo scene;
+                if (!TryGetCurrentSceneInfo(out scene))
+                {
+                    MarkProbabilityReconstructionIncomplete(_teamID);
+                    currentOnMenuCountsDirty = true;
+                    InvalidatePreparedCandidates(true);
+                    InvalidateOverlay();
+                    return;
+                }
+
+                scene.RuntimeRecipeIds.Add(entry.m_order.m_uID);
+                if (EnsureRecipe(scene, entry.m_order))
+                {
+                    NotifyRecipeCatalogChanged(scene);
+                }
             }
-            RunInfo run = EnsureRun(scene);
-            int recipeId = entry.m_order.m_uID;
-            run.ServedCounts[recipeId] = GetCount(run.ServedCounts, recipeId) + 1;
-            DecrementOnMenuCount(scene.SceneName, recipeId);
-            InvalidateOverlay();
+            catch (Exception ex)
+            {
+                MarkProbabilityReconstructionIncomplete(_teamID);
+                currentOnMenuCountsDirty = true;
+                InvalidatePreparedCandidates(true);
+                InvalidateOverlay();
+                LogTrackingHookFailure("capturing a successful delivery", ex);
+            }
         }
 
-        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnFailedDelivery")]
-        [HarmonyPrefix]
-        private static void ClientKitchenFlowControllerBase_OnFailedDelivery_Prefix(ClientKitchenFlowControllerBase __instance, TeamID _teamID, OrderID _orderID)
+        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnSuccessfulDelivery")]
+        [HarmonyPostfix]
+        private static void ClientKitchenFlowControllerBase_OnSuccessfulDelivery_TrackerPostfix(TeamID _teamID, int __state)
         {
-            if (!enabled.Value || __instance == null || _orderID.m_id == 0u || NoMenuMode.IsActiveForRound || NoMenuMode.IsSyntheticOrder(_orderID))
+            try
             {
-                return;
-            }
+                if (__state == 0)
+                {
+                    return;
+                }
 
-            ClientTeamMonitor monitor = __instance.GetMonitorForTeam(_teamID);
-            if (monitor == null || monitor.OrdersController == null)
-            {
-                return;
-            }
+                SceneInfo scene;
+                if (!TryGetCurrentSceneInfo(out scene))
+                {
+                    MarkProbabilityReconstructionIncomplete(_teamID);
+                    currentOnMenuCountsDirty = true;
+                    InvalidatePreparedCandidates(true);
+                    InvalidateOverlay();
+                    return;
+                }
 
-            RecipeList.Entry entry;
-            if (!TryGetClientRecipe(monitor.OrdersController, _orderID, out entry))
-            {
-                return;
-            }
+                RunInfo run = EnsureRun(scene, _teamID);
+                int recipeId = __state;
+                OrderLifecycleEffect effect = OrderLifecyclePolicy.GetEffect(OrderLifecycleEvent.SuccessfulDelivery);
+                if (effect.IncrementServed)
+                {
+                    run.ServedCounts[recipeId] = GetCount(run.ServedCounts, recipeId) + 1;
+                }
 
-            SceneInfo scene;
-            if (!TryGetCurrentSceneInfo(out scene))
-            {
-                return;
-            }
+                if (effect.DecrementOnMenu)
+                {
+                    DecrementOnMenuCount(scene.SceneName, _teamID, recipeId);
+                }
 
-            scene.RuntimeRecipeIds.Add(entry.m_order.m_uID);
-            if (EnsureRecipe(scene, entry.m_order))
-            {
-                NotifyRecipeCatalogChanged(scene);
+                InvalidateOverlay();
             }
-            RunInfo run = EnsureRun(scene);
-            int recipeId = entry.m_order.m_uID;
-            run.ServedCounts[recipeId] = GetCount(run.ServedCounts, recipeId) + 1;
-            InvalidateOverlay();
+            catch (Exception ex)
+            {
+                MarkProbabilityReconstructionIncomplete(_teamID);
+                currentOnMenuCountsDirty = true;
+                InvalidatePreparedCandidates(true);
+                InvalidateOverlay();
+                LogTrackingHookFailure("recording a successful delivery", ex);
+            }
         }
 
-        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnOrderExpired")]
-        [HarmonyPrefix]
-        private static void ClientKitchenFlowControllerBase_OnOrderExpired_Prefix(ClientKitchenFlowControllerBase __instance, TeamID _teamID, OrderID _orderID)
+        private static void MarkProbabilityReconstructionIncomplete(TeamID teamId)
         {
-            if (!enabled.Value || __instance == null || NoMenuMode.IsActiveForRound || NoMenuMode.IsSyntheticOrder(_orderID))
+            ReconstructionReadyTeams.Remove(teamId);
+            RunInfo run;
+            if (RunsByTeam.TryGetValue(teamId, out run) && run != null)
             {
-                return;
+                run.ReconstructionComplete = false;
+                run.ProbabilityAvailable = false;
+                run.ProbabilityDirty = true;
+                run.OverlayRowsVersion = -1;
             }
+        }
 
-            ClientTeamMonitor monitor = __instance.GetMonitorForTeam(_teamID);
-            if (monitor == null || monitor.OrdersController == null)
+        [HarmonyPatch(typeof(ServerKitchenFlowControllerBase), "OnOrderAdded")]
+        [HarmonyPostfix]
+        private static void ServerKitchenFlowControllerBase_OnOrderAdded_Postfix(ServerKitchenFlowControllerBase __instance, TeamID _teamID)
+        {
+            try
             {
-                return;
-            }
+                if (__instance == null
+                    || enabled == null
+                    || !enabled.Value
+                    || NoMenuMode.IsActiveForRound)
+                {
+                    return;
+                }
 
-            RecipeList.Entry entry;
-            if (!TryGetClientRecipe(monitor.OrdersController, _orderID, out entry))
-            {
-                return;
-            }
+                ServerTeamMonitor monitor = __instance.GetMonitorForTeam(_teamID);
+                if (monitor == null || monitor.OrdersController == null)
+                {
+                    return;
+                }
 
-            SceneInfo scene;
-            if (!TryGetCurrentSceneInfo(out scene))
-            {
-                return;
+                AuthoritativeOrderControllersByTeam[_teamID] = monitor.OrdersController;
+                InvalidateProbabilityMap();
             }
-
-            scene.RuntimeRecipeIds.Add(entry.m_order.m_uID);
-            if (EnsureRecipe(scene, entry.m_order))
+            catch (Exception ex)
             {
-                NotifyRecipeCatalogChanged(scene);
+                LogTrackingHookFailure("capturing the authoritative order controller", ex);
             }
-            DecrementOnMenuCount(scene.SceneName, entry.m_order.m_uID);
-            InvalidateOverlay();
         }
 
         [HarmonyPatch(typeof(ClientDynamicFlowController), "OnDynamicLevelMessage")]
         [HarmonyPostfix]
         private static void ClientDynamicFlowController_OnDynamicLevelMessage_Postfix(Serialisable _serialisable)
         {
-            if (NoMenuMode.IsActiveForRound)
+            try
+            {
+                if (NoMenuMode.IsActiveForRound)
+                {
+                    return;
+                }
+
+                DynamicLevelMessage message = _serialisable as DynamicLevelMessage;
+                ResetProbabilityState(message != null ? message.m_phase : 0);
+                InvalidateOverlay();
+            }
+            catch (Exception ex)
+            {
+                for (int i = 0; i < SupportedTeamIds.Length; i++)
+                {
+                    MarkProbabilityReconstructionIncomplete(SupportedTeamIds[i]);
+                }
+
+                LogTrackingHookFailure("processing a dynamic phase change", ex);
+            }
+        }
+
+        private static void LogTrackingHookFailure(string operation, Exception exception)
+        {
+            if (trackingHookFailureWarningLogged || exception == null)
             {
                 return;
             }
 
-            DynamicLevelMessage message = _serialisable as DynamicLevelMessage;
-            ResetProbabilityState(message != null ? message.m_phase : 0);
-            InvalidateOverlay();
+            trackingHookFailureWarningLogged = true;
+            _MODEntry.LogWarning("[ServedDishTracker] A tracking hook failed while " + operation
+                + "; the base-game call was allowed to continue: "
+                + exception.GetType().Name + ": " + exception.Message);
         }
 
         private static void SchedulePreparedBootstrap(int delayFrames)

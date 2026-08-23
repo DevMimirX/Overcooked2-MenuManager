@@ -1,3 +1,6 @@
+// Tracks completed dishes through event-registered container sources. Matching
+// reuses candidate and team buffers so high-variety DIY and Recipe Extension
+// rounds do not allocate transient collections for each source refresh.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -222,8 +225,12 @@ namespace OC2MenuManager
             {
                 provider.RegisterOrderCompositionChangedCallback(source.Callback);
             }
-            catch
+            catch (Exception ex)
             {
+                PreparedSourcesByInstanceId.Remove(instanceId);
+                PreparedSourceIdsByGameObjectId.Remove(gameObjectInstanceId);
+                LogTrackingHookFailure("subscribing to a prepared-source composition", ex);
+                return;
             }
 
             QueuePreparedSourceRefresh(instanceId);
@@ -335,7 +342,10 @@ namespace OC2MenuManager
 
         private static void QueueCookablePreparedSourceRefresh(Component sourceComponent)
         {
-            if (sourceComponent == null || !enabled.Value || !IsPreparedTrackingEnabled())
+            if (sourceComponent == null
+                || enabled == null
+                || !enabled.Value
+                || !IsPreparedTrackingEnabled())
             {
                 return;
             }
@@ -516,7 +526,7 @@ namespace OC2MenuManager
 
                 AssembledDefinitionNode simplifiedDefinition = GetSimplifiedPreparedRecipeDefinition(recipe);
                 if (simplifiedDefinition != null
-                    && AssembledDefinitionNode.MatchingAlreadySimple(simplifiedComposition, simplifiedDefinition))
+                    && MatchesPreparedRecipeDefinition(recipe.Definition, simplifiedDefinition, simplifiedComposition))
                 {
                     return recipe.Id;
                 }
@@ -540,7 +550,7 @@ namespace OC2MenuManager
                 }
 
                 if (simplifiedDefinition != null
-                    && AssembledDefinitionNode.MatchingAlreadySimple(unwrappedSimplifiedComposition, simplifiedDefinition))
+                    && MatchesPreparedRecipeDefinition(recipe.Definition, simplifiedDefinition, unwrappedSimplifiedComposition))
                 {
                     return recipe.Id;
                 }
@@ -548,13 +558,28 @@ namespace OC2MenuManager
                 AssembledDefinitionNode unwrappedSimplifiedDefinition = GetUnwrappedPreparedRecipeDefinition(recipe);
                 if (unwrappedSimplifiedDefinition != null
                     && !ReferenceEquals(unwrappedSimplifiedDefinition, simplifiedDefinition)
-                    && AssembledDefinitionNode.MatchingAlreadySimple(unwrappedSimplifiedComposition, unwrappedSimplifiedDefinition))
+                    && MatchesPreparedRecipeDefinition(recipe.Definition, unwrappedSimplifiedDefinition, unwrappedSimplifiedComposition))
                 {
                     return recipe.Id;
                 }
             }
 
             return 0;
+        }
+
+        private static bool MatchesPreparedRecipeDefinition(
+            OrderDefinitionNode requiredDefinition,
+            AssembledDefinitionNode simplifiedRequired,
+            AssembledDefinitionNode simplifiedProvided)
+        {
+            if (requiredDefinition == null || simplifiedRequired == null || simplifiedProvided == null)
+            {
+                return false;
+            }
+
+            return requiredDefinition.GetType() == typeof(WildcardOrderNode)
+                ? AssembledDefinitionNode.MatchingAlreadySimple(simplifiedRequired, simplifiedProvided)
+                : AssembledDefinitionNode.MatchingAlreadySimple(simplifiedProvided, simplifiedRequired);
         }
 
         private static AssembledDefinitionNode GetSimplifiedPreparedRecipeDefinition(RecipeInfo recipe)
@@ -656,7 +681,20 @@ namespace OC2MenuManager
             }
 
             Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene);
-            Dictionary<int, double> probabilityByRecipeId = GetProbabilityMap(scene, EnsureRun(scene));
+            List<TeamID> activeTeams = GetActiveTeamIds();
+            PreparedCandidateRunsBuffer.Clear();
+            PreparedCandidateProbabilityMapsBuffer.Clear();
+            PreparedCandidateActiveRecipeIdsBuffer.Clear();
+            for (int i = 0; i < activeTeams.Count; i++)
+            {
+                RunInfo run = EnsureRun(scene, activeTeams[i]);
+                Dictionary<int, double> probabilityMap = GetProbabilityMap(scene, run);
+                PreparedCandidateRunsBuffer.Add(run);
+                PreparedCandidateProbabilityMapsBuffer.Add(probabilityMap);
+                PreparedCandidateActiveRecipeIdsBuffer.Add(
+                    run.ProbabilityAvailable ? null : GetActiveRecipeIds(scene, run));
+            }
+
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
             {
                 RecipeInfo recipe = scene.OrderedRecipes[i];
@@ -670,7 +708,22 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                if (GetCount(currentMenuCounts, recipe.Id) > 0 || GetProbability(probabilityByRecipeId, recipe.Id) > 0d)
+                bool candidate = GetCount(currentMenuCounts, recipe.Id) > 0;
+                for (int teamIndex = 0; !candidate && teamIndex < PreparedCandidateRunsBuffer.Count; teamIndex++)
+                {
+                    RunInfo run = PreparedCandidateRunsBuffer[teamIndex];
+                    if (run.ProbabilityAvailable)
+                    {
+                        candidate = GetProbability(PreparedCandidateProbabilityMapsBuffer[teamIndex], recipe.Id) > 0d;
+                    }
+                    else
+                    {
+                        List<int> activeRecipeIds = PreparedCandidateActiveRecipeIdsBuffer[teamIndex];
+                        candidate = activeRecipeIds != null && activeRecipeIds.Contains(recipe.Id);
+                    }
+                }
+
+                if (candidate)
                 {
                     PreparedCandidateRecipeIdsBuffer.Add(recipe.Id);
                 }
@@ -858,59 +911,87 @@ namespace OC2MenuManager
         [HarmonyPostfix]
         private static void ClientPlate_StartSynchronising_Postfix(ClientPlate __instance)
         {
-            TryRegisterPreparedSource(__instance);
+            try
+            {
+                TryRegisterPreparedSource(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering a synchronized plate", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientCookableContainer), "StartSynchronising")]
         [HarmonyPostfix]
         private static void ClientCookableContainer_StartSynchronising_Postfix(ClientCookableContainer __instance)
         {
-            RegisterPreparedCookingHandler(__instance);
-            TryRegisterPreparedSource(__instance);
-            QueueCookablePreparedSourceRefresh(__instance);
+            try
+            {
+                RegisterPreparedCookingHandler(__instance);
+                TryRegisterPreparedSource(__instance);
+                QueueCookablePreparedSourceRefresh(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering a synchronized cookable container", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientCookablePreparationContainer), "StartSynchronising")]
         [HarmonyPostfix]
         private static void ClientCookablePreparationContainer_StartSynchronising_Postfix(ClientCookablePreparationContainer __instance)
         {
-            RegisterPreparedCookingHandler(__instance);
-            TryRegisterPreparedSource(__instance);
-            QueueCookablePreparedSourceRefresh(__instance);
+            try
+            {
+                RegisterPreparedCookingHandler(__instance);
+                TryRegisterPreparedSource(__instance);
+                QueueCookablePreparedSourceRefresh(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering a synchronized cookable preparation container", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientCookingHandler), "ApplyServerUpdate")]
         [HarmonyPostfix]
         private static void ClientCookingHandler_ApplyServerUpdate_Postfix(ClientCookingHandler __instance)
         {
-            if (__instance == null
-                || enabled == null
-                || !enabled.Value
-                || !IsPreparedTrackingEnabled()
-                || NoMenuMode.IsActiveForRound
-                || !IsInActiveRound())
+            try
             {
-                return;
-            }
-
-            Component sourceComponent;
-            if (!PreparedSourceComponentByHandlerId.TryGetValue(__instance.GetInstanceID(), out sourceComponent) || sourceComponent == null)
-            {
-                if (__instance.gameObject == null)
+                if (__instance == null
+                    || enabled == null
+                    || !enabled.Value
+                    || !IsPreparedTrackingEnabled()
+                    || NoMenuMode.IsActiveForRound
+                    || !IsInActiveRound())
                 {
                     return;
                 }
 
-                sourceComponent = GetPreparedCookingSource(__instance.gameObject);
-                if (sourceComponent == null)
+                Component sourceComponent;
+                if (!PreparedSourceComponentByHandlerId.TryGetValue(__instance.GetInstanceID(), out sourceComponent) || sourceComponent == null)
                 {
-                    return;
+                    if (__instance.gameObject == null)
+                    {
+                        return;
+                    }
+
+                    sourceComponent = GetPreparedCookingSource(__instance.gameObject);
+                    if (sourceComponent == null)
+                    {
+                        return;
+                    }
+
+                    RegisterPreparedCookingHandler(sourceComponent);
                 }
 
-                RegisterPreparedCookingHandler(sourceComponent);
+                QueueCookablePreparedSourceRefresh(sourceComponent);
             }
-
-            QueueCookablePreparedSourceRefresh(sourceComponent);
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("processing a cooking update", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientPreparationContainer), "StartSynchronising")]
@@ -918,91 +999,147 @@ namespace OC2MenuManager
         [HarmonyAfter(OptionalRecipeAdapters.ManyRecipesPluginGuid)]
         private static void ClientPreparationContainer_StartSynchronising_Postfix(ClientPreparationContainer __instance)
         {
-            TryRegisterPreparedSource(__instance);
+            try
+            {
+                TryRegisterPreparedSource(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering a synchronized preparation container", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientItemContainer), "StartSynchronising")]
         [HarmonyPostfix]
         private static void ClientItemContainer_StartSynchronising_Postfix(ClientItemContainer __instance)
         {
-            TryRegisterPreparedSource(__instance);
+            try
+            {
+                TryRegisterPreparedSource(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering a synchronized item container", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientLadleContainer), "StartSynchronising")]
         [HarmonyPostfix]
         private static void ClientLadleContainer_StartSynchronising_Postfix(ClientLadleContainer __instance)
         {
-            TryRegisterPreparedSource(__instance);
+            try
+            {
+                TryRegisterPreparedSource(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering a synchronized ladle container", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientMixableContainer), "StartSynchronising")]
         [HarmonyPostfix]
         private static void ClientMixableContainer_StartSynchronising_Postfix(ClientMixableContainer __instance)
         {
-            TryRegisterPreparedSource(__instance);
+            try
+            {
+                TryRegisterPreparedSource(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering a synchronized mixable container", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientPlayerAttachmentCarrier), "StartSynchronising")]
         [HarmonyPostfix]
         private static void ClientPlayerAttachmentCarrier_StartSynchronising_Postfix(ClientPlayerAttachmentCarrier __instance)
         {
-            TryRegisterPreparedSourcesFromCarrier(__instance);
+            try
+            {
+                TryRegisterPreparedSourcesFromCarrier(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering synchronized carried items", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientPlayerAttachmentCarrier), "CarryItem")]
         [HarmonyPostfix]
         private static void ClientPlayerAttachmentCarrier_CarryItem_Postfix(GameObject _object)
         {
-            TryRegisterPreparedSourceFromGameObject(_object);
+            try
+            {
+                TryRegisterPreparedSourceFromGameObject(_object);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("registering a carried item", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientPlayerAttachmentCarrier), "ApplyServerEvent")]
         [HarmonyPostfix]
         private static void ClientPlayerAttachmentCarrier_ApplyServerEvent_Postfix(ClientPlayerAttachmentCarrier __instance)
         {
-            TryRegisterPreparedSourcesFromCarrier(__instance);
+            try
+            {
+                TryRegisterPreparedSourcesFromCarrier(__instance);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("processing a carried-item server event", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientSynchroniserBase), "OnDestroy")]
         [HarmonyPrefix]
         private static void ClientSynchroniserBase_OnDestroy_Prefix(ClientSynchroniserBase __instance)
         {
-            Component component = __instance;
-            if (component == null)
+            try
             {
-                return;
-            }
-
-            ClientCookingHandler cookingHandler = component as ClientCookingHandler;
-            if (cookingHandler != null)
-            {
-                PreparedSourceComponentByHandlerId.Remove(cookingHandler.GetInstanceID());
-            }
-
-            ClientCookableContainer cookableContainer = component as ClientCookableContainer;
-            if (cookableContainer != null)
-            {
-                ClientCookingHandler linkedCookingHandler = cookableContainer.GetCookingHandler();
-                if (linkedCookingHandler != null)
+                Component component = __instance;
+                if (component == null)
                 {
-                    PreparedSourceComponentByHandlerId.Remove(linkedCookingHandler.GetInstanceID());
+                    return;
+                }
+
+                ClientCookingHandler cookingHandler = component as ClientCookingHandler;
+                if (cookingHandler != null)
+                {
+                    PreparedSourceComponentByHandlerId.Remove(cookingHandler.GetInstanceID());
+                }
+
+                ClientCookableContainer cookableContainer = component as ClientCookableContainer;
+                if (cookableContainer != null)
+                {
+                    ClientCookingHandler linkedCookingHandler = cookableContainer.GetCookingHandler();
+                    if (linkedCookingHandler != null)
+                    {
+                        PreparedSourceComponentByHandlerId.Remove(linkedCookingHandler.GetInstanceID());
+                    }
+                }
+
+                ClientCookablePreparationContainer cookablePreparationContainer = component as ClientCookablePreparationContainer;
+                if (cookablePreparationContainer != null && component.gameObject != null)
+                {
+                    ClientCookingHandler linkedCookingHandler = component.gameObject.GetComponent<ClientCookingHandler>();
+                    if (linkedCookingHandler != null)
+                    {
+                        PreparedSourceComponentByHandlerId.Remove(linkedCookingHandler.GetInstanceID());
+                    }
+                }
+
+                int instanceId = component.GetInstanceID();
+                if (PreparedSourcesByInstanceId.ContainsKey(instanceId))
+                {
+                    RemovePreparedSource(instanceId);
                 }
             }
-
-            ClientCookablePreparationContainer cookablePreparationContainer = component as ClientCookablePreparationContainer;
-            if (cookablePreparationContainer != null && component.gameObject != null)
+            catch (Exception ex)
             {
-                ClientCookingHandler linkedCookingHandler = component.gameObject.GetComponent<ClientCookingHandler>();
-                if (linkedCookingHandler != null)
-                {
-                    PreparedSourceComponentByHandlerId.Remove(linkedCookingHandler.GetInstanceID());
-                }
-            }
-
-            int instanceId = component.GetInstanceID();
-            if (PreparedSourcesByInstanceId.ContainsKey(instanceId))
-            {
-                RemovePreparedSource(instanceId);
+                LogTrackingHookFailure("cleaning a destroyed synchronized object", ex);
             }
         }
 

@@ -1,3 +1,6 @@
+// Defines the tracker runtime model and its run-owned caches. A run owns all
+// team-specific probability and overlay state so consumers never share mutable
+// rows across teams and cache invalidation remains event-driven.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -65,13 +68,33 @@ namespace OC2MenuManager
             public readonly HashSet<int> ExtensionRecipeIds = new HashSet<int>();
         }
 
+        /// <summary>
+        /// Owns one team's history and derived caches for a single scene. Probability
+        /// and sorted overlay data may be reused only while their dirty/version markers
+        /// match the current runtime state.
+        /// </summary>
         private sealed class RunInfo
         {
             public string SceneName;
+            public TeamID TeamId;
             public int CurrentPhaseIndex;
             public int TotalAdded;
+            public bool ReconstructionComplete;
+            public bool ProbabilityAvailable;
+            public bool ProbabilityDirty = true;
+            public int OverlayRowsVersion = -1;
+            public bool OverlayRowsShowPrepared;
             public readonly Dictionary<int, int> AddedCounts = new Dictionary<int, int>();
             public readonly Dictionary<int, int> ServedCounts = new Dictionary<int, int>();
+            public readonly Dictionary<int, double> ProbabilityByRecipeId = new Dictionary<int, double>();
+            public readonly List<OverlayRow> OverlayRows = new List<OverlayRow>();
+        }
+
+        private sealed class TeamFlowContext
+        {
+            public TeamID TeamId;
+            public ClientOrderControllerBase OrderController;
+            public RecipeFlowGUI Flow;
         }
 
         private sealed class PreparedSourceState
@@ -87,11 +110,18 @@ namespace OC2MenuManager
             public int RemovalGraceUntilFrame;
         }
 
+        /// <summary>
+        /// Renders the already-built overlay model. It owns reusable GUI measurement
+        /// content so repaint events do not create transient GUIContent instances.
+        /// </summary>
         private sealed class OverlayDisplay : DebugDisplay
         {
             private static readonly Color PanelBackgroundColor = new Color(0f, 0f, 0f, 0.58f);
             private const float PanelPadding = 10f;
             private readonly GUIStyle textStyle = new GUIStyle();
+            private readonly GUIContent rowMeasureContent = new GUIContent("A");
+            private readonly GUIContent headerMeasureContent = new GUIContent();
+            private readonly GUIContent footerMeasureContent = new GUIContent();
             private string cachedText = string.Empty;
 
             public override void OnSetUp()
@@ -143,11 +173,12 @@ namespace OC2MenuManager
                     return;
                 }
 
-                float rowHeight = Mathf.Max(16f, textStyle.CalcSize(new GUIContent("A")).y + 4f);
+                float rowHeight = Mathf.Max(16f, textStyle.CalcSize(rowMeasureContent).y + 4f);
                 float y = contentRect.y;
                 if (!string.IsNullOrEmpty(overlayHeaderText))
                 {
-                    float headerHeight = Mathf.Max(rowHeight, textStyle.CalcHeight(new GUIContent(overlayHeaderText), contentRect.width));
+                    headerMeasureContent.text = overlayHeaderText;
+                    float headerHeight = Mathf.Max(rowHeight, textStyle.CalcHeight(headerMeasureContent, contentRect.width));
                     GUI.Label(new Rect(contentRect.x, y, contentRect.width, headerHeight), overlayHeaderText, textStyle);
                     y += headerHeight + 2f;
                 }
@@ -184,7 +215,8 @@ namespace OC2MenuManager
 
                 if (!string.IsNullOrEmpty(overlayFooterText) && y < contentRect.yMax)
                 {
-                    float footerHeight = Mathf.Max(rowHeight, textStyle.CalcHeight(new GUIContent(overlayFooterText), contentRect.width));
+                    footerMeasureContent.text = overlayFooterText;
+                    float footerHeight = Mathf.Max(rowHeight, textStyle.CalcHeight(footerMeasureContent, contentRect.width));
                     GUI.Label(new Rect(contentRect.x, y + 1f, contentRect.width, footerHeight), overlayFooterText, textStyle);
                 }
             }
@@ -197,6 +229,7 @@ namespace OC2MenuManager
         {
             public RecipeInfo Recipe;
             public double Probability;
+            public bool ProbabilityAvailable;
             public int Served;
             public int Prepared;
             public int OnMenu;
@@ -206,6 +239,7 @@ namespace OC2MenuManager
             {
                 Recipe = null;
                 Probability = 0d;
+                ProbabilityAvailable = false;
                 Served = 0;
                 Prepared = 0;
                 OnMenu = 0;
@@ -241,6 +275,7 @@ namespace OC2MenuManager
         private sealed class ReferenceTicketState
         {
             public int FlowInstanceId;
+            public TeamID TeamId;
             public RecipeFlowGUI Flow;
             public int RecipeId;
             public OrderDefinitionNode Definition;
@@ -261,15 +296,19 @@ namespace OC2MenuManager
             public int InstanceId;
             public int RecipeId;
             public int Order;
+            public TeamID TeamId;
             public RecipeWidgetUIController Widget;
             public RecipeWidgetTile.DisplayConfiguration DisplayConfig;
             public TopRecipeWidgetTile.TopDisplayConfiguration TopDisplayConfig;
             public Color OriginalDisplayTint;
             public Color OriginalTopTint;
             public float OriginalOpacity = 1f;
+            public bool OriginalInteractable = true;
+            public bool OriginalBlocksRaycasts = true;
             public Image[] CachedImages;
             public CanvasGroup CanvasGroup;
             public bool CanvasGroupResolved;
+            public bool CanvasGroupCreatedByMod;
             public Color AppliedDisplayTint;
             public Color AppliedTopTint;
             public float AppliedOpacity = 1f;

@@ -1,4 +1,8 @@
+// Contains side-effect-free runtime policies shared by the game-facing
+// features and unit tests. Collection-taking policies clear and populate
+// caller-owned buffers so legacy .NET 3.5 gameplay paths can remain allocation-free.
 using System;
+using System.Collections.Generic;
 
 namespace OC2MenuManager.Infrastructure
 {
@@ -49,6 +53,10 @@ namespace OC2MenuManager.Infrastructure
         }
     }
 
+    /// <summary>
+    /// Validates and calculates next-recipe probability data without depending on
+    /// Unity or mutable game controllers.
+    /// </summary>
     internal static class ProbabilityPolicy
     {
         internal static double CalculateRawWeight(int totalAdded, int recipeCount, int recipeAddedCount)
@@ -77,6 +85,327 @@ namespace OC2MenuManager.Infrastructure
         internal static bool IsFinite(double value)
         {
             return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        internal static bool TryCalculateEntryProbabilities(
+            int[] recipeIds,
+            int[] cumulativeFrequencies,
+            double[] probabilitiesByEntry)
+        {
+            if (recipeIds == null
+                || cumulativeFrequencies == null
+                || probabilitiesByEntry == null
+                || recipeIds.Length == 0
+                || cumulativeFrequencies.Length != recipeIds.Length
+                || probabilitiesByEntry.Length != recipeIds.Length)
+            {
+                return false;
+            }
+
+            long totalAdded = 0L;
+            for (int i = 0; i < cumulativeFrequencies.Length; i++)
+            {
+                int frequency = cumulativeFrequencies[i];
+                if (frequency < 0)
+                {
+                    return false;
+                }
+
+                totalAdded += frequency;
+                if (totalAdded > int.MaxValue - 2L)
+                {
+                    return false;
+                }
+            }
+
+            double totalWeight = 0d;
+            for (int i = 0; i < recipeIds.Length; i++)
+            {
+                float theoreticalWeight = (float)(totalAdded + 2L) / recipeIds.Length;
+                float weight = Math.Max(theoreticalWeight - cumulativeFrequencies[i], 0f);
+                probabilitiesByEntry[i] = weight;
+                totalWeight += weight;
+            }
+
+            if (!IsFinite(totalWeight) || totalWeight <= 0d)
+            {
+                Array.Clear(probabilitiesByEntry, 0, probabilitiesByEntry.Length);
+                return false;
+            }
+
+            for (int i = 0; i < probabilitiesByEntry.Length; i++)
+            {
+                probabilitiesByEntry[i] = Normalize(probabilitiesByEntry[i], totalWeight);
+            }
+
+            return true;
+        }
+
+        internal static bool TryNormalizeEntryWeights(double[] rawWeights, double[] probabilitiesByEntry)
+        {
+            if (rawWeights == null
+                || probabilitiesByEntry == null
+                || rawWeights.Length == 0
+                || probabilitiesByEntry.Length != rawWeights.Length)
+            {
+                return false;
+            }
+
+            double totalWeight = 0d;
+            for (int i = 0; i < rawWeights.Length; i++)
+            {
+                double weight = rawWeights[i];
+                if (!IsFinite(weight) || weight < 0d)
+                {
+                    return false;
+                }
+
+                totalWeight += weight;
+            }
+
+            if (!IsFinite(totalWeight) || totalWeight <= 0d)
+            {
+                Array.Clear(probabilitiesByEntry, 0, probabilitiesByEntry.Length);
+                return false;
+            }
+
+            for (int i = 0; i < rawWeights.Length; i++)
+            {
+                probabilitiesByEntry[i] = Normalize(rawWeights[i], totalWeight);
+            }
+
+            return true;
+        }
+
+        internal static bool TryAggregateByRecipe(
+            int[] recipeIds,
+            double[] probabilitiesByEntry,
+            IDictionary<int, double> probabilitiesByRecipe)
+        {
+            if (recipeIds == null
+                || probabilitiesByEntry == null
+                || probabilitiesByRecipe == null
+                || recipeIds.Length == 0
+                || probabilitiesByEntry.Length != recipeIds.Length)
+            {
+                return false;
+            }
+
+            probabilitiesByRecipe.Clear();
+            for (int i = 0; i < recipeIds.Length; i++)
+            {
+                double probability = probabilitiesByEntry[i];
+                if (!IsFinite(probability) || probability < 0d)
+                {
+                    probabilitiesByRecipe.Clear();
+                    return false;
+                }
+
+                double existing;
+                probabilitiesByRecipe.TryGetValue(recipeIds[i], out existing);
+                double combined = existing + probability;
+                if (!IsFinite(combined))
+                {
+                    probabilitiesByRecipe.Clear();
+                    return false;
+                }
+
+                probabilitiesByRecipe[recipeIds[i]] = combined;
+            }
+
+            return true;
+        }
+
+        internal static bool TryGetScriptedManualRecipe(int recipeCount, int[] manualRecipeIds, out int recipeId)
+        {
+            recipeId = 0;
+            if (manualRecipeIds == null || recipeCount < 0 || recipeCount >= manualRecipeIds.Length)
+            {
+                return false;
+            }
+
+            recipeId = manualRecipeIds[recipeCount];
+            return true;
+        }
+
+        internal static bool TryGetSequenceRecipe(
+            int[] recipeIds,
+            int[] cumulativeFrequencies,
+            int[] recipeIndexSequence,
+            out int recipeId)
+        {
+            recipeId = 0;
+            if (recipeIds == null
+                || cumulativeFrequencies == null
+                || recipeIndexSequence == null
+                || recipeIds.Length == 0
+                || cumulativeFrequencies.Length != recipeIds.Length)
+            {
+                return false;
+            }
+
+            long sequencePosition = 0L;
+            for (int i = 0; i < cumulativeFrequencies.Length; i++)
+            {
+                if (cumulativeFrequencies[i] < 0)
+                {
+                    return false;
+                }
+
+                sequencePosition += cumulativeFrequencies[i];
+            }
+
+            if (sequencePosition < 0L || sequencePosition >= recipeIndexSequence.Length)
+            {
+                return false;
+            }
+
+            int recipeIndex = recipeIndexSequence[(int)sequencePosition];
+            if (recipeIndex < 0 || recipeIndex >= recipeIds.Length)
+            {
+                return false;
+            }
+
+            recipeId = recipeIds[recipeIndex];
+            return true;
+        }
+
+        /// <summary>
+        /// Validates that recipe IDs are non-empty and unique while populating a
+        /// caller-owned set. The destination is empty whenever validation fails.
+        /// </summary>
+        internal static bool TryCollectDistinctRecipeIds(int[] recipeIds, HashSet<int> distinctRecipeIds)
+        {
+            if (distinctRecipeIds == null)
+            {
+                return false;
+            }
+
+            distinctRecipeIds.Clear();
+            if (recipeIds == null || recipeIds.Length == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < recipeIds.Length; i++)
+            {
+                if (!distinctRecipeIds.Add(recipeIds[i]))
+                {
+                    distinctRecipeIds.Clear();
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Remote clients can reconstruct the base game's random-entry state only
+    /// when every contributing entry is known and has a distinct recipe ID.
+    /// Extension entries carry their own cumulative frequencies, so even an
+    /// extension entry that reuses a base recipe ID is ambiguous.
+    /// </summary>
+    internal static class ProbabilityReconstructionPolicy
+    {
+        internal static bool CanUseRandomBaseEntries(
+            bool historyComplete,
+            bool hasExtensionEntries,
+            bool baseRecipeIdsDistinct)
+        {
+            return historyComplete && !hasExtensionEntries && baseRecipeIdsDistinct;
+        }
+    }
+
+    internal enum OrderLifecycleEvent
+    {
+        Added,
+        SuccessfulDelivery,
+        FailedDelivery,
+        Expired
+    }
+
+    internal struct OrderLifecycleEffect
+    {
+        internal bool IncrementServed;
+        internal bool DecrementOnMenu;
+    }
+
+    internal static class OrderLifecyclePolicy
+    {
+        internal static OrderLifecycleEffect GetEffect(OrderLifecycleEvent lifecycleEvent)
+        {
+            bool successful = lifecycleEvent == OrderLifecycleEvent.SuccessfulDelivery;
+            return new OrderLifecycleEffect
+            {
+                IncrementServed = successful,
+                DecrementOnMenu = successful
+            };
+        }
+    }
+
+    internal struct TeamScopedOrderKey : IEquatable<TeamScopedOrderKey>
+    {
+        internal TeamScopedOrderKey(int teamId, uint orderId)
+        {
+            TeamId = teamId;
+            OrderId = orderId;
+        }
+
+        internal int TeamId { get; private set; }
+        internal uint OrderId { get; private set; }
+
+        public bool Equals(TeamScopedOrderKey other)
+        {
+            return TeamId == other.TeamId && OrderId == other.OrderId;
+        }
+
+#pragma warning disable CS8765
+        public override bool Equals(object obj)
+        {
+            return obj is TeamScopedOrderKey && Equals((TeamScopedOrderKey)obj);
+        }
+#pragma warning restore CS8765
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                return (TeamId * 397) ^ (int)OrderId;
+            }
+        }
+    }
+
+    internal static class DynamicPhasePolicy
+    {
+        internal static bool ShouldReset(int previousPhaseIndex, int nextPhaseIndex)
+        {
+            return previousPhaseIndex != nextPhaseIndex;
+        }
+    }
+
+    internal enum SyntheticTransactionOutcome
+    {
+        NotInjected,
+        Success,
+        CompensateAndDisable
+    }
+
+    internal static class SyntheticTransactionPolicy
+    {
+        internal static SyntheticTransactionOutcome Evaluate(
+            bool injected,
+            bool orderStillActive,
+            bool originalThrew)
+        {
+            if (!injected)
+            {
+                return SyntheticTransactionOutcome.NotInjected;
+            }
+
+            return !orderStillActive && !originalThrew
+                ? SyntheticTransactionOutcome.Success
+                : SyntheticTransactionOutcome.CompensateAndDisable;
         }
     }
 
@@ -291,6 +620,15 @@ namespace OC2MenuManager.Infrastructure
 
     internal static class RecipeExtensionPhasePolicy
     {
+        internal static bool HasCompatibleRuntimeShape(int baseCandidateCount, int extensionCandidateCount, int cumulativeFrequencyCount)
+        {
+            return baseCandidateCount >= 0
+                && extensionCandidateCount > 0
+                && cumulativeFrequencyCount >= 0
+                && baseCandidateCount <= int.MaxValue - extensionCandidateCount
+                && baseCandidateCount + extensionCandidateCount == cumulativeFrequencyCount;
+        }
+
         internal static void GetEntryWindow(string levelConfigName, int phaseIndex, bool allPhases, int entryCount, out int startIndex, out int endIndex)
         {
             startIndex = 0;
@@ -331,17 +669,16 @@ namespace OC2MenuManager.Infrastructure
         Tutorial,
         Survival,
         PreTimerOrders,
-        PublicOnline,
+        OnlineSession,
         MissingRuntimeContract,
-        RemoteClient,
         BootstrapOrders
     }
 
     internal static class NoMenuClientAuthorityPolicy
     {
-        internal static bool ShouldInitializeLocalRoundState(bool isInOnlineSession, bool isHost)
+        internal static bool ShouldInitializeLocalRoundState(bool hasAuthoritativeServerFlow)
         {
-            return !isInOnlineSession || isHost;
+            return !hasAuthoritativeServerFlow;
         }
     }
 
@@ -381,7 +718,7 @@ namespace OC2MenuManager.Infrastructure
             bool isTutorial,
             bool isSurvival,
             bool hasPreTimerOrders,
-            bool isPublicOnline,
+            bool isInOnlineSession,
             bool hasRuntimeContract)
         {
             if (!requested)
@@ -414,9 +751,9 @@ namespace OC2MenuManager.Infrastructure
                 return NoMenuIneligibility.PreTimerOrders;
             }
 
-            if (isPublicOnline)
+            if (isInOnlineSession)
             {
-                return NoMenuIneligibility.PublicOnline;
+                return NoMenuIneligibility.OnlineSession;
             }
 
             return hasRuntimeContract ? NoMenuIneligibility.None : NoMenuIneligibility.MissingRuntimeContract;

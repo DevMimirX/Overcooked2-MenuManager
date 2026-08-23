@@ -1,3 +1,6 @@
+// Provides reflection-only soft-dependency boundaries for DIY Level and Recipe
+// Extension. Recipe Extension entries are snapshotted in their source order once
+// per synchronized round and exposed through caller-owned lists.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -7,6 +10,10 @@ using OC2MenuManager.Infrastructure;
 
 namespace OC2MenuManager
 {
+    /// <summary>
+    /// Carries the stable scene identity and localized frontend metadata exposed by
+    /// the optional DIY loader without leaking its concrete types into the tracker.
+    /// </summary>
     internal sealed class DIYLevelDescriptor
     {
         public string SceneName;
@@ -15,6 +22,10 @@ namespace OC2MenuManager
         public object LevelInfo;
     }
 
+    /// <summary>
+    /// Carries a DIY recipe's stable identity and an optional hydrated base-game
+    /// definition; custom DIY recipes intentionally remain metadata-only pre-round.
+    /// </summary>
     internal sealed class DIYRecipeDescriptor
     {
         public int Id;
@@ -22,6 +33,11 @@ namespace OC2MenuManager
         public OrderDefinitionNode Definition;
     }
 
+    /// <summary>
+    /// Owns all reflection contracts for optional recipe providers. Failed contracts
+    /// remain isolated from the core plugin, and Recipe Extension snapshots preserve
+    /// the provider's patch/entry order for every downstream consumer.
+    /// </summary>
     internal static class OptionalRecipeAdapters
     {
         internal const string DIYLevelPluginGuid = "dev.gua.overcooked.diylevel";
@@ -31,7 +47,7 @@ namespace OC2MenuManager
         private const string DIYRecipeHelperTypeName = "OC2DIYLevel.RecipeHelper";
         private const string ManyRecipesPluginTypeName = "OC2ManyRecipes.ManyRecipesPlugin";
 
-        private static readonly List<RecipeList.Entry> ManyRecipeEntriesBuffer = new List<RecipeList.Entry>();
+        private static readonly List<RecipeList.Entry> ManyRecipeEntriesCache = new List<RecipeList.Entry>();
 
         private static Type diyManagerType;
         private static PropertyInfo diyIsInitializedProperty;
@@ -47,6 +63,7 @@ namespace OC2MenuManager
         private static bool manyContractResolved;
         private static bool manyContractWarningLogged;
         private static bool manyActivationLogged;
+        private static bool manyRecipeEntriesCacheValid;
 
         internal static bool TryGetDIYLevels(List<DIYLevelDescriptor> destination, out string error)
         {
@@ -102,10 +119,21 @@ namespace OC2MenuManager
             for (int i = 0; i < levelSetInfos.Count; i++)
             {
                 object levelSetInfo = GetPairValue(levelSetInfos[i]);
+                if (levelSetInfo == null)
+                {
+                    destination.Clear();
+                    error = "DIY level set " + (i + 1) + " of " + levelSetInfos.Count + " could not be read.";
+                    LogDIYContractWarning(error);
+                    return false;
+                }
+
                 Array levelInfos = GetMemberValue(levelSetInfo, "levelInfos") as Array;
                 if (levelInfos == null)
                 {
-                    continue;
+                    destination.Clear();
+                    error = "DIY level set " + (i + 1) + " of " + levelSetInfos.Count + " does not expose its levels.";
+                    LogDIYContractWarning(error);
+                    return false;
                 }
 
                 string englishLevelSetName = GetLocalizedString(levelSetInfo, "levelSetName", "levelSetNameZH");
@@ -116,7 +144,11 @@ namespace OC2MenuManager
                     string sceneName = GetStringMember(levelInfo, "sceneName");
                     if (string.IsNullOrEmpty(sceneName))
                     {
-                        continue;
+                        destination.Clear();
+                        error = "DIY level " + (j + 1) + " of " + levelInfos.Length
+                            + " in level set " + (i + 1) + " has no scene name.";
+                        LogDIYContractWarning(error);
+                        return false;
                     }
 
                     string englishLevelName = GetLocalizedString(levelInfo, "levelName", "levelNameZH");
@@ -158,6 +190,7 @@ namespace OC2MenuManager
             if (recipeSources == null)
             {
                 error = "The DIY level does not expose a recipe list.";
+                LogDIYContractWarning(error);
                 return false;
             }
 
@@ -166,14 +199,16 @@ namespace OC2MenuManager
                 ? recipeSources.Length
                 : Math.Max(0, Math.Min(requestedCount, recipeSources.Length));
             bool useScore2 = GetBoolMember(levelInfo, "useScore2");
-            string firstHydrationError = null;
 
             for (int i = 0; i < recipeCount; i++)
             {
                 object recipeSource = recipeSources.GetValue(i);
                 if (recipeSource == null)
                 {
-                    continue;
+                    destination.Clear();
+                    error = "DIY recipe " + (i + 1) + " of " + recipeCount + " has no metadata.";
+                    LogDIYContractWarning(error);
+                    return false;
                 }
 
                 DIYRecipeDescriptor descriptor;
@@ -186,16 +221,18 @@ namespace OC2MenuManager
                 RecipeList.Entry entry;
                 if (!TryBuildDIYRecipeEntry(recipeSource, useScore2, out entry, out error))
                 {
-                    if (string.IsNullOrEmpty(firstHydrationError))
-                    {
-                        firstHydrationError = error;
-                    }
-                    continue;
+                    destination.Clear();
+                    error = "DIY recipe " + (i + 1) + " of " + recipeCount + " could not be preloaded. " + error;
+                    LogDIYContractWarning(error);
+                    return false;
                 }
 
                 if (entry == null || entry.m_order == null)
                 {
-                    continue;
+                    destination.Clear();
+                    error = "DIY recipe " + (i + 1) + " of " + recipeCount + " did not resolve to an order definition.";
+                    LogDIYContractWarning(error);
+                    return false;
                 }
 
                 descriptor = new DIYRecipeDescriptor();
@@ -205,29 +242,41 @@ namespace OC2MenuManager
                 destination.Add(descriptor);
             }
 
-            if (destination.Count == 0 && !string.IsNullOrEmpty(firstHydrationError))
-            {
-                error = firstHydrationError;
-                return false;
-            }
-
             error = null;
             return true;
         }
 
         internal static void AppendManyRecipeEntries(List<RecipeList.Entry> destination, string levelConfigName, int phaseIndex, bool allPhases)
         {
-            if (destination == null || !TryGetManyRecipeEntries(ManyRecipeEntriesBuffer))
+            if (destination == null || !EnsureManyRecipeEntriesCache())
             {
                 return;
             }
 
-            AppendManyRecipeEntriesFromSnapshot(destination, ManyRecipeEntriesBuffer, levelConfigName, phaseIndex, allPhases);
+            AppendManyRecipeEntriesFromSnapshot(destination, ManyRecipeEntriesCache, levelConfigName, phaseIndex, allPhases);
         }
 
         internal static bool TryGetManyRecipeEntries(List<RecipeList.Entry> destination)
         {
-            return destination != null && TryCollectManyRecipeEntries(destination);
+            if (destination == null)
+            {
+                return false;
+            }
+
+            destination.Clear();
+            if (!EnsureManyRecipeEntriesCache())
+            {
+                return false;
+            }
+
+            destination.AddRange(ManyRecipeEntriesCache);
+            return true;
+        }
+
+        internal static void InvalidateManyRecipeEntries()
+        {
+            manyRecipeEntriesCacheValid = false;
+            ManyRecipeEntriesCache.Clear();
         }
 
         internal static void AppendManyRecipeEntriesFromSnapshot(
@@ -412,6 +461,23 @@ namespace OC2MenuManager
             return true;
         }
 
+        private static bool EnsureManyRecipeEntriesCache()
+        {
+            if (manyRecipeEntriesCacheValid)
+            {
+                return true;
+            }
+
+            ManyRecipeEntriesCache.Clear();
+            if (!TryCollectManyRecipeEntries(ManyRecipeEntriesCache))
+            {
+                return false;
+            }
+
+            manyRecipeEntriesCacheValid = true;
+            return true;
+        }
+
         private static bool TryReadCustomDIYRecipe(object recipeSource, out DIYRecipeDescriptor descriptor)
         {
             descriptor = null;
@@ -451,7 +517,6 @@ namespace OC2MenuManager
                 error = "Could not hydrate a DIY recipe: " + ex.GetType().Name + ": " + ex.Message;
             }
 
-            LogDIYContractWarning(error);
             return false;
         }
 

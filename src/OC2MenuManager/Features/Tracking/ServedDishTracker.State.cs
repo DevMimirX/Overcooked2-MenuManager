@@ -1,3 +1,6 @@
+// Owns tracker configuration, reflection contracts, and reusable runtime
+// buffers. Buffers here are main-thread only and are reused to keep order and
+// prepared-dish events from creating garbage in recipe-heavy levels.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -77,7 +80,11 @@ namespace OC2MenuManager
 
         private static readonly Dictionary<string, HashSet<int>> TrackedIdsByScene = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, SceneInfo> SceneCache = new Dictionary<string, SceneInfo>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<int, int> CurrentOnMenuCounts = new Dictionary<int, int>();
+        private static readonly Dictionary<TeamID, RunInfo> RunsByTeam = new Dictionary<TeamID, RunInfo>();
+        private static readonly HashSet<TeamID> ReconstructionReadyTeams = new HashSet<TeamID>();
+        private static readonly Dictionary<TeamID, Dictionary<int, int>> CurrentOnMenuCountsByTeam = new Dictionary<TeamID, Dictionary<int, int>>();
+        private static readonly Dictionary<int, int> CombinedOnMenuCountsBuffer = new Dictionary<int, int>();
+        private static readonly Dictionary<TeamID, ServerOrderControllerBase> AuthoritativeOrderControllersByTeam = new Dictionary<TeamID, ServerOrderControllerBase>();
         private static readonly Dictionary<int, int> PreparedCountsByRecipe = new Dictionary<int, int>();
         private static readonly Dictionary<int, PreparedSourceState> PreparedSourcesByInstanceId = new Dictionary<int, PreparedSourceState>();
         private static readonly Dictionary<int, int> PreparedSourceIdsByGameObjectId = new Dictionary<int, int>();
@@ -92,9 +99,13 @@ namespace OC2MenuManager
         private static readonly List<RecipeList.Entry> RuntimePhaseRecipeEntriesBuffer = new List<RecipeList.Entry>();
         private static readonly HashSet<int> RuntimeRecipeIdsBuffer = new HashSet<int>();
         private static readonly List<int> StaleRecipeIdsBuffer = new List<int>();
+        private static readonly List<SceneDirectoryData.SceneDirectoryEntry> AvailableSceneEntriesBuffer = new List<SceneDirectoryData.SceneDirectoryEntry>();
+        private static readonly List<SceneInfo> DIYScenesRefreshBuffer = new List<SceneInfo>();
+        private static readonly List<SceneInfo> CachedSceneInfosBuffer = new List<SceneInfo>();
+        private static readonly HashSet<string> KnownSceneNamesBuffer = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly List<string> OrderedSceneSelectorValues = new List<string>();
         private static readonly List<SceneInfo> SelectableScenesBuffer = new List<SceneInfo>();
-        private static readonly List<OverlayRow> OverlayRowsBuffer = new List<OverlayRow>();
+        private static readonly List<OverlayRow> EmptyOverlayRowsBuffer = new List<OverlayRow>();
         private static readonly List<OverlayRenderRow> OverlayRenderRowsBuffer = new List<OverlayRenderRow>();
         private static readonly List<CategorySelectionGroup> CategorySelectionGroupsBuffer = new List<CategorySelectionGroup>();
         private static readonly List<TicketWidgetState> TicketWidgetsBuffer = new List<TicketWidgetState>();
@@ -104,18 +115,35 @@ namespace OC2MenuManager
         private static readonly Dictionary<string, string> SceneSelectorValuesByScene = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, string> SceneNamesBySelectorValue = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<int, double> ProbabilityByRecipeBuffer = new Dictionary<int, double>();
-        private static readonly Dictionary<int, double> ProbabilityWeightsByRecipeBuffer = new Dictionary<int, double>();
-        private static readonly List<int> UniqueProbabilityRecipeIdsBuffer = new List<int>();
-        private static readonly HashSet<int> UniqueProbabilityRecipeIdSetBuffer = new HashSet<int>();
+        private static readonly List<RecipeList.Entry> ProbabilityExtensionEntriesBuffer = new List<RecipeList.Entry>();
+        private static readonly HashSet<int> ReconstructableRecipeIdsBuffer = new HashSet<int>();
+        private static readonly Dictionary<int, int> ReconstructedRecipeCountsBuffer = new Dictionary<int, int>();
+        private static RecipeList.Entry[] ProbabilityEntriesBuffer = new RecipeList.Entry[0];
+        private static int[] ProbabilityRecipeIdsBuffer = new int[0];
+        private static int[] ProbabilityCumulativeFrequenciesBuffer = new int[0];
+        private static double[] ProbabilityEntryValuesBuffer = new double[0];
+        private static double[] ProbabilityRawWeightsBuffer = new double[0];
+        private static float[] ProbabilityCarnivalWeightsBuffer = new float[0];
         private static readonly Dictionary<int, int> PreparedRemainingByRecipeBuffer = new Dictionary<int, int>();
         private static readonly Dictionary<int, int> MenuOrderByRecipeBuffer = new Dictionary<int, int>();
         private static readonly List<int> PreparedCandidateRecipeIdsBuffer = new List<int>();
+        private static readonly List<RunInfo> PreparedCandidateRunsBuffer = new List<RunInfo>();
+        private static readonly List<Dictionary<int, double>> PreparedCandidateProbabilityMapsBuffer = new List<Dictionary<int, double>>();
+        private static readonly List<List<int>> PreparedCandidateActiveRecipeIdsBuffer = new List<List<int>>();
         private static readonly List<ReferenceTicketCandidate> ReferenceTicketCandidatesBuffer = new List<ReferenceTicketCandidate>();
+        private static readonly List<ReferenceTicketCandidate> ReferenceTicketCandidatePool = new List<ReferenceTicketCandidate>();
         private static readonly List<ReferenceTicketState> ReferenceTicketStates = new List<ReferenceTicketState>();
         private static readonly List<ReferenceTicketState> ReferenceTicketStatesForFlowBuffer = new List<ReferenceTicketState>();
         private static readonly List<RecipeFlowGUI.RecipeWidgetData> RealTicketWidgetDataBuffer = new List<RecipeFlowGUI.RecipeWidgetData>();
         private static readonly List<RecipeFlowGUI.RecipeWidgetData> ReferenceTicketWidgetDataBuffer = new List<RecipeFlowGUI.RecipeWidgetData>();
-        private static readonly List<RecipeFlowGUI> ReferenceTicketFlowsBuffer = new List<RecipeFlowGUI>();
+        private static readonly List<TeamFlowContext> TeamFlowContextsBuffer = new List<TeamFlowContext>();
+        private static readonly List<TeamID> ActiveTeamIdsBuffer = new List<TeamID>();
+        private static readonly TeamID[] SupportedTeamIds = new TeamID[] { TeamID.One, TeamID.Two };
+        private static readonly TeamFlowContext[] SupportedTeamFlowContexts = new TeamFlowContext[]
+        {
+            new TeamFlowContext(),
+            new TeamFlowContext()
+        };
         private static readonly HashSet<int> ReferenceTicketFlowIdsBuffer = new HashSet<int>();
         private static readonly Dictionary<int, int> ReferenceRealTicketLimitByFlowId = new Dictionary<int, int>();
         private static readonly Dictionary<int, ReferenceTicketState> ExistingReferenceTicketStatesByRecipeIdBuffer = new Dictionary<int, ReferenceTicketState>();
@@ -125,7 +153,8 @@ namespace OC2MenuManager
         private static readonly HashSet<ClientOrderControllerBase> VisitedOrderControllersBuffer = new HashSet<ClientOrderControllerBase>();
         private static readonly Dictionary<string, ConfigEntry<int>> CategoryTierEntriesByKey = new Dictionary<string, ConfigEntry<int>>(StringComparer.OrdinalIgnoreCase);
         private static readonly StringBuilder OverlayTextBuilder = new StringBuilder(768);
-        private static readonly TeamID[] TeamIds = (TeamID[])Enum.GetValues(typeof(TeamID));
+        private static readonly Comparison<OverlayRow> OverlayRowsWithPreparedComparison = CompareOverlayRowsWithPrepared;
+        private static readonly Comparison<OverlayRow> OverlayRowsWithoutPreparedComparison = CompareOverlayRowsWithoutPrepared;
         private static readonly VoidGeneric<RecipeFlowGUI.ElementToken> ReferenceTicketExpiredCallback = delegate
         {
         };
@@ -180,7 +209,6 @@ namespace OC2MenuManager
         private static ConfigEntry<int> overlayDishMaxTextLength;
         private static DebugOverlayHost overlayHost;
         private static string selectionFilePath;
-        private static RunInfo currentRun;
         private static int nextSceneRefreshFrame;
         private static int nextDIYSceneRefreshFrame;
         private static int idScanSceneCount;
@@ -209,6 +237,19 @@ namespace OC2MenuManager
         private static int? migratedReferenceTicketCountValue;
         private static Color? migratedReferenceTicketTintColorValue;
         private static readonly FieldInfo ActiveOrdersField = typeof(ClientOrderControllerBase).GetField("m_activeOrders", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo ServerRoundDataField = typeof(ServerOrderControllerBase).GetField("m_roundData", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo ServerRoundInstanceDataField = typeof(ServerOrderControllerBase).GetField("m_roundInstanceData", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly Type RoundInstanceDataType = typeof(RoundData).GetNestedType("RoundInstanceData", BindingFlags.NonPublic);
+        private static readonly FieldInfo RoundInstanceRecipeCountField = RoundInstanceDataType != null
+            ? RoundInstanceDataType.GetField("RecipeCount", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            : null;
+        private static readonly FieldInfo RoundInstanceCumulativeFrequenciesField = RoundInstanceDataType != null
+            ? RoundInstanceDataType.GetField("CumulativeFrequencies", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            : null;
+        private static readonly Type DynamicRoundInstanceDataType = typeof(DynamicRoundData).GetNestedType("DynamicRoundInstanceData", BindingFlags.NonPublic);
+        private static readonly FieldInfo DynamicRoundInstanceCurrentPhaseField = DynamicRoundInstanceDataType != null
+            ? DynamicRoundInstanceDataType.GetField("CurrentPhase", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            : null;
         private static readonly FieldInfo ClientOrderControllerGuiField = typeof(ClientOrderControllerBase).GetField("m_gui", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly Type ActiveOrderType = typeof(ClientOrderControllerBase).GetNestedType("ActiveOrder", BindingFlags.NonPublic);
         private static readonly FieldInfo ActiveOrderRecipeListEntryField = ActiveOrderType != null
@@ -221,7 +262,6 @@ namespace OC2MenuManager
         private static readonly MethodInfo RecipeFlowGetMaxOrderNumberMethod = AccessTools.Method(typeof(RecipeFlowGUI), "GetMaxOrderNumber");
         private static readonly FieldInfo FrontendCoopGameSessionPrefabsField = AccessTools.Field(typeof(T17FrontendFlow), "m_CoopGameSessionPrefabs");
         private static readonly FieldInfo FrontendCompetitiveGameSessionPrefabsField = AccessTools.Field(typeof(T17FrontendFlow), "m_CompetitiveGameSessionPrefabs");
-        private static readonly FieldInfo UISubElementContainerContainerField = typeof(UISubElementContainer).GetField("m_container", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeWidgetRecipeTreeField = typeof(RecipeWidgetUIController).GetField("m_recipeTree", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeWidgetDisplayConfigField = typeof(RecipeWidgetUIController).GetField("m_displayConfig", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeWidgetTopDisplayConfigField = typeof(RecipeWidgetUIController).GetField("m_topDisplayConfig", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -233,9 +273,7 @@ namespace OC2MenuManager
         private static int nextDlcManagerLookupFrame;
         private static WorldMapFlowController cachedWorldMapFlowController;
         private static string currentOnMenuCountsSceneName = string.Empty;
-        private static string probabilityMapSceneName = string.Empty;
         private static bool currentOnMenuCountsDirty = true;
-        private static bool probabilityMapDirty = true;
         private static int nextTrackedSceneRefreshPollFrame;
         private static int nextDiscoveryFlushFrame;
         private static int nextPreparedSourceRefreshFrame;
@@ -257,7 +295,7 @@ namespace OC2MenuManager
         private static bool invalidTableReleaseWarningLogged;
         private static bool ticketAdmissionFailureWarningLogged;
         private static bool referenceTicketAddFailureLogged;
-        private static bool diyFileSystemWarningLogged;
+        private static bool trackingHookFailureWarningLogged;
         private static bool cachedCurrentSceneInfoValid;
         private static bool lastMenuTicketTintEnabled = true;
         private static bool preparedSourceBootstrapComplete = true;
@@ -278,9 +316,6 @@ namespace OC2MenuManager
         private static Vector2 sceneDropdownScrollPosition = Vector2.zero;
         private static bool preparedCandidateRecipeIdsDirty = true;
         private static int overlayRowsVersion;
-        private static int cachedOverlayRowsVersion = -1;
-        private static string cachedOverlayRowsSceneName = string.Empty;
-        private static bool cachedOverlayRowsShowPrepared;
 
     }
 }

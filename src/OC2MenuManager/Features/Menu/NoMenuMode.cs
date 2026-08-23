@@ -1,3 +1,6 @@
+// Implements a server-authoritative No Menu delivery transaction. Round state
+// activates only after concrete campaign/competitive flows finish initialization,
+// and reflected recipe pools are accepted only when they match live round data.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -12,8 +15,14 @@ using UnityEngine;
 
 namespace OC2MenuManager
 {
+    /// <summary>
+    /// Owns No Menu round eligibility, recipe-bar visibility, order progression,
+    /// and the temporary order transaction that delegates scoring to the base game.
+    /// Any contract mismatch restores normal behavior for the current round.
+    /// </summary>
     internal static class NoMenuMode
     {
+        /// <summary>Captures UI state so round shutdown can restore the original recipe bar.</summary>
         private sealed class RecipeBarVisibilityState
         {
             public RecipeFlowGUI RecipeBar;
@@ -24,10 +33,22 @@ namespace OC2MenuManager
             public bool BlocksRaycasts;
         }
 
+        /// <summary>Captures server auto-progression state owned by the active round.</summary>
         private sealed class OrderProgressionState
         {
             public ServerOrderControllerBase Controller;
             public bool AutoProgress;
+        }
+
+        /// <summary>Tracks one temporary order through base-game delivery and compensation.</summary>
+        private sealed class SyntheticDeliveryTransaction
+        {
+            public bool Injected;
+            public bool Completed;
+            public TeamID TeamId;
+            public OrderID OrderId;
+            public ServerTeamMonitor Monitor;
+            public ClientKitchenFlowControllerBase ClientFlow;
         }
 
         private static readonly ConfigDefinition LegacyToggleKeyDefinition = new ConfigDefinition("00-菜单管理", "切换无菜单热键");
@@ -36,28 +57,20 @@ namespace OC2MenuManager
         private static readonly FieldInfo ClientCompetitiveTeamTwoMonitorField = AccessTools.Field(typeof(ClientCompetitiveFlowController), "m_teamTwoMonitor");
         private static readonly FieldInfo ClientTeamMonitorMonitorField = AccessTools.Field(typeof(ClientTeamMonitor), "m_monitor");
         private static readonly FieldInfo TeamMonitorRecipeBarField = AccessTools.Field(typeof(TeamMonitor), "m_recipeBarUIController");
-        private static readonly FieldInfo ClientLobbySessionVisibilityField = AccessTools.Field(typeof(ClientLobbyFlowController), "m_sessionVisibility");
-        private static readonly FieldInfo PlateReturnControllerField = AccessTools.Field(typeof(ServerKitchenFlowControllerBase), "m_plateReturnController");
         private static readonly FieldInfo AutoProgressField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_autoProgress");
         private static readonly FieldInfo NextOrderIdField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_nextOrderID");
         private static readonly FieldInfo RoundDataField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_roundData");
         private static readonly FieldInfo RoundInstanceDataField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_roundInstanceData");
         private static readonly FieldInfo ActiveOrdersField = AccessTools.Field(typeof(ServerOrderControllerBase), "m_activeOrders");
+        private static readonly FieldInfo RoundInstanceCumulativeFrequenciesField = ResolveRoundInstanceCumulativeFrequenciesField();
         private static readonly FieldInfo DynamicRoundInstanceCurrentPhaseField = ResolveDynamicRoundPhaseField();
         private static readonly Type ConnectionStatusType = AccessTools.TypeByName("ConnectionStatus");
         private static readonly MethodInfo ConnectionIsInSessionMethod = ConnectionStatusType != null
             ? AccessTools.Method(ConnectionStatusType, "IsInSession", new Type[0])
             : null;
-        private static readonly MethodInfo ConnectionIsHostMethod = ConnectionStatusType != null
-            ? AccessTools.Method(ConnectionStatusType, "IsHost", new Type[0])
-            : null;
         private static readonly MethodInfo AddSpecificOrderMethod = AccessTools.Method(typeof(ServerOrderControllerBase), "AddNewOrder", new[] { typeof(RecipeList.Entry) });
-        private static readonly MethodInfo SuccessfulDeliveryBaseMethod = AccessTools.Method(
-            typeof(ServerKitchenFlowControllerBase),
-            "OnSuccessfulDelivery",
-            new[] { typeof(OrderID), typeof(RecipeList.Entry), typeof(float), typeof(bool), typeof(ServerPlateStation) });
-        private static readonly Dictionary<Type, MethodInfo> SuccessfulDeliveryMethodCache = new Dictionary<Type, MethodInfo>();
-        private static readonly HashSet<uint> SyntheticOrderIds = new HashSet<uint>();
+        private static readonly HashSet<TeamScopedOrderKey> SyntheticOrderIds = new HashSet<TeamScopedOrderKey>();
+        private static readonly HashSet<TeamScopedOrderKey> CompensatedSyntheticOrderIds = new HashSet<TeamScopedOrderKey>();
         private static readonly Dictionary<int, RecipeBarVisibilityState> RecipeBarVisibilityStates = new Dictionary<int, RecipeBarVisibilityState>();
         private static readonly Dictionary<ServerOrderControllerBase, OrderProgressionState> OrderProgressionStates = new Dictionary<ServerOrderControllerBase, OrderProgressionState>();
         private static readonly List<RecipeList.Entry> NoMenuRecipeEntriesBuffer = new List<RecipeList.Entry>();
@@ -71,7 +84,7 @@ namespace OC2MenuManager
         private static LevelConfigBase roundLevelConfig;
         private static NoMenuIneligibility roundIneligibility = NoMenuIneligibility.Disabled;
         private static bool syntheticDeliveryFailureLogged;
-        private static bool publicOnlineSessionRequested;
+        private static bool roundSynchronizationFailureLogged;
         private static bool noMenuRecipesInitialized;
         private static int noMenuRecipePhaseIndex = int.MinValue;
 
@@ -151,29 +164,19 @@ namespace OC2MenuManager
             return GetIneligibilityText(roundIneligibility, chinese);
         }
 
-        public static bool IsSyntheticOrder(OrderID orderId)
+        public static bool IsSyntheticOrder(TeamID teamId, OrderID orderId)
         {
-            return orderId.m_id != 0u && SyntheticOrderIds.Contains(orderId.m_id);
+            return orderId.m_id != 0u
+                && SyntheticOrderIds.Contains(new TeamScopedOrderKey((int)teamId, orderId.m_id));
         }
 
-        public static void ForgetSyntheticOrder(OrderID orderId)
+        public static void ForgetSyntheticOrder(TeamID teamId, OrderID orderId)
         {
             if (orderId.m_id != 0u)
             {
-                SyntheticOrderIds.Remove(orderId.m_id);
-            }
-        }
-
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(ServerFlowControllerBase), "StartSynchronising")]
-        private static void ServerFlowControllerBase_StartSynchronising_Postfix(ServerFlowControllerBase __instance)
-        {
-            if (__instance != null)
-            {
-                BeginRound(
-                    __instance.GetLevelConfig(),
-                    __instance is ServerBossFlowController,
-                    __instance is ServerCompetitiveFlowController);
+                TeamScopedOrderKey key = new TeamScopedOrderKey((int)teamId, orderId.m_id);
+                SyntheticOrderIds.Remove(key);
+                CompensatedSyntheticOrderIds.Remove(key);
             }
         }
 
@@ -193,16 +196,25 @@ namespace OC2MenuManager
                 return;
             }
 
-            BeginRound(__instance.GetLevelConfig(), __instance is ServerBossFlowController, false);
-            if (activeForRound)
+            try
             {
-                ServerTeamMonitor monitor = __instance.GetMonitorForTeam(TeamID.One);
-                if (TryDeactivateForBootstrapOrders(monitor))
+                TryBeginRound(__instance.GetLevelConfig(), __instance is ServerBossFlowController, false);
+                if (activeForRound)
                 {
-                    return;
+                    ServerTeamMonitor monitor = __instance.GetMonitorForTeam(TeamID.One);
+                    if (!TryDeactivateForBootstrapOrders(monitor))
+                    {
+                        SetAutoProgress(monitor, false);
+                    }
                 }
 
-                SetAutoProgress(monitor, false);
+                ApplyCampaignRecipeBarVisibility(
+                    __instance.GetComponent<ClientCampaignFlowController>(),
+                    !activeForRound);
+            }
+            catch (Exception ex)
+            {
+                HandleRoundSynchronizationFailure("initializing the campaign server flow", ex);
             }
         }
 
@@ -215,19 +227,28 @@ namespace OC2MenuManager
                 return;
             }
 
-            BeginRound(__instance.GetLevelConfig(), false, true);
-            if (activeForRound)
+            try
             {
-                ServerTeamMonitor teamOneMonitor = __instance.GetMonitorForTeam(TeamID.One);
-                ServerTeamMonitor teamTwoMonitor = __instance.GetMonitorForTeam(TeamID.Two);
-                if (TryDeactivateForBootstrapOrders(teamOneMonitor)
-                    || TryDeactivateForBootstrapOrders(teamTwoMonitor))
+                TryBeginRound(__instance.GetLevelConfig(), false, true);
+                if (activeForRound)
                 {
-                    return;
+                    ServerTeamMonitor teamOneMonitor = __instance.GetMonitorForTeam(TeamID.One);
+                    ServerTeamMonitor teamTwoMonitor = __instance.GetMonitorForTeam(TeamID.Two);
+                    if (!TryDeactivateForBootstrapOrders(teamOneMonitor)
+                        && !TryDeactivateForBootstrapOrders(teamTwoMonitor))
+                    {
+                        SetAutoProgress(teamOneMonitor, false);
+                        SetAutoProgress(teamTwoMonitor, false);
+                    }
                 }
 
-                SetAutoProgress(teamOneMonitor, false);
-                SetAutoProgress(teamTwoMonitor, false);
+                ApplyCompetitiveRecipeBarVisibility(
+                    __instance.GetComponent<ClientCompetitiveFlowController>(),
+                    !activeForRound);
+            }
+            catch (Exception ex)
+            {
+                HandleRoundSynchronizationFailure("initializing the competitive server flow", ex);
             }
         }
 
@@ -240,8 +261,20 @@ namespace OC2MenuManager
                 return;
             }
 
-            EnsureClientRoundState(__instance.GetLevelConfig(), __instance is ClientBossFlowController, false);
-            ApplyCampaignRecipeBarVisibility(__instance, !activeForRound);
+            try
+            {
+                bool hasAuthoritativeServerFlow = __instance.GetComponent<ServerCampaignFlowController>() != null;
+                if (NoMenuClientAuthorityPolicy.ShouldInitializeLocalRoundState(hasAuthoritativeServerFlow))
+                {
+                    EnsureClientRoundState(__instance.GetLevelConfig(), __instance is ClientBossFlowController, false);
+                }
+
+                ApplyCampaignRecipeBarVisibility(__instance, !activeForRound);
+            }
+            catch (Exception ex)
+            {
+                HandleRoundSynchronizationFailure("initializing the campaign client flow", ex);
+            }
         }
 
         [HarmonyPostfix]
@@ -253,8 +286,20 @@ namespace OC2MenuManager
                 return;
             }
 
-            EnsureClientRoundState(__instance.GetLevelConfig(), false, true);
-            ApplyCompetitiveRecipeBarVisibility(__instance, !activeForRound);
+            try
+            {
+                bool hasAuthoritativeServerFlow = __instance.GetComponent<ServerCompetitiveFlowController>() != null;
+                if (NoMenuClientAuthorityPolicy.ShouldInitializeLocalRoundState(hasAuthoritativeServerFlow))
+                {
+                    EnsureClientRoundState(__instance.GetLevelConfig(), false, true);
+                }
+
+                ApplyCompetitiveRecipeBarVisibility(__instance, !activeForRound);
+            }
+            catch (Exception ex)
+            {
+                HandleRoundSynchronizationFailure("initializing the competitive client flow", ex);
+            }
         }
 
         [HarmonyPrefix]
@@ -273,21 +318,20 @@ namespace OC2MenuManager
 
         [HarmonyPrefix]
         [HarmonyPatch(typeof(ServerKitchenFlowControllerBase), "OnFoodDelivered")]
-        private static bool ServerKitchenFlowControllerBase_OnFoodDelivered_Prefix(
+        private static void ServerKitchenFlowControllerBase_OnFoodDelivered_Prefix(
             ServerKitchenFlowControllerBase __instance,
             AssembledDefinitionNode _definition,
             PlatingStepData _plateType,
-            ServerPlateStation _station)
+            ServerPlateStation _station,
+            out SyntheticDeliveryTransaction __state)
         {
+            __state = null;
             try
             {
-                return HandleNoMenuDelivery(__instance, _definition, _plateType, _station);
+                __state = PrepareNoMenuDelivery(__instance, _definition, _plateType, _station);
             }
             catch (Exception ex)
             {
-                // A compatibility failure before the synthetic order is committed must fall
-                // through to the game's original delivery path.  Harmony prefixes should never
-                // turn an otherwise valid delivery into an exception.
                 Exception cause = ex is TargetInvocationException && ex.InnerException != null
                     ? ex.InnerException
                     : ex;
@@ -299,11 +343,10 @@ namespace OC2MenuManager
                 }
 
                 DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
-                return true;
             }
         }
 
-        private static bool HandleNoMenuDelivery(
+        private static SyntheticDeliveryTransaction PrepareNoMenuDelivery(
             ServerKitchenFlowControllerBase __instance,
             AssembledDefinitionNode definition,
             PlatingStepData plateType,
@@ -311,13 +354,14 @@ namespace OC2MenuManager
         {
             if (!ShouldHandleNoMenuDelivery(__instance, station) || !CanUseSyntheticFallback(definition))
             {
-                return true;
+                return null;
             }
 
+            TeamID teamId = station.GetTeamID();
             ServerTeamMonitor monitor = __instance.GetMonitorForTeam(station.GetTeamID());
             if (monitor == null || monitor.OrdersController == null)
             {
-                return true;
+                return null;
             }
 
             if (IsAutoProgressEnabled(monitor))
@@ -325,158 +369,202 @@ namespace OC2MenuManager
                 SetAutoProgress(monitor, false);
             }
 
+            int activeOrderCount;
+            if (!TryGetActiveOrderCount(monitor.OrdersController, out activeOrderCount))
+            {
+                DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
+                return null;
+            }
+
+            if (activeOrderCount != 0)
+            {
+                DeactivateNoMenu(NoMenuIneligibility.BootstrapOrders);
+                return null;
+            }
+
             RecipeList.Entry matchedEntry;
             if (!TryFindNoMenuRecipeMatch(monitor, definition, plateType, out matchedEntry))
             {
-                return true;
+                return null;
             }
 
-            PlateReturnController plateReturnController = PlateReturnControllerField != null
-                ? PlateReturnControllerField.GetValue(__instance) as PlateReturnController
-                : null;
-            MethodInfo successfulDeliveryMethod = GetSuccessfulDeliveryMethod(__instance.GetType());
-            if (plateReturnController == null || successfulDeliveryMethod == null || AddSpecificOrderMethod == null)
+            if (AddSpecificOrderMethod == null)
             {
                 DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
-                return true;
+                return null;
             }
 
             bool syntheticMutationStarted;
-            ServerOrderData syntheticOrder = AddSyntheticOrder(monitor, matchedEntry, out syntheticMutationStarted);
+            ServerOrderData syntheticOrder = AddSyntheticOrder(teamId, monitor, matchedEntry, out syntheticMutationStarted);
             if (syntheticOrder == null)
             {
-                if (!syntheticMutationStarted)
+                if (syntheticMutationStarted)
                 {
-                    return true;
+                    DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
                 }
 
-                TryReturnDeliveredPlate(plateReturnController, definition, plateType, station);
-                DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
-                return false;
+                return null;
             }
 
-            bool orderRemoved = false;
-            bool plateReturnAttempted = false;
+            SyntheticDeliveryTransaction transaction = new SyntheticDeliveryTransaction();
+            transaction.Injected = true;
+            transaction.TeamId = teamId;
+            transaction.OrderId = syntheticOrder.ID;
+            transaction.Monitor = monitor;
             try
             {
-                bool restartCombo = monitor.Score.TotalCombo == 0;
-                bool wasCombo = monitor.OrdersController.IsComboOrder(syntheticOrder.ID, restartCombo);
-                monitor.OrdersController.RemoveOrder(syntheticOrder.ID);
-                orderRemoved = true;
-                plateReturnAttempted = true;
-                plateReturnController.FoodDelivered(definition, plateType, station);
-                successfulDeliveryMethod.Invoke(__instance, new object[] { syntheticOrder.ID, matchedEntry, 1f, wasCombo, station });
-                return false;
+                transaction.ClientFlow = __instance.GetComponent<ClientKitchenFlowControllerBase>();
             }
             catch (Exception ex)
             {
-                if (!orderRemoved)
+                LogNoMenuHookFailure("resolving the local client flow for delivery cleanup", ex);
+            }
+
+            return transaction;
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(ServerKitchenFlowControllerBase), "OnFoodDelivered")]
+        private static void ServerKitchenFlowControllerBase_OnFoodDelivered_Postfix(SyntheticDeliveryTransaction __state)
+        {
+            TryCompleteSyntheticDeliveryTransaction(__state, null);
+        }
+
+        [HarmonyFinalizer]
+        [HarmonyPatch(typeof(ServerKitchenFlowControllerBase), "OnFoodDelivered")]
+        private static Exception ServerKitchenFlowControllerBase_OnFoodDelivered_Finalizer(
+            Exception __exception,
+            SyntheticDeliveryTransaction __state)
+        {
+            if (__state == null || !__state.Injected)
+            {
+                return __exception;
+            }
+
+            TryCompleteSyntheticDeliveryTransaction(__state, __exception);
+            return null;
+        }
+
+        private static void TryCompleteSyntheticDeliveryTransaction(
+            SyntheticDeliveryTransaction transaction,
+            Exception exception)
+        {
+            try
+            {
+                CompleteSyntheticDeliveryTransaction(transaction, exception);
+            }
+            catch (Exception completionException)
+            {
+                if (transaction != null && transaction.Injected)
                 {
-                    TryRemoveSyntheticOrder(monitor, syntheticOrder.ID);
-                }
-                if (!plateReturnAttempted)
-                {
-                    plateReturnAttempted = true;
-                    try
-                    {
-                        plateReturnController.FoodDelivered(definition, plateType, station);
-                    }
-                    catch
-                    {
-                    }
+                    transaction.Completed = true;
+                    TeamScopedOrderKey key = new TeamScopedOrderKey((int)transaction.TeamId, transaction.OrderId.m_id);
+                    CompensatedSyntheticOrderIds.Add(key);
+                    TryRemoveSyntheticOrder(transaction.TeamId, transaction.Monitor, transaction.OrderId, false);
+                    TryRemoveClientGhostOrder(transaction.ClientFlow, transaction.TeamId, transaction.OrderId);
                 }
 
                 if (!syntheticDeliveryFailureLogged)
                 {
                     syntheticDeliveryFailureLogged = true;
-                    Exception cause = ex is TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
-                    _MODEntry.LogError("[NoMenu] Synthetic delivery failed after commit: " + cause.GetType().Name + ": " + cause.Message);
+                    _MODEntry.LogError("[NoMenu] Synthetic delivery cleanup failed, but the base-game delivery call was allowed to finish: "
+                        + completionException.GetType().Name + ": " + completionException.Message);
                 }
 
-                DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
-                return false;
-            }
-            finally
-            {
-                ForgetSyntheticOrder(syntheticOrder.ID);
+                try
+                {
+                    DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
+                }
+                catch
+                {
+                    activeForRound = false;
+                    roundIneligibility = NoMenuIneligibility.MissingRuntimeContract;
+                }
             }
         }
 
-        private static void TryReturnDeliveredPlate(
-            PlateReturnController plateReturnController,
-            AssembledDefinitionNode definition,
-            PlatingStepData plateType,
-            ServerPlateStation station)
+        private static void CompleteSyntheticDeliveryTransaction(
+            SyntheticDeliveryTransaction transaction,
+            Exception exception)
         {
-            if (plateReturnController == null || station == null)
+            if (transaction == null
+                || !transaction.Injected
+                || (transaction.Completed && exception == null))
             {
                 return;
             }
 
-            try
+            transaction.Completed = true;
+            bool orderStillActive = ContainsActiveOrder(transaction.Monitor, transaction.OrderId);
+            SyntheticTransactionOutcome outcome = SyntheticTransactionPolicy.Evaluate(
+                transaction.Injected,
+                orderStillActive,
+                exception != null);
+            if (outcome == SyntheticTransactionOutcome.Success)
             {
-                plateReturnController.FoodDelivered(definition, plateType, station);
+                return;
             }
-            catch
+
+            TeamScopedOrderKey key = new TeamScopedOrderKey((int)transaction.TeamId, transaction.OrderId.m_id);
+            CompensatedSyntheticOrderIds.Add(key);
+            TryRemoveSyntheticOrder(transaction.TeamId, transaction.Monitor, transaction.OrderId, false);
+            TryRemoveClientGhostOrder(transaction.ClientFlow, transaction.TeamId, transaction.OrderId);
+
+            if (!syntheticDeliveryFailureLogged)
             {
+                syntheticDeliveryFailureLogged = true;
+                Exception cause = exception is TargetInvocationException && exception.InnerException != null
+                    ? exception.InnerException
+                    : exception;
+                string detail = cause != null
+                    ? cause.GetType().Name + ": " + cause.Message
+                    : "the injected order was not removed by the original delivery pipeline";
+                _MODEntry.LogError("[NoMenu] Synthetic delivery transaction failed: " + detail);
             }
+
+            DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
         }
 
         [HarmonyPostfix]
         [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnSuccessfulDelivery")]
-        private static void ClientKitchenFlowControllerBase_OnSuccessfulDelivery_Postfix(OrderID _orderID)
+        private static void ClientKitchenFlowControllerBase_OnSuccessfulDelivery_Postfix(TeamID _teamID, OrderID _orderID)
         {
-            ForgetSyntheticOrder(_orderID);
-        }
-
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnFailedDelivery")]
-        private static void ClientKitchenFlowControllerBase_OnFailedDelivery_Postfix(OrderID _orderID)
-        {
-            ForgetSyntheticOrder(_orderID);
-        }
-
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnOrderExpired")]
-        private static void ClientKitchenFlowControllerBase_OnOrderExpired_Postfix(OrderID _orderID)
-        {
-            ForgetSyntheticOrder(_orderID);
-        }
-
-        [HarmonyPrefix]
-        [HarmonyPatch(typeof(FrontendCoopTabOptions), "LoadLobby")]
-        [HarmonyPatch(typeof(FrontendVersusTabOptions), "LoadLobby")]
-        private static void Frontend_LoadLobby_Prefix(OnlineMultiplayerSessionVisibility _visiblity)
-        {
-            publicOnlineSessionRequested = _visiblity == OnlineMultiplayerSessionVisibility.ePublic
-                || _visiblity == OnlineMultiplayerSessionVisibility.eMatchmaking;
-        }
-
-        [HarmonyPrefix]
-        [HarmonyPatch(typeof(FrontendCoopTabOptions), "OnCouchPlayClicked")]
-        [HarmonyPatch(typeof(FrontendCoopTabOptions), "OnLocalPlayClicked")]
-        [HarmonyPatch(typeof(FrontendVersusTabOptions), "OnCouchPlayClicked")]
-        [HarmonyPatch(typeof(FrontendVersusTabOptions), "OnLocalPlayClicked")]
-        private static void Frontend_LocalPlay_Prefix()
-        {
-            publicOnlineSessionRequested = false;
-        }
-
-        [HarmonyPostfix]
-        [HarmonyPatch(typeof(ClientLobbyFlowController), "OnLobbyServerMessage")]
-        private static void ClientLobbyFlowController_OnLobbyServerMessage_Postfix(ClientLobbyFlowController __instance)
-        {
-            if (__instance == null || ClientLobbySessionVisibilityField == null)
+            try
             {
-                return;
+                ForgetSyntheticOrder(_teamID, _orderID);
             }
-
-            object value = ClientLobbySessionVisibilityField.GetValue(__instance);
-            if (value is OnlineMultiplayerSessionVisibility)
+            catch (Exception ex)
             {
-                OnlineMultiplayerSessionVisibility visibility = (OnlineMultiplayerSessionVisibility)value;
-                publicOnlineSessionRequested = visibility == OnlineMultiplayerSessionVisibility.ePublic
-                    || visibility == OnlineMultiplayerSessionVisibility.eMatchmaking;
+                LogNoMenuHookFailure("forgetting a delivered synthetic order", ex);
+            }
+        }
+
+        [HarmonyPostfix]
+        [HarmonyPatch(typeof(ClientKitchenFlowControllerBase), "OnOrderAdded")]
+        private static void ClientKitchenFlowControllerBase_OnOrderAdded_Postfix(
+            ClientKitchenFlowControllerBase __instance,
+            TeamID _teamID,
+            Team17.Online.Multiplayer.Messaging.Serialisable _orderData)
+        {
+            try
+            {
+                ServerOrderData orderData = _orderData as ServerOrderData;
+                if (__instance == null || orderData == null || orderData.ID.m_id == 0u)
+                {
+                    return;
+                }
+
+                TeamScopedOrderKey key = new TeamScopedOrderKey((int)_teamID, orderData.ID.m_id);
+                if (!CompensatedSyntheticOrderIds.Contains(key))
+                {
+                    return;
+                }
+
+                TryRemoveClientGhostOrder(__instance, _teamID, orderData.ID);
+            }
+            catch (Exception ex)
+            {
+                LogNoMenuHookFailure("compensating a client synthetic order", ex);
             }
         }
 
@@ -491,6 +579,7 @@ namespace OC2MenuManager
             roundStateInitialized = true;
             roundLevelConfig = levelConfig;
             syntheticDeliveryFailureLogged = false;
+            roundSynchronizationFailureLogged = false;
             ResetNoMenuRecipeCache();
 
             KitchenLevelConfigBase kitchenLevelConfig = levelConfig as KitchenLevelConfigBase;
@@ -507,21 +596,33 @@ namespace OC2MenuManager
                 && kitchenLevelConfig != null
                 && kitchenLevelConfig.m_recipesBeforeTimerStarts > 0;
             RoundDataBase configuredRoundData = null;
+            bool hasReadableRoundData = kitchenLevelConfig == null;
             try
             {
                 configuredRoundData = kitchenLevelConfig != null ? kitchenLevelConfig.GetRoundData() : null;
+                hasReadableRoundData = kitchenLevelConfig == null || configuredRoundData != null;
             }
-            catch
+            catch (Exception ex)
             {
+                LogNoMenuHookFailure("reading the configured round data", ex);
             }
             bool hasDynamicRuntimeContract = !(configuredRoundData is DynamicRoundData)
                 || (RoundInstanceDataField != null && DynamicRoundInstanceCurrentPhaseField != null);
-            bool hasRuntimeContract = PlateReturnControllerField != null
-                && AutoProgressField != null
+            bool isInOnlineSession;
+            bool hasConnectionAuthority = TryGetConnectionStatus(out isInOnlineSession);
+            bool hasRecipeBarContract = ClientTeamMonitorMonitorField != null
+                && TeamMonitorRecipeBarField != null
+                && (isVersusFlow
+                    ? ClientCompetitiveTeamOneMonitorField != null && ClientCompetitiveTeamTwoMonitorField != null
+                    : ClientCampaignTeamMonitorField != null);
+            bool hasRuntimeContract = AutoProgressField != null
                 && NextOrderIdField != null
+                && RoundDataField != null
                 && ActiveOrdersField != null
                 && AddSpecificOrderMethod != null
-                && SuccessfulDeliveryBaseMethod != null
+                && hasReadableRoundData
+                && hasConnectionAuthority
+                && hasRecipeBarContract
                 && hasDynamicRuntimeContract;
 
             roundIneligibility = NoMenuRoundPolicy.Evaluate(
@@ -531,12 +632,30 @@ namespace OC2MenuManager
                 isTutorial,
                 isSurvival,
                 hasPreTimerOrders,
-                publicOnlineSessionRequested,
+                hasConnectionAuthority && isInOnlineSession,
                 hasRuntimeContract);
             SetRoundActive(roundIneligibility == NoMenuIneligibility.None);
             if (IsEnabled && !activeForRound)
             {
                 _MODEntry.LogInfo("[NoMenu] Not active for this round: " + GetIneligibilityText(roundIneligibility, false));
+            }
+        }
+
+        private static void TryBeginRound(LevelConfigBase levelConfig, bool isBossFlow, bool isVersusFlow)
+        {
+            try
+            {
+                BeginRound(levelConfig, isBossFlow, isVersusFlow);
+            }
+            catch (Exception ex)
+            {
+                ClearSyntheticOrders();
+                ResetNoMenuRecipeCache();
+                roundStateInitialized = true;
+                roundLevelConfig = levelConfig;
+                roundIneligibility = NoMenuIneligibility.MissingRuntimeContract;
+                SetRoundActive(false);
+                _MODEntry.LogWarning("[NoMenu] Round initialization failed closed: " + ex.GetType().Name + ": " + ex.Message);
             }
         }
 
@@ -547,21 +666,35 @@ namespace OC2MenuManager
                 return;
             }
 
-            bool isInOnlineSession;
-            bool isHost;
-            if (TryGetConnectionAuthority(out isInOnlineSession, out isHost)
-                && !NoMenuClientAuthorityPolicy.ShouldInitializeLocalRoundState(isInOnlineSession, isHost))
+            TryBeginRound(levelConfig, isBossFlow, isVersusFlow);
+        }
+
+        private static void HandleRoundSynchronizationFailure(string operation, Exception exception)
+        {
+            try
             {
-                ClearSyntheticOrders();
-                ResetNoMenuRecipeCache();
-                roundStateInitialized = true;
-                roundLevelConfig = levelConfig;
-                roundIneligibility = NoMenuIneligibility.RemoteClient;
-                SetRoundActive(false);
+                DeactivateNoMenu(NoMenuIneligibility.MissingRuntimeContract);
+            }
+            catch
+            {
+                activeForRound = false;
+                roundIneligibility = NoMenuIneligibility.MissingRuntimeContract;
+            }
+
+            LogNoMenuHookFailure(operation, exception);
+        }
+
+        private static void LogNoMenuHookFailure(string operation, Exception exception)
+        {
+            if (roundSynchronizationFailureLogged || exception == null)
+            {
                 return;
             }
 
-            BeginRound(levelConfig, isBossFlow, isVersusFlow);
+            roundSynchronizationFailureLogged = true;
+            _MODEntry.LogWarning("[NoMenu] A compatibility hook failed while " + operation
+                + "; normal menu behavior was restored: "
+                + exception.GetType().Name + ": " + exception.Message);
         }
 
         private static void SetRoundActive(bool active)
@@ -596,6 +729,7 @@ namespace OC2MenuManager
                 roundLevelConfig = null;
                 roundIneligibility = IsEnabled ? NoMenuIneligibility.None : NoMenuIneligibility.Disabled;
                 syntheticDeliveryFailureLogged = false;
+                roundSynchronizationFailureLogged = false;
                 RecipeBarVisibilityStates.Clear();
                 OrderProgressionStates.Clear();
                 ClearSyntheticOrders();
@@ -616,6 +750,7 @@ namespace OC2MenuManager
             roundLevelConfig = null;
             roundIneligibility = IsEnabled ? NoMenuIneligibility.None : NoMenuIneligibility.Disabled;
             syntheticDeliveryFailureLogged = false;
+            roundSynchronizationFailureLogged = false;
             ClearSyntheticOrders();
             ResetNoMenuRecipeCache();
         }
@@ -729,8 +864,9 @@ namespace OC2MenuManager
             {
                 entries = GetRecipesForCurrentLevel(monitor);
             }
-            catch
+            catch (Exception ex)
             {
+                HandleRoundSynchronizationFailure("resolving the active No Menu recipe pool", ex);
                 return false;
             }
             for (int i = 0; i < entries.Count; i++)
@@ -767,6 +903,14 @@ namespace OC2MenuManager
             int phaseIndex = dynamicRoundData != null
                 ? GetCurrentDynamicPhaseIndex(orderController, dynamicRoundData)
                 : -1;
+            if (dynamicRoundData != null
+                && (dynamicRoundData.Phases == null
+                    || phaseIndex < 0
+                    || phaseIndex >= dynamicRoundData.Phases.Length))
+            {
+                throw new InvalidOperationException("The active dynamic-round phase could not be resolved from ServerOrderControllerBase.m_roundInstanceData.");
+            }
+
             if (noMenuRecipesInitialized && noMenuRecipePhaseIndex == phaseIndex)
             {
                 return NoMenuRecipeEntriesBuffer;
@@ -774,11 +918,25 @@ namespace OC2MenuManager
 
             NoMenuRecipeEntriesBuffer.Clear();
             NoMenuRecipeIdsBuffer.Clear();
+            int baseCandidateCount = 0;
+            ScriptedRoundData scriptedRoundData = roundData as ScriptedRoundData;
+            if (scriptedRoundData != null && scriptedRoundData.m_manualOrder != null)
+            {
+                for (int i = 0; i < scriptedRoundData.m_manualOrder.Length; i++)
+                {
+                    AddRecipeEntryDistinct(scriptedRoundData.m_manualOrder[i]);
+                }
+            }
+
             if (dynamicRoundData != null && dynamicRoundData.Phases != null)
             {
                 if (phaseIndex >= 0 && phaseIndex < dynamicRoundData.Phases.Length)
                 {
-                    AddRecipeEntriesDistinct(dynamicRoundData.Phases[phaseIndex].Recipes);
+                    RecipeList phaseRecipes = dynamicRoundData.Phases[phaseIndex].Recipes;
+                    baseCandidateCount = phaseRecipes != null && phaseRecipes.m_recipes != null
+                        ? phaseRecipes.m_recipes.Length
+                        : 0;
+                    AddRecipeEntriesDistinct(phaseRecipes);
                 }
             }
             else
@@ -786,6 +944,9 @@ namespace OC2MenuManager
                 RoundData standardRoundData = roundData as RoundData;
                 if (standardRoundData != null)
                 {
+                    baseCandidateCount = standardRoundData.m_recipes != null && standardRoundData.m_recipes.m_recipes != null
+                        ? standardRoundData.m_recipes.m_recipes.Length
+                        : 0;
                     AddRecipeEntriesDistinct(standardRoundData.m_recipes);
                 }
             }
@@ -796,9 +957,16 @@ namespace OC2MenuManager
                 levelConfig,
                 dynamicRoundData == null,
                 Math.Max(0, phaseIndex));
-            for (int i = 0; i < NoMenuExtensionEntriesBuffer.Count; i++)
+            int cumulativeCandidateCount = GetRuntimeCandidateCount(orderController);
+            if (RecipeExtensionPhasePolicy.HasCompatibleRuntimeShape(
+                baseCandidateCount,
+                NoMenuExtensionEntriesBuffer.Count,
+                cumulativeCandidateCount))
             {
-                AddRecipeEntryDistinct(NoMenuExtensionEntriesBuffer[i]);
+                for (int i = 0; i < NoMenuExtensionEntriesBuffer.Count; i++)
+                {
+                    AddRecipeEntryDistinct(NoMenuExtensionEntriesBuffer[i]);
+                }
             }
 
             noMenuRecipesInitialized = true;
@@ -806,11 +974,34 @@ namespace OC2MenuManager
             return NoMenuRecipeEntriesBuffer;
         }
 
+        private static int GetRuntimeCandidateCount(ServerOrderControllerBase orderController)
+        {
+            if (orderController == null
+                || RoundInstanceDataField == null
+                || RoundInstanceCumulativeFrequenciesField == null)
+            {
+                return -1;
+            }
+
+            try
+            {
+                object instanceData = RoundInstanceDataField.GetValue(orderController);
+                int[] cumulativeFrequencies = instanceData != null
+                    ? RoundInstanceCumulativeFrequenciesField.GetValue(instanceData) as int[]
+                    : null;
+                return cumulativeFrequencies != null ? cumulativeFrequencies.Length : -1;
+            }
+            catch
+            {
+                return -1;
+            }
+        }
+
         private static int GetCurrentDynamicPhaseIndex(ServerOrderControllerBase orderController, DynamicRoundData dynamicRoundData)
         {
             if (dynamicRoundData == null || dynamicRoundData.Phases == null || dynamicRoundData.Phases.Length == 0)
             {
-                return 0;
+                return -1;
             }
 
             if (orderController != null && RoundInstanceDataField != null && DynamicRoundInstanceCurrentPhaseField != null)
@@ -830,12 +1021,13 @@ namespace OC2MenuManager
                         }
                     }
                 }
-                catch
+                catch (Exception ex)
                 {
+                    throw new InvalidOperationException("The current dynamic-round phase field could not be read.", ex);
                 }
             }
 
-            return 0;
+            return -1;
         }
 
         private static void AddRecipeEntriesDistinct(RecipeList recipeList)
@@ -913,7 +1105,11 @@ namespace OC2MenuManager
             }
         }
 
-        private static ServerOrderData AddSyntheticOrder(ServerTeamMonitor monitor, RecipeList.Entry entry, out bool mutationStarted)
+        private static ServerOrderData AddSyntheticOrder(
+            TeamID teamId,
+            ServerTeamMonitor monitor,
+            RecipeList.Entry entry,
+            out bool mutationStarted)
         {
             mutationStarted = false;
             if (monitor == null || monitor.OrdersController == null || AddSpecificOrderMethod == null || entry == null)
@@ -930,7 +1126,7 @@ namespace OC2MenuManager
                     if (nextIdValue is uint)
                     {
                         reservedOrderId = (uint)nextIdValue;
-                        SyntheticOrderIds.Add(reservedOrderId);
+                        SyntheticOrderIds.Add(new TeamScopedOrderKey((int)teamId, reservedOrderId));
                     }
                 }
 
@@ -940,7 +1136,8 @@ namespace OC2MenuManager
                 {
                     if (reservedOrderId != 0u)
                     {
-                        TryRemoveSyntheticOrder(monitor, new OrderID(reservedOrderId));
+                        CompensatedSyntheticOrderIds.Add(new TeamScopedOrderKey((int)teamId, reservedOrderId));
+                        TryRemoveSyntheticOrder(teamId, monitor, new OrderID(reservedOrderId), false);
                     }
 
                     return null;
@@ -948,17 +1145,18 @@ namespace OC2MenuManager
 
                 if (reservedOrderId != 0u && syntheticOrder.ID.m_id != reservedOrderId)
                 {
-                    SyntheticOrderIds.Remove(reservedOrderId);
+                    SyntheticOrderIds.Remove(new TeamScopedOrderKey((int)teamId, reservedOrderId));
                 }
 
-                SyntheticOrderIds.Add(syntheticOrder.ID.m_id);
+                SyntheticOrderIds.Add(new TeamScopedOrderKey((int)teamId, syntheticOrder.ID.m_id));
                 return syntheticOrder;
             }
             catch (Exception ex)
             {
                 if (reservedOrderId != 0u)
                 {
-                    TryRemoveSyntheticOrder(monitor, new OrderID(reservedOrderId));
+                    CompensatedSyntheticOrderIds.Add(new TeamScopedOrderKey((int)teamId, reservedOrderId));
+                    TryRemoveSyntheticOrder(teamId, monitor, new OrderID(reservedOrderId), false);
                 }
 
                 if (!syntheticDeliveryFailureLogged)
@@ -972,7 +1170,11 @@ namespace OC2MenuManager
             }
         }
 
-        private static void TryRemoveSyntheticOrder(ServerTeamMonitor monitor, OrderID orderId)
+        private static void TryRemoveSyntheticOrder(
+            TeamID teamId,
+            ServerTeamMonitor monitor,
+            OrderID orderId,
+            bool forgetKey)
         {
             try
             {
@@ -985,28 +1187,90 @@ namespace OC2MenuManager
             {
             }
 
-            ForgetSyntheticOrder(orderId);
+            if (forgetKey)
+            {
+                ForgetSyntheticOrder(teamId, orderId);
+            }
         }
 
-        private static MethodInfo GetSuccessfulDeliveryMethod(Type type)
+        private static bool TryGetActiveOrderCount(ServerOrderControllerBase orderController, out int count)
         {
-            if (type == null)
+            count = 0;
+            if (orderController == null || ActiveOrdersField == null)
             {
-                return null;
+                return false;
             }
 
-            MethodInfo method;
-            if (SuccessfulDeliveryMethodCache.TryGetValue(type, out method))
+            try
             {
-                return method;
+                IList activeOrders = ActiveOrdersField.GetValue(orderController) as IList;
+                if (activeOrders == null)
+                {
+                    return false;
+                }
+
+                count = activeOrders.Count;
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool ContainsActiveOrder(ServerTeamMonitor monitor, OrderID orderId)
+        {
+            if (monitor == null || monitor.OrdersController == null || ActiveOrdersField == null)
+            {
+                return true;
             }
 
-            method = AccessTools.Method(
-                type,
-                "OnSuccessfulDelivery",
-                new[] { typeof(OrderID), typeof(RecipeList.Entry), typeof(float), typeof(bool), typeof(ServerPlateStation) });
-            SuccessfulDeliveryMethodCache[type] = method;
-            return method;
+            try
+            {
+                IList activeOrders = ActiveOrdersField.GetValue(monitor.OrdersController) as IList;
+                if (activeOrders == null)
+                {
+                    return true;
+                }
+
+                for (int i = 0; i < activeOrders.Count; i++)
+                {
+                    ServerOrderData activeOrder = activeOrders[i] as ServerOrderData;
+                    if (activeOrder != null && activeOrder.ID == orderId)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static void TryRemoveClientGhostOrder(
+            ClientKitchenFlowControllerBase clientFlow,
+            TeamID teamId,
+            OrderID orderId)
+        {
+            if (clientFlow == null || orderId.m_id == 0u)
+            {
+                return;
+            }
+
+            try
+            {
+                ClientTeamMonitor clientMonitor = clientFlow.GetMonitorForTeam(teamId);
+                if (clientMonitor != null && clientMonitor.OrdersController != null)
+                {
+                    clientMonitor.OrdersController.OnFoodDelivered(true, orderId);
+                }
+            }
+            catch
+            {
+            }
         }
 
         private static bool IsAutoProgressEnabled(ServerTeamMonitor monitor)
@@ -1158,11 +1422,10 @@ namespace OC2MenuManager
             }
         }
 
-        private static bool TryGetConnectionAuthority(out bool isInOnlineSession, out bool isHost)
+        private static bool TryGetConnectionStatus(out bool isInOnlineSession)
         {
             isInOnlineSession = false;
-            isHost = false;
-            if (ConnectionIsInSessionMethod == null || ConnectionIsHostMethod == null)
+            if (ConnectionIsInSessionMethod == null)
             {
                 return false;
             }
@@ -1170,14 +1433,12 @@ namespace OC2MenuManager
             try
             {
                 object sessionValue = ConnectionIsInSessionMethod.Invoke(null, null);
-                object hostValue = ConnectionIsHostMethod.Invoke(null, null);
-                if (!(sessionValue is bool) || !(hostValue is bool))
+                if (!(sessionValue is bool))
                 {
                     return false;
                 }
 
                 isInOnlineSession = (bool)sessionValue;
-                isHost = (bool)hostValue;
                 return true;
             }
             catch
@@ -1212,6 +1473,16 @@ namespace OC2MenuManager
                 : null;
         }
 
+        private static FieldInfo ResolveRoundInstanceCumulativeFrequenciesField()
+        {
+            Type roundInstanceType = typeof(RoundData).GetNestedType(
+                "RoundInstanceData",
+                BindingFlags.Public | BindingFlags.NonPublic);
+            return roundInstanceType != null
+                ? roundInstanceType.GetField("CumulativeFrequencies", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                : null;
+        }
+
         private static string GetIneligibilityText(NoMenuIneligibility reason, bool chinese)
         {
             switch (reason)
@@ -1226,12 +1497,10 @@ namespace OC2MenuManager
                     return chinese ? "生存模式不支持无菜单，保留正常菜单。" : "Survival mode does not support No Menu; the normal menu remains enabled.";
                 case NoMenuIneligibility.PreTimerOrders:
                     return chinese ? "需要用菜单启动计时器的关卡不支持无菜单。" : "Levels that require orders before the timer starts do not support No Menu.";
-                case NoMenuIneligibility.PublicOnline:
-                    return chinese ? "公开联机关卡不支持无菜单，保留正常菜单。" : "Public online sessions do not support No Menu; the normal menu remains enabled.";
+                case NoMenuIneligibility.OnlineSession:
+                    return chinese ? "联机关卡（包括私密房间）不支持无菜单，保留正常菜单。" : "Online sessions, including private sessions, do not support No Menu; the normal menu remains enabled.";
                 case NoMenuIneligibility.MissingRuntimeContract:
                     return chinese ? "当前游戏版本缺少无菜单所需接口，已安全停用。" : "Required runtime hooks are unavailable; No Menu was safely disabled.";
-                case NoMenuIneligibility.RemoteClient:
-                    return chinese ? "无菜单由主机控制；远程客户端保留服务器菜单。" : "No Menu is host-controlled; remote clients keep the server-provided menu.";
                 case NoMenuIneligibility.BootstrapOrders:
                     return chinese ? "本关启动时创建了特殊订单，已保留正常菜单以避免订单不同步。" : "This level creates special startup orders; the normal menu was kept to avoid desynchronizing them.";
                 case NoMenuIneligibility.Disabled:
@@ -1244,6 +1513,7 @@ namespace OC2MenuManager
         private static void ClearSyntheticOrders()
         {
             SyntheticOrderIds.Clear();
+            CompensatedSyntheticOrderIds.Clear();
         }
 
         private static void ResetNoMenuRecipeCache()

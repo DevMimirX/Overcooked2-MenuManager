@@ -1,3 +1,6 @@
+// Hardens RecipeFlowGUI capacity/removal and owns ticket presentation state.
+// Real-ticket safety patches remain unconditional; cosmetic registration and
+// ordering run only when history tracking actually consumes that state.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -23,6 +26,10 @@ namespace OC2MenuManager
         private const float ReferenceTicketOpacityScale = 0.80f;
         private const float ReferenceTicketDestroyAnimationTintStrength = 0.18f;
 
+        /// <summary>
+        /// Provides the synthetic-ticket-only fade used when a guess leaves the
+        /// recipe bar without borrowing the base game's real-order animation state.
+        /// </summary>
         private sealed class ReferenceTicketDestroyAnimation : WidgetAnimation
         {
             private readonly Color accentColor;
@@ -92,47 +99,54 @@ namespace OC2MenuManager
             VoidGeneric<RecipeFlowGUI.ElementToken> _expirationCallback,
             ref RecipeFlowGUI.ElementToken __result)
         {
-            if (__instance == null || _data == null)
+            try
             {
-                return;
-            }
-
-            RecipeFlowGUI.RecipeWidgetData widgetData = __instance.GetData(__result);
-            if (widgetData == null || widgetData.m_widget == null)
-            {
-                return;
-            }
-
-            bool isReferenceTicket = IsMenuManagerReferenceTicketAdd(_expirationCallback);
-            if (!isReferenceTicket && RecipeFlowOccupiedTablesField != null)
-            {
-                try
+                if (__instance == null || _data == null)
                 {
-                    bool[] occupiedTables = RecipeFlowOccupiedTablesField.GetValue(__instance) as bool[];
-                    int tableCount = occupiedTables != null ? occupiedTables.Length : 0;
-                    int tableIndex = widgetData.m_widget.GetTableNumber();
-                    if (!TicketCapacityPolicy.IsValidTableIndex(tableIndex, tableCount) && !invalidRealTableWarningLogged)
+                    return;
+                }
+
+                RecipeFlowGUI.RecipeWidgetData widgetData = __instance.GetData(__result);
+                if (widgetData == null || widgetData.m_widget == null)
+                {
+                    return;
+                }
+
+                bool isReferenceTicket = IsMenuManagerReferenceTicketAdd(_expirationCallback);
+                if (!isReferenceTicket && RecipeFlowOccupiedTablesField != null)
+                {
+                    try
                     {
-                        invalidRealTableWarningLogged = true;
-                        _MODEntry.LogWarning("[ServedDishTracker] A real order received an invalid RecipeFlowGUI table index " + tableIndex + " for capacity " + tableCount + ". Removal protection remains active for this round.");
+                        bool[] occupiedTables = RecipeFlowOccupiedTablesField.GetValue(__instance) as bool[];
+                        int tableCount = occupiedTables != null ? occupiedTables.Length : 0;
+                        int tableIndex = widgetData.m_widget.GetTableNumber();
+                        if (!TicketCapacityPolicy.IsValidTableIndex(tableIndex, tableCount) && !invalidRealTableWarningLogged)
+                        {
+                            invalidRealTableWarningLogged = true;
+                            _MODEntry.LogWarning("[ServedDishTracker] A real order received an invalid RecipeFlowGUI table index " + tableIndex + " for capacity " + tableCount + ". Removal protection remains active for this round.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogTrackingHookFailure("validating an added ticket's table assignment", ex);
                     }
                 }
-                catch
-                {
-                }
-            }
 
-            RegisterTicketWidget(widgetData.m_widget, _data.m_uID, widgetData.m_order);
-            if (!isReferenceTicket)
-            {
-                try
+                if (!isReferenceTicket
+                    && (enabled == null || !enabled.Value || NoMenuMode.IsActiveForRound))
+                {
+                    return;
+                }
+
+                RegisterTicketWidget(widgetData.m_widget, _data.m_uID, widgetData.m_order, __instance);
+                if (!isReferenceTicket && ReferenceTicketStates.Count > 0)
                 {
                     ReorderActiveTicketWidgets(__instance);
                 }
-                catch
-                {
-                    // Ticket ordering is cosmetic and must never escape the game's AddElement call.
-                }
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("updating ticket presentation after AddElement", ex);
             }
         }
 
@@ -145,6 +159,17 @@ namespace OC2MenuManager
         [HarmonyPrefix]
         private static bool RecipeFlowGUI_ReleaseTable_Prefix(RecipeFlowGUI __instance, int _tableId)
         {
+            if (_tableId < 0)
+            {
+                if (!invalidTableReleaseWarningLogged)
+                {
+                    invalidTableReleaseWarningLogged = true;
+                    _MODEntry.LogWarning("[ServedDishTracker] Ignored a negative RecipeFlowGUI table release (index " + _tableId + ") so the served ticket could finish removing.");
+                }
+
+                return false;
+            }
+
             if (__instance == null || RecipeFlowOccupiedTablesField == null)
             {
                 return true;
@@ -167,9 +192,13 @@ namespace OC2MenuManager
 
                 return false;
             }
-            catch
+            catch (Exception ex)
             {
-                return true;
+                LogTrackingHookFailure("validating a RecipeFlowGUI table release", ex);
+                // The base implementation indexes the table array without validating the
+                // value. If our validation contract itself fails, skipping this bookkeeping
+                // operation is safer than allowing removal to abort with an index exception.
+                return false;
             }
         }
 
@@ -177,89 +206,48 @@ namespace OC2MenuManager
         [HarmonyPrefix]
         private static void RecipeFlowGUI_RemoveElement_Prefix(RecipeFlowGUI __instance, RecipeFlowGUI.ElementToken _token)
         {
-            if (__instance == null)
+            try
             {
-                return;
-            }
+                if (__instance == null)
+                {
+                    return;
+                }
 
-            RecipeFlowGUI.RecipeWidgetData widgetData = __instance.GetData(_token);
-            if (widgetData == null || widgetData.m_widget == null)
+                RecipeFlowGUI.RecipeWidgetData widgetData = __instance.GetData(_token);
+                if (widgetData == null || widgetData.m_widget == null)
+                {
+                    return;
+                }
+
+                TicketWidgetState state;
+                if (TicketWidgetsByInstanceId.TryGetValue(widgetData.m_widget.GetInstanceID(), out state)
+                    && state != null
+                    && state.IsReferenceTicket
+                    && state.IsDyingReferenceTicket)
+                {
+                    return;
+                }
+
+                UnregisterTicketWidget(widgetData.m_widget);
+            }
+            catch (Exception ex)
             {
-                return;
+                LogTrackingHookFailure("cleaning ticket state before RemoveElement", ex);
             }
-
-            TicketWidgetState state;
-            if (TicketWidgetsByInstanceId.TryGetValue(widgetData.m_widget.GetInstanceID(), out state)
-                && state != null
-                && state.IsReferenceTicket
-                && state.IsDyingReferenceTicket)
-            {
-                return;
-            }
-
-            UnregisterTicketWidget(widgetData.m_widget);
         }
 
         [HarmonyPatch(typeof(RecipeWidgetUIController), "OnDestroy")]
         [HarmonyPostfix]
         private static void RecipeWidgetUIController_OnDestroy_Postfix(RecipeWidgetUIController __instance)
         {
-            ForgetTicketWidget(__instance);
-        }
-
-        private static void SuppressReferenceTicketWidgetAnimator(RecipeWidgetUIController widget)
-        {
-            if (widget == null)
+            try
             {
-                return;
+                ForgetTicketWidget(__instance);
             }
-
-            GameObject generatedChildren = GetReferenceTicketGeneratedChildren(widget);
-            if (generatedChildren == null)
+            catch (Exception ex)
             {
-                return;
+                LogTrackingHookFailure("forgetting a destroyed ticket widget", ex);
             }
-
-            Animator animator = generatedChildren.GetComponent<Animator>();
-            if (animator != null)
-            {
-                animator.enabled = false;
-            }
-
-            UI_Move move = generatedChildren.GetComponent<UI_Move>();
-            if (move != null)
-            {
-                move.Offset = Vector2.zero;
-                move.UpdateGraphics();
-            }
-        }
-
-        private static GameObject GetReferenceTicketGeneratedChildren(RecipeWidgetUIController widget)
-        {
-            if (widget == null)
-            {
-                return null;
-            }
-
-            if (UISubElementContainerContainerField != null)
-            {
-                GameObject container = UISubElementContainerContainerField.GetValue(widget) as GameObject;
-                if (container != null)
-                {
-                    return container;
-                }
-            }
-
-            for (int i = widget.transform.childCount - 1; i >= 0; i--)
-            {
-                Transform child = widget.transform.GetChild(i);
-                if (child != null && string.Equals(child.name, "GeneratedChildren", StringComparison.Ordinal))
-                {
-                    return child.gameObject;
-                }
-            }
-
-            return null;
         }
 
         private static void SetReferenceTicketWidgetVisible(RecipeWidgetUIController widget, bool visible)
@@ -270,9 +258,11 @@ namespace OC2MenuManager
             }
 
             CanvasGroup canvasGroup = widget.GetComponent<CanvasGroup>();
+            bool createdByMod = false;
             if (canvasGroup == null)
             {
                 canvasGroup = widget.gameObject.AddComponent<CanvasGroup>();
+                createdByMod = true;
                 canvasGroup.blocksRaycasts = false;
             }
 
@@ -282,6 +272,13 @@ namespace OC2MenuManager
             {
                 state.CanvasGroup = canvasGroup;
                 state.CanvasGroupResolved = true;
+                if (createdByMod)
+                {
+                    state.CanvasGroupCreatedByMod = true;
+                    state.OriginalOpacity = 1f;
+                    state.OriginalInteractable = true;
+                    state.OriginalBlocksRaycasts = true;
+                }
                 if (visible)
                 {
                     if (state.HasAppliedTint)
@@ -298,11 +295,6 @@ namespace OC2MenuManager
                     {
                         targetAlpha = Mathf.Clamp01(state.OriginalOpacity);
                     }
-                }
-
-                if (state.OriginalOpacity <= 0f)
-                {
-                    state.OriginalOpacity = 1f;
                 }
             }
 
@@ -322,16 +314,24 @@ namespace OC2MenuManager
             }
 
             bool inActiveRound = IsInActiveRound();
-            List<SceneDirectoryData.SceneDirectoryEntry> entries = inActiveRound
-                ? new List<SceneDirectoryData.SceneDirectoryEntry>()
-                : GetAvailableSceneEntries();
+            List<SceneDirectoryData.SceneDirectoryEntry> entries;
+            if (inActiveRound)
+            {
+                AvailableSceneEntriesBuffer.Clear();
+                entries = AvailableSceneEntriesBuffer;
+            }
+            else
+            {
+                entries = GetAvailableSceneEntries();
+            }
             int refreshInterval = inActiveRound
                 ? (settingsWindowVisible ? SceneRefreshIntervalInRoundWithConfigOpen : SceneRefreshIntervalInRound)
                 : SceneRefreshIntervalOutOfRound;
             nextSceneRefreshFrame = Time.frameCount + refreshInterval;
 
             KnownScenes.Clear();
-            HashSet<string> seenScenes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> seenScenes = KnownSceneNamesBuffer;
+            seenScenes.Clear();
 
             SceneInfo currentScene;
             if (IsInActiveRound() && TryGetCurrentSceneInfo(out currentScene))
@@ -988,7 +988,11 @@ namespace OC2MenuManager
             return trackedIds.Count > 0;
         }
 
-        private static void RegisterTicketWidget(RecipeWidgetUIController widget, int recipeId, int order)
+        private static void RegisterTicketWidget(
+            RecipeWidgetUIController widget,
+            int recipeId,
+            int order,
+            RecipeFlowGUI flow)
         {
             if (widget == null)
             {
@@ -1001,6 +1005,7 @@ namespace OC2MenuManager
             {
                 existingState.RecipeId = recipeId;
                 existingState.Order = order;
+                existingState.TeamId = ResolveTeamForRecipeFlow(flow);
                 existingState.IsDyingReferenceTicket = false;
                 ticketWidgetsDirty = true;
                 return;
@@ -1021,6 +1026,7 @@ namespace OC2MenuManager
             state.InstanceId = instanceId;
             state.RecipeId = recipeId;
             state.Order = order;
+            state.TeamId = ResolveTeamForRecipeFlow(flow);
             state.Widget = widget;
             state.DisplayConfig = displayConfig;
             state.TopDisplayConfig = topDisplayConfig;
@@ -1029,6 +1035,8 @@ namespace OC2MenuManager
             state.CanvasGroup = widget.GetComponent<CanvasGroup>();
             state.CanvasGroupResolved = true;
             state.OriginalOpacity = state.CanvasGroup != null ? Mathf.Clamp01(state.CanvasGroup.alpha) : 1f;
+            state.OriginalInteractable = state.CanvasGroup == null || state.CanvasGroup.interactable;
+            state.OriginalBlocksRaycasts = state.CanvasGroup == null || state.CanvasGroup.blocksRaycasts;
             state.CachedImages = null;
             state.AppliedDisplayTint = state.OriginalDisplayTint;
             state.AppliedTopTint = state.OriginalTopTint;
@@ -1078,6 +1086,19 @@ namespace OC2MenuManager
             }
 
             ApplyTicketWidgetVisuals(state, state.OriginalDisplayTint, state.OriginalTopTint, state.OriginalOpacity);
+            if (state.CanvasGroup != null)
+            {
+                state.CanvasGroup.alpha = state.OriginalOpacity;
+                state.CanvasGroup.interactable = state.OriginalInteractable;
+                state.CanvasGroup.blocksRaycasts = state.OriginalBlocksRaycasts;
+                if (state.CanvasGroupCreatedByMod)
+                {
+                    UnityEngine.Object.Destroy(state.CanvasGroup);
+                    state.CanvasGroup = null;
+                    state.CanvasGroupCreatedByMod = false;
+                    state.CanvasGroupResolved = false;
+                }
+            }
         }
 
         private static bool ApplyTicketWidgetTint(TicketWidgetState state, Color displayTint, Color topTint)
@@ -1248,6 +1269,10 @@ namespace OC2MenuManager
             if (canvasGroup == null && opacity < 0.999f)
             {
                 canvasGroup = state.Widget.gameObject.AddComponent<CanvasGroup>();
+                state.OriginalOpacity = canvasGroup.alpha;
+                state.OriginalInteractable = canvasGroup.interactable;
+                state.OriginalBlocksRaycasts = canvasGroup.blocksRaycasts;
+                state.CanvasGroupCreatedByMod = true;
                 canvasGroup.alpha = 1f;
                 canvasGroup.blocksRaycasts = false;
                 state.CanvasGroup = canvasGroup;
@@ -1255,6 +1280,41 @@ namespace OC2MenuManager
             }
 
             return canvasGroup;
+        }
+
+        private static TeamID ResolveTeamForRecipeFlow(RecipeFlowGUI flow)
+        {
+            if (flow == null || ClientOrderControllerGuiField == null)
+            {
+                return TeamID.One;
+            }
+
+            ClientKitchenFlowControllerBase flowController = GetKitchenFlowController();
+            if (flowController == null)
+            {
+                return TeamID.One;
+            }
+
+            for (int i = 0; i < SupportedTeamIds.Length; i++)
+            {
+                try
+                {
+                    ClientTeamMonitor monitor = flowController.GetMonitorForTeam(SupportedTeamIds[i]);
+                    RecipeFlowGUI candidate = monitor != null && monitor.OrdersController != null
+                        ? ClientOrderControllerGuiField.GetValue(monitor.OrdersController) as RecipeFlowGUI
+                        : null;
+                    if (candidate == flow)
+                    {
+                        return SupportedTeamIds[i];
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogTrackingHookFailure("resolving a ticket's team", ex);
+                }
+            }
+
+            return TeamID.One;
         }
 
         private static bool HasUsableTicketImages(Image[] images)

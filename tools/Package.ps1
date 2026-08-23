@@ -28,6 +28,7 @@ $runtimeRoot = Join-Path $stagingRoot "OC2MenuManager"
 $symbolsRoot = Join-Path $stagingRoot "symbols"
 $runtimeZip = Join-Path $artifactsRoot "Overcooked2-MenuManager-v$version.zip"
 $symbolsZip = Join-Path $artifactsRoot "Overcooked2-MenuManager-v$version-symbols.zip"
+$checksumsPath = Join-Path $artifactsRoot "Overcooked2-MenuManager-v$version-SHA256SUMS.txt"
 
 $resolvedRepositoryRoot = [System.IO.Path]::GetFullPath($repositoryRoot).TrimEnd('\') + '\'
 $resolvedStagingRoot = [System.IO.Path]::GetFullPath($stagingRoot)
@@ -60,5 +61,14 @@ foreach ($archivePath in @($runtimeZip, $symbolsZip)) {
 Compress-Archive -LiteralPath $runtimeRoot -DestinationPath $runtimeZip -CompressionLevel Optimal
 Compress-Archive -LiteralPath (Join-Path $symbolsRoot "OC2MenuManager.pdb") -DestinationPath $symbolsZip -CompressionLevel Optimal
 
+$runtimeHash = (Get-FileHash -LiteralPath $runtimeZip -Algorithm SHA256).Hash.ToLowerInvariant()
+$symbolsHash = (Get-FileHash -LiteralPath $symbolsZip -Algorithm SHA256).Hash.ToLowerInvariant()
+$checksumLines = @(
+    "$runtimeHash *$(Split-Path -Leaf $runtimeZip)",
+    "$symbolsHash *$(Split-Path -Leaf $symbolsZip)"
+)
+Set-Content -LiteralPath $checksumsPath -Value $checksumLines -Encoding ASCII
+
 Write-Host "Runtime package: $runtimeZip"
 Write-Host "Symbols package: $symbolsZip"
+Write-Host "SHA256 checksums: $checksumsPath"

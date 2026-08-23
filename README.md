@@ -29,6 +29,8 @@ User guides:
 
 The optional OC2DIYLevel and Recipe Extension integrations use audited soft-dependency metadata plus guarded reflection. Recipe Extension's generated pool, six-order option, prepared containers, No Menu behavior, and Carnival weighting are supported. Their absence is a supported no-op, and neither optional DLL becomes a runtime assembly dependency.
 
+Runtime work is event-driven: team probability/overlay caches are invalidated by order, phase, catalog, or rule changes; prepared maintenance sleeps between queued callbacks and staged recovery; and recipe-heavy compatibility paths reuse their working buffers.
+
 ## Build and validation
 
 Run from PowerShell:
@@ -39,11 +41,18 @@ Run from PowerShell:
 
 The script restores the .NET Framework reference assemblies, builds the plugin, runs unit tests, validates the assembly dependency allowlist, and creates:
 
-- `artifacts/Overcooked2-MenuManager-v1.1.0.zip`
-- `artifacts/Overcooked2-MenuManager-v1.1.0-symbols.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.1.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.1-symbols.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.1-SHA256SUMS.txt`
 
-All entries under `third_party/refs` are marked non-copy-local and are excluded from packages. See [the reference provenance note](third_party/README.md) and [the runtime smoke-test checklist](docs/SMOKE_TEST.md).
+All entries under `third_party/refs` are marked non-copy-local and are excluded from packages. To audit the target game build without committing its full DLL, run:
+
+```powershell
+.\tools\Test-BaseGameCompatibility.ps1 -ReferenceRoot 'C:\path\to\Overcooked2-BaseGame\build-20236421'
+```
+
+See [the reference provenance note](third_party/README.md) and [the runtime smoke-test checklist](docs/SMOKE_TEST.md).
 
 ## Releases
 
-Pushes and pull requests run CI without publishing a release. A tag must exactly match `PluginMetadata.Version`—currently `v1.1.0`—before the release workflow will publish the two validated zip files.
+Pushes and pull requests run CI without publishing a release. A tag must exactly match `PluginMetadata.Version`—currently `v1.1.1`—before the release workflow will publish the two validated zip files and their SHA256 checksum manifest.

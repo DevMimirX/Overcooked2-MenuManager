@@ -1,3 +1,6 @@
+// Merges optional runtime recipe catalogs after their owning mods finish round
+// synchronization. Recipe Extension refreshes establish the ordered snapshot
+// reused by probability and Carnival consumers for the rest of the round.
 using System;
 using System.Collections.Generic;
 using HarmonyLib;
@@ -12,7 +15,14 @@ namespace OC2MenuManager
         [HarmonyAfter(OptionalRecipeAdapters.ManyRecipesPluginGuid)]
         private static void ServerFlowControllerBase_StartSynchronising_RecipeCatalog_Postfix(ServerFlowControllerBase __instance)
         {
-            RefreshRuntimeRecipeExtensions(__instance != null ? __instance.GetLevelConfig() : null);
+            try
+            {
+                RefreshRuntimeRecipeExtensions(__instance != null ? __instance.GetLevelConfig() : null);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("refreshing the server recipe catalog", ex);
+            }
         }
 
         [HarmonyPatch(typeof(ClientFlowControllerBase), "StartSynchronising")]
@@ -20,19 +30,53 @@ namespace OC2MenuManager
         [HarmonyAfter(OptionalRecipeAdapters.ManyRecipesPluginGuid)]
         private static void ClientFlowControllerBase_StartSynchronising_RecipeCatalog_Postfix(ClientFlowControllerBase __instance)
         {
-            if (__instance != null)
+            try
             {
-                cachedClientFlowController = __instance;
-                nextClientFlowLookupFrame = Time.frameCount + ControllerLookupRetryIntervalFrames;
-                ClientKitchenFlowControllerBase kitchenFlow = __instance as ClientKitchenFlowControllerBase;
-                if (kitchenFlow != null)
+                if (__instance != null)
                 {
-                    cachedKitchenFlowController = kitchenFlow;
-                    nextKitchenFlowLookupFrame = Time.frameCount + ControllerLookupRetryIntervalFrames;
+                    cachedClientFlowController = __instance;
+                    nextClientFlowLookupFrame = Time.frameCount + ControllerLookupRetryIntervalFrames;
+                    ClientKitchenFlowControllerBase kitchenFlow = __instance as ClientKitchenFlowControllerBase;
+                    if (kitchenFlow != null)
+                    {
+                        cachedKitchenFlowController = kitchenFlow;
+                        nextKitchenFlowLookupFrame = Time.frameCount + ControllerLookupRetryIntervalFrames;
+                    }
                 }
+
+                LevelConfigBase levelConfig = __instance != null ? __instance.GetLevelConfig() : null;
+                RefreshRuntimeRecipeExtensions(levelConfig);
+                SeedProbabilityReconstruction(levelConfig);
+            }
+            catch (Exception ex)
+            {
+                LogTrackingHookFailure("refreshing the client recipe catalog", ex);
+            }
+        }
+
+        private static void SeedProbabilityReconstruction(LevelConfigBase levelConfig)
+        {
+            if (levelConfig == null
+                || enabled == null
+                || !enabled.Value
+                || NoMenuMode.IsActiveForRound)
+            {
+                return;
             }
 
-            RefreshRuntimeRecipeExtensions(__instance != null ? __instance.GetLevelConfig() : null);
+            SceneInfo scene;
+            if (!TryGetCurrentSceneInfo(out scene) || scene == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < SupportedTeamIds.Length; i++)
+            {
+                TeamID teamId = SupportedTeamIds[i];
+                ReconstructionReadyTeams.Add(teamId);
+                RunInfo run = EnsureRun(scene, teamId);
+                run.ReconstructionComplete = true;
+            }
         }
 
         internal static void RefreshRuntimeRecipeExtensions(LevelConfigBase levelConfig)

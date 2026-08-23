@@ -1,3 +1,6 @@
+// Coordinates tracker invalidation, prepared-source maintenance, ticket
+// synchronization, and round-state discovery. Expensive work is scheduled from
+// events; the per-frame path only executes maintenance whose deadline is due.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -173,9 +176,21 @@ namespace OC2MenuManager
         private static void InvalidateProbabilityMap()
         {
             InvalidateOverlayRowsCache();
-            probabilityMapDirty = true;
-            probabilityMapSceneName = string.Empty;
+            foreach (RunInfo run in RunsByTeam.Values)
+            {
+                if (run != null)
+                {
+                    run.ProbabilityDirty = true;
+                }
+            }
+            preparedCandidateRecipeIdsDirty = true;
             InvalidateReferenceTickets();
+        }
+
+        internal static void NotifyProbabilityRuleChanged()
+        {
+            InvalidateProbabilityMap();
+            InvalidateOverlay();
         }
 
         private static void InvalidateTicketWidgets()
@@ -234,7 +249,7 @@ namespace OC2MenuManager
 
         private static void ClearOnMenuCounts()
         {
-            CurrentOnMenuCounts.Clear();
+            CurrentOnMenuCountsByTeam.Clear();
             currentOnMenuCountsSceneName = string.Empty;
             currentOnMenuCountsDirty = true;
             InvalidateProbabilityMap();
@@ -243,10 +258,7 @@ namespace OC2MenuManager
 
         private static void ClearPreparedState()
         {
-            bool hadPreparedState = PreparedSourcesByInstanceId.Count > 0
-                || PreparedCountsByRecipe.Count > 0
-                || PreparedSourceComponentByHandlerId.Count > 0
-                || PreparedCookStateBySourceId.Count > 0;
+            bool hadPreparedState = HasPreparedRuntimeState();
             foreach (PreparedSourceState source in PreparedSourcesByInstanceId.Values)
             {
                 if (source != null && source.Provider != null && source.Callback != null)
@@ -422,31 +434,45 @@ namespace OC2MenuManager
             ticketWidgetTintActive = false;
         }
 
-        private static void IncrementOnMenuCount(string sceneName, int recipeId)
+        private static void IncrementOnMenuCount(string sceneName, TeamID teamId, int recipeId)
         {
             EnsureOnMenuCountScene(sceneName);
-            int previousCount = GetCount(CurrentOnMenuCounts, recipeId);
-            CurrentOnMenuCounts[recipeId] = previousCount + 1;
+            Dictionary<int, int> counts = GetOrCreateOnMenuCounts(teamId);
+            int previousCount = GetCount(counts, recipeId);
+            counts[recipeId] = previousCount + 1;
             currentOnMenuCountsDirty = false;
             InvalidatePreparedCandidates(previousCount == 0);
         }
 
-        private static void DecrementOnMenuCount(string sceneName, int recipeId)
+        private static void DecrementOnMenuCount(string sceneName, TeamID teamId, int recipeId)
         {
             EnsureOnMenuCountScene(sceneName);
-            int previousCount = GetCount(CurrentOnMenuCounts, recipeId);
+            Dictionary<int, int> counts = GetOrCreateOnMenuCounts(teamId);
+            int previousCount = GetCount(counts, recipeId);
             int nextValue = Math.Max(0, previousCount - 1);
             if (nextValue > 0)
             {
-                CurrentOnMenuCounts[recipeId] = nextValue;
+                counts[recipeId] = nextValue;
             }
             else
             {
-                CurrentOnMenuCounts.Remove(recipeId);
+                counts.Remove(recipeId);
             }
 
             currentOnMenuCountsDirty = false;
             InvalidatePreparedCandidates(previousCount > 0 && nextValue == 0);
+        }
+
+        private static Dictionary<int, int> GetOrCreateOnMenuCounts(TeamID teamId)
+        {
+            Dictionary<int, int> counts;
+            if (!CurrentOnMenuCountsByTeam.TryGetValue(teamId, out counts))
+            {
+                counts = new Dictionary<int, int>();
+                CurrentOnMenuCountsByTeam.Add(teamId, counts);
+            }
+
+            return counts;
         }
 
         private static void InvalidatePreparedCandidates(bool queueAllPreparedSources)
@@ -477,7 +503,7 @@ namespace OC2MenuManager
 
             if (!string.Equals(currentOnMenuCountsSceneName, sceneName, StringComparison.OrdinalIgnoreCase))
             {
-                CurrentOnMenuCounts.Clear();
+                CurrentOnMenuCountsByTeam.Clear();
                 currentOnMenuCountsSceneName = sceneName;
                 currentOnMenuCountsDirty = false;
                 InvalidateProbabilityMap();
@@ -488,7 +514,7 @@ namespace OC2MenuManager
         {
             if (!enabled.Value || !inActiveRound)
             {
-                if (PreparedSourcesByInstanceId.Count > 0 || PreparedCountsByRecipe.Count > 0)
+                if (HasPreparedRuntimeState())
                 {
                     ClearPreparedState();
                     InvalidateOverlay();
@@ -500,23 +526,13 @@ namespace OC2MenuManager
             SceneInfo scene;
             if (!TryGetCurrentSceneInfo(out scene) || scene == null || scene.OrderedRecipes.Count == 0)
             {
-                if (PreparedSourcesByInstanceId.Count > 0 || PreparedCountsByRecipe.Count > 0)
+                if (HasPreparedRuntimeState())
                 {
                     ClearPreparedState();
                     InvalidateOverlay();
                 }
 
-                return;
-            }
-
-            if (!HasAnyTrackedRecipes(scene))
-            {
-                if (PreparedSourcesByInstanceId.Count > 0 || PreparedCountsByRecipe.Count > 0)
-                {
-                    ClearPreparedState();
-                    InvalidateOverlay();
-                }
-
+                nextPreparedBootstrapFallbackFrame = Time.frameCount + ControllerLookupRetryIntervalFrames;
                 return;
             }
 
@@ -524,6 +540,18 @@ namespace OC2MenuManager
             {
                 ClearPreparedState();
                 preparedSourceSceneName = scene.SceneName;
+            }
+
+            if (!HasAnyTrackedRecipes(scene))
+            {
+                if (HasPreparedRuntimeState())
+                {
+                    ClearPreparedState();
+                    preparedSourceSceneName = scene.SceneName;
+                    InvalidateOverlay();
+                }
+
+                return;
             }
 
             if (preparedSourceBootstrapComplete
@@ -566,6 +594,56 @@ namespace OC2MenuManager
                 PrunePreparedSources();
                 nextPreparedSourcePruneFrame = Time.frameCount + PreparedSourcePruneIntervalFrames;
             }
+        }
+
+        private static bool ShouldRefreshPreparedState(bool inActiveRound)
+        {
+            if (!inActiveRound)
+            {
+                return HasPreparedRuntimeState();
+            }
+
+            int currentFrame = Time.frameCount;
+            if (!preparedSourceBootstrapComplete)
+            {
+                return currentFrame >= nextPreparedBootstrapFrame;
+            }
+
+            if (DirtyPreparedSourceIds.Count > 0 && currentFrame >= nextPreparedSourceRefreshFrame)
+            {
+                return true;
+            }
+
+            if (string.IsNullOrEmpty(preparedSourceSceneName))
+            {
+                return currentFrame >= nextPreparedBootstrapFallbackFrame;
+            }
+
+            SceneInfo preparedScene;
+            if (SceneCache.TryGetValue(preparedSourceSceneName, out preparedScene)
+                && preparedScene != null
+                && !HasAnyTrackedRecipes(preparedScene))
+            {
+                return false;
+            }
+
+            if (currentFrame >= nextPreparedSourcePruneFrame)
+            {
+                return true;
+            }
+
+            return PreparedSourcesByInstanceId.Count == 0
+                && currentFrame >= nextPreparedBootstrapFallbackFrame;
+        }
+
+        private static bool HasPreparedRuntimeState()
+        {
+            return PreparedSourcesByInstanceId.Count > 0
+                || PreparedSourceIdsByGameObjectId.Count > 0
+                || PreparedCountsByRecipe.Count > 0
+                || PreparedSourceComponentByHandlerId.Count > 0
+                || PreparedCookStateBySourceId.Count > 0
+                || DirtyPreparedSourceIds.Count > 0;
         }
 
         private static bool ShouldShowOverlay()
@@ -654,19 +732,8 @@ namespace OC2MenuManager
                 return;
             }
 
-            List<ReferenceTicketCandidate> desiredCandidates = BuildReferenceTicketCandidates(scene, EnsureRun(scene), displayLimit);
-            if (desiredCandidates.Count == 0)
-            {
-                if (ReferenceTicketStates.Count > 0)
-                {
-                    ClearReferenceTickets();
-                }
-
-                return;
-            }
-
-            List<RecipeFlowGUI> flows = GetReferenceTicketFlows();
-            if (flows.Count == 0)
+            List<TeamFlowContext> flowContexts = GetReferenceTicketFlowContexts();
+            if (flowContexts.Count == 0)
             {
                 PruneReferenceTicketStates();
                 ScheduleReferenceTicketRetry();
@@ -675,9 +742,9 @@ namespace OC2MenuManager
 
             PruneReferenceTicketStates();
             ReferenceTicketFlowIdsBuffer.Clear();
-            for (int i = 0; i < flows.Count; i++)
+            for (int i = 0; i < flowContexts.Count; i++)
             {
-                RecipeFlowGUI flow = flows[i];
+                RecipeFlowGUI flow = flowContexts[i] != null ? flowContexts[i].Flow : null;
                 if (flow != null)
                 {
                     ReferenceTicketFlowIdsBuffer.Add(flow.GetInstanceID());
@@ -693,41 +760,46 @@ namespace OC2MenuManager
                 }
             }
 
-            for (int i = 0; i < flows.Count; i++)
+            for (int i = 0; i < flowContexts.Count; i++)
             {
-                RecipeFlowGUI flow = flows[i];
-                if (flow == null)
+                TeamFlowContext context = flowContexts[i];
+                RecipeFlowGUI flow = context != null ? context.Flow : null;
+                if (context == null || flow == null)
                 {
                     continue;
                 }
 
+                List<ReferenceTicketCandidate> desiredCandidates = BuildReferenceTicketCandidates(
+                    scene,
+                    EnsureRun(scene, context.TeamId),
+                    displayLimit);
                 int activeRealTickets = GetActiveRealTicketCount(flow);
                 int allowedReferenceCount = TicketCapacityPolicy.CalculateAllowedReferenceTickets(
                     activeRealTickets,
                     desiredCandidates.Count,
                     MaxCombinedActiveTicketCount);
                 EnsureReferenceTicketCapacity(flow, activeRealTickets, allowedReferenceCount);
-                SyncReferenceTicketsForFlow(flow, desiredCandidates, allowedReferenceCount, true);
+                SyncReferenceTicketsForFlow(flow, context.TeamId, desiredCandidates, allowedReferenceCount, true);
             }
         }
 
-        private static List<RecipeFlowGUI> GetReferenceTicketFlows()
+        private static List<TeamFlowContext> GetReferenceTicketFlowContexts()
         {
-            ReferenceTicketFlowsBuffer.Clear();
+            TeamFlowContextsBuffer.Clear();
             ReferenceTicketFlowIdsBuffer.Clear();
 
             ClientKitchenFlowControllerBase flowController = GetKitchenFlowController();
             if (flowController == null || ClientOrderControllerGuiField == null)
             {
-                return ReferenceTicketFlowsBuffer;
+                return TeamFlowContextsBuffer;
             }
 
-            for (int i = 0; i < TeamIds.Length; i++)
+            for (int i = 0; i < SupportedTeamIds.Length; i++)
             {
                 ClientTeamMonitor monitor;
                 try
                 {
-                    monitor = flowController.GetMonitorForTeam(TeamIds[i]);
+                    monitor = flowController.GetMonitorForTeam(SupportedTeamIds[i]);
                 }
                 catch
                 {
@@ -748,11 +820,15 @@ namespace OC2MenuManager
                 int instanceId = recipeFlow.GetInstanceID();
                 if (ReferenceTicketFlowIdsBuffer.Add(instanceId))
                 {
-                    ReferenceTicketFlowsBuffer.Add(recipeFlow);
+                    TeamFlowContext context = SupportedTeamFlowContexts[i];
+                    context.TeamId = SupportedTeamIds[i];
+                    context.OrderController = monitor.OrdersController;
+                    context.Flow = recipeFlow;
+                    TeamFlowContextsBuffer.Add(context);
                 }
             }
 
-            return ReferenceTicketFlowsBuffer;
+            return TeamFlowContextsBuffer;
         }
 
         private static void EnsureReferenceTicketCapacity(RecipeFlowGUI flow, int realTicketCount, int requestedReferenceCount)
@@ -1001,7 +1077,12 @@ namespace OC2MenuManager
             ReferenceTicketStatesForFlowBuffer.Clear();
         }
 
-        private static void SyncReferenceTicketsForFlow(RecipeFlowGUI flow, List<ReferenceTicketCandidate> desiredCandidates, int maximumReferenceCount, bool silentAdds)
+        private static void SyncReferenceTicketsForFlow(
+            RecipeFlowGUI flow,
+            TeamID teamId,
+            List<ReferenceTicketCandidate> desiredCandidates,
+            int maximumReferenceCount,
+            bool silentAdds)
         {
             if (flow == null)
             {
@@ -1099,7 +1180,7 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                AddReferenceTicket(flow, candidate, i, silentAdds);
+                AddReferenceTicket(flow, teamId, candidate, i, silentAdds);
             }
 
             existingStatesByRecipeId.Clear();
@@ -1244,7 +1325,12 @@ namespace OC2MenuManager
             return int.MaxValue;
         }
 
-        private static void AddReferenceTicket(RecipeFlowGUI flow, ReferenceTicketCandidate candidate, int displayIndex, bool silentAppearance)
+        private static void AddReferenceTicket(
+            RecipeFlowGUI flow,
+            TeamID teamId,
+            ReferenceTicketCandidate candidate,
+            int displayIndex,
+            bool silentAppearance)
         {
             if (flow == null || candidate == null || candidate.Recipe == null || candidate.Recipe.Definition == null)
             {
@@ -1305,6 +1391,7 @@ namespace OC2MenuManager
                 widgetData.m_order = referenceOrder;
                 ReferenceTicketState state = new ReferenceTicketState();
                 state.FlowInstanceId = flow.GetInstanceID();
+                state.TeamId = teamId;
                 state.Flow = flow;
                 state.RecipeId = candidate.Recipe.Id;
                 state.Definition = candidate.Recipe.Definition;
@@ -1460,7 +1547,7 @@ namespace OC2MenuManager
                 if (stateIndex >= 0)
                 {
                     RemoveReferenceTicketAt(stateIndex);
-                    AddReferenceTicket(state.Flow, candidate, displayIndex, true);
+                    AddReferenceTicket(state.Flow, state.TeamId, candidate, displayIndex, true);
                     return;
                 }
             }
@@ -1593,6 +1680,7 @@ namespace OC2MenuManager
 
             bool showPrepared = IsPreparedTrackingEnabled();
             List<OverlayRow> rows = BuildAndSortOverlayRows(scene, run, showPrepared);
+            int candidateIndex = 0;
             for (int i = 0; i < rows.Count; i++)
             {
                 OverlayRow row = rows[i];
@@ -1601,7 +1689,12 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                ReferenceTicketCandidate candidate = new ReferenceTicketCandidate();
+                while (ReferenceTicketCandidatePool.Count <= candidateIndex)
+                {
+                    ReferenceTicketCandidatePool.Add(new ReferenceTicketCandidate());
+                }
+
+                ReferenceTicketCandidate candidate = ReferenceTicketCandidatePool[candidateIndex++];
                 candidate.Recipe = row.Recipe;
                 candidate.Probability = row.Probability;
                 candidate.Served = row.Served;
