@@ -32,7 +32,7 @@ Main features:
 - Recipe Extension / `OC2ManyRecipes` 1.1 is supported at runtime.
   - Its generated recipes are added after the extension creates them for the round.
   - Its two special dynamic-level phase filters are preserved.
-  - Six real orders plus five guess tickets are supported safely.
+  - Real orders always keep their slots; active real and guess tickets are capped at ten whenever the level itself stays within that limit.
 
 Both integrations are optional. If an optional mod is absent or changes to an unknown reflection contract, only that integration is disabled and Menu Manager continues to run.
 
@@ -206,15 +206,16 @@ Default:
 Meaning:
 
 - `0` disables top-row guess orders
-- `1-5` shows that many extra guess orders after the real orders
+- `1-5` sets the maximum number of extra guess orders after the real orders
 
 Important notes:
 
 - these are reference orders only
 - they are not real game orders
 - real orders stay first; guess orders are appended after them
-- ticket capacity grows from the game or Recipe Extension real-order limit, so the six-order extension mode does not consume guess slots
-- if there are too many cards, horizontal overflow is expected
+- the active guess count is `max(0, min(configured maximum, 10 - active real orders))`
+- five active real orders allow five guesses, six allow four, and eight allow two
+- a level that creates more than ten real orders still shows every real order and uses zero guesses
 
 #### Display Language
 
@@ -424,6 +425,7 @@ Current behavior:
 
 - real orders stay at the front
 - guess orders appear after them
+- excess guesses disappear before a newly arriving real order is added
 - when a guess becomes invalid, it disappears
 - when a new candidate becomes eligible, it can fill the freed guess slot
 

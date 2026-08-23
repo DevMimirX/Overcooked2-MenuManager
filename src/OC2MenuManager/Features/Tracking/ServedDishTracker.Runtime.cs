@@ -701,8 +701,13 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                EnsureReferenceTicketCapacity(flow, desiredCandidates.Count);
-                SyncReferenceTicketsForFlow(flow, desiredCandidates, true);
+                int activeRealTickets = GetActiveRealTicketCount(flow);
+                int allowedReferenceCount = TicketCapacityPolicy.CalculateAllowedReferenceTickets(
+                    activeRealTickets,
+                    desiredCandidates.Count,
+                    MaxCombinedActiveTicketCount);
+                EnsureReferenceTicketCapacity(flow, activeRealTickets, allowedReferenceCount);
+                SyncReferenceTicketsForFlow(flow, desiredCandidates, allowedReferenceCount, true);
             }
         }
 
@@ -750,7 +755,19 @@ namespace OC2MenuManager
             return ReferenceTicketFlowsBuffer;
         }
 
-        private static void EnsureReferenceTicketCapacity(RecipeFlowGUI flow, int requestedReferenceCount)
+        private static void EnsureReferenceTicketCapacity(RecipeFlowGUI flow, int realTicketCount, int requestedReferenceCount)
+        {
+            if (flow == null || RecipeFlowMaxOrdersAllowedField == null || RecipeFlowOccupiedTablesField == null)
+            {
+                return;
+            }
+
+            int effectiveRealLimit = GetEffectiveRealTicketLimit(flow, realTicketCount);
+            int desiredCapacity = TicketCapacityPolicy.CalculateTargetCapacity(effectiveRealLimit, realTicketCount, requestedReferenceCount);
+            EnsureTicketStorageCapacity(flow, desiredCapacity);
+        }
+
+        private static void EnsureTicketStorageCapacity(RecipeFlowGUI flow, int requestedCapacity)
         {
             if (flow == null || RecipeFlowMaxOrdersAllowedField == null || RecipeFlowOccupiedTablesField == null)
             {
@@ -758,13 +775,12 @@ namespace OC2MenuManager
             }
 
             object currentMaxValue = RecipeFlowMaxOrdersAllowedField.GetValue(flow);
-            int currentMax = currentMaxValue is int ? (int)currentMaxValue : BaseMenuTicketCapacity;
+            int currentMax = currentMaxValue is int ? Math.Max(0, (int)currentMaxValue) : BaseMenuTicketCapacity;
             bool[] occupiedTables = RecipeFlowOccupiedTablesField.GetValue(flow) as bool[];
-            int activeRealTickets = GetActiveRealTicketCount(flow);
-            int effectiveRealLimit = GetEffectiveRealTicketLimit(flow, activeRealTickets);
-            int desiredCapacity = TicketCapacityPolicy.CalculateTargetCapacity(effectiveRealLimit, activeRealTickets, requestedReferenceCount);
-            int targetCapacity = Math.Max(desiredCapacity, Math.Max(currentMax, occupiedTables != null ? occupiedTables.Length : 0));
-            if (currentMax != targetCapacity)
+            int targetCapacity = Math.Max(
+                Math.Max(0, requestedCapacity),
+                Math.Max(currentMax, occupiedTables != null ? occupiedTables.Length : 0));
+            if (currentMax < targetCapacity)
             {
                 RecipeFlowMaxOrdersAllowedField.SetValue(flow, targetCapacity);
             }
@@ -792,15 +808,17 @@ namespace OC2MenuManager
             int effectiveLimit;
             if (!ReferenceRealTicketLimitByFlowId.TryGetValue(flowInstanceId, out effectiveLimit))
             {
-                effectiveLimit = BaseMenuTicketCapacity;
-                if (RecipeFlowGetMaxOrderNumberMethod != null)
+                // Capture the raw field once, before this mod grows it. DIY levels write their
+                // own limit here even when Recipe Extension overrides GetMaxOrderNumber().
+                int rawConfiguredLimit = BaseMenuTicketCapacity;
+                if (RecipeFlowMaxOrdersAllowedField != null)
                 {
                     try
                     {
-                        object value = RecipeFlowGetMaxOrderNumberMethod.Invoke(flow, null);
-                        if (value is int)
+                        object rawValue = RecipeFlowMaxOrdersAllowedField.GetValue(flow);
+                        if (rawValue is int)
                         {
-                            effectiveLimit = Math.Max(effectiveLimit, (int)value);
+                            rawConfiguredLimit = (int)rawValue;
                         }
                     }
                     catch
@@ -808,10 +826,36 @@ namespace OC2MenuManager
                     }
                 }
 
+                int reportedLimit = BaseMenuTicketCapacity;
+                if (RecipeFlowGetMaxOrderNumberMethod != null)
+                {
+                    try
+                    {
+                        object value = RecipeFlowGetMaxOrderNumberMethod.Invoke(flow, null);
+                        if (value is int)
+                        {
+                            reportedLimit = (int)value;
+                        }
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                effectiveLimit = TicketCapacityPolicy.CalculateEffectiveRealLimit(
+                    BaseMenuTicketCapacity,
+                    rawConfiguredLimit,
+                    reportedLimit,
+                    activeRealTickets);
+                ReferenceRealTicketLimitByFlowId[flowInstanceId] = effectiveLimit;
+            }
+            else if (activeRealTickets > effectiveLimit)
+            {
+                effectiveLimit = activeRealTickets;
                 ReferenceRealTicketLimitByFlowId[flowInstanceId] = effectiveLimit;
             }
 
-            return Math.Max(effectiveLimit, activeRealTickets);
+            return effectiveLimit;
         }
 
         private static int GetActiveRealTicketCount(RecipeFlowGUI flow)
@@ -820,21 +864,40 @@ namespace OC2MenuManager
                 ? RecipeFlowWidgetsField.GetValue(flow) as IList
                 : null;
             int activeWidgetCount = activeWidgets != null ? activeWidgets.Count : 0;
+            return Math.Max(0, activeWidgetCount - GetActiveReferenceTicketCount(flow));
+        }
+
+        private static int GetActiveReferenceTicketCount(RecipeFlowGUI flow)
+        {
+            if (flow == null)
+            {
+                return 0;
+            }
+
             int referenceCount = 0;
-            int flowInstanceId = flow != null ? flow.GetInstanceID() : 0;
+            int flowInstanceId = flow.GetInstanceID();
             for (int i = 0; i < ReferenceTicketStates.Count; i++)
             {
                 ReferenceTicketState state = ReferenceTicketStates[i];
                 if (state != null && state.FlowInstanceId == flowInstanceId && state.Widget != null)
                 {
-                    referenceCount++;
+                    try
+                    {
+                        if (flow.GetData(state.Token) != null)
+                        {
+                            referenceCount++;
+                        }
+                    }
+                    catch
+                    {
+                    }
                 }
             }
 
-            return Math.Max(0, activeWidgetCount - referenceCount);
+            return referenceCount;
         }
 
-        private static bool HasFreeReferenceTicketTable(RecipeFlowGUI flow)
+        private static bool HasFreeTicketTable(RecipeFlowGUI flow)
         {
             bool[] occupiedTables = flow != null && RecipeFlowOccupiedTablesField != null
                 ? RecipeFlowOccupiedTablesField.GetValue(flow) as bool[]
@@ -855,7 +918,93 @@ namespace OC2MenuManager
             return false;
         }
 
-        private static void SyncReferenceTicketsForFlow(RecipeFlowGUI flow, List<ReferenceTicketCandidate> desiredCandidates, bool silentAdds)
+        private static void PrepareForIncomingRealTicket(RecipeFlowGUI flow)
+        {
+            if (flow == null)
+            {
+                return;
+            }
+
+            bool trackerActive = enabled != null && enabled.Value && !NoMenuMode.IsActiveForRound;
+            int activeReferenceTickets = GetActiveReferenceTicketCount(flow);
+            if (!trackerActive && activeReferenceTickets == 0)
+            {
+                return;
+            }
+
+            int activeRealTickets = GetActiveRealTicketCount(flow);
+            int projectedRealTickets = activeRealTickets < int.MaxValue ? activeRealTickets + 1 : int.MaxValue;
+            int configuredReferenceLimit = trackerActive ? GetReferenceTicketDisplayLimit() : 0;
+            int allowedReferenceCount = TicketCapacityPolicy.CalculateAllowedReferenceTickets(
+                projectedRealTickets,
+                configuredReferenceLimit,
+                MaxCombinedActiveTicketCount);
+            if (activeReferenceTickets > allowedReferenceCount)
+            {
+                // Free synthetic slots before the game's AddElement chooses a table for the
+                // incoming real order. Real-order creation itself remains untouched.
+                TrimReferenceTicketsForFlow(flow, allowedReferenceCount);
+                activeReferenceTickets = GetActiveReferenceTicketCount(flow);
+            }
+
+            EnsureReferenceTicketCapacity(flow, projectedRealTickets, activeReferenceTickets);
+            if (!HasFreeTicketTable(flow))
+            {
+                bool[] occupiedTables = RecipeFlowOccupiedTablesField != null
+                    ? RecipeFlowOccupiedTablesField.GetValue(flow) as bool[]
+                    : null;
+                int currentCapacity = occupiedTables != null ? occupiedTables.Length : 0;
+                if (currentCapacity < int.MaxValue)
+                {
+                    EnsureTicketStorageCapacity(flow, currentCapacity + 1);
+                }
+            }
+        }
+
+        private static void TrimReferenceTicketsForFlow(RecipeFlowGUI flow, int allowedReferenceCount)
+        {
+            if (flow == null)
+            {
+                return;
+            }
+
+            int flowInstanceId = flow.GetInstanceID();
+            ReferenceTicketStatesForFlowBuffer.Clear();
+            for (int i = 0; i < ReferenceTicketStates.Count; i++)
+            {
+                ReferenceTicketState state = ReferenceTicketStates[i];
+                if (state == null || state.FlowInstanceId != flowInstanceId || state.Widget == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (flow.GetData(state.Token) != null)
+                    {
+                        ReferenceTicketStatesForFlowBuffer.Add(state);
+                    }
+                }
+                catch
+                {
+                }
+            }
+
+            ReferenceTicketStatesForFlowBuffer.Sort(CompareReferenceTicketStates);
+            int safeAllowedCount = Math.Max(0, allowedReferenceCount);
+            for (int i = ReferenceTicketStatesForFlowBuffer.Count - 1; i >= safeAllowedCount; i--)
+            {
+                int stateIndex = ReferenceTicketStates.IndexOf(ReferenceTicketStatesForFlowBuffer[i]);
+                if (stateIndex >= 0)
+                {
+                    RemoveReferenceTicketAt(stateIndex);
+                }
+            }
+
+            ReferenceTicketStatesForFlowBuffer.Clear();
+        }
+
+        private static void SyncReferenceTicketsForFlow(RecipeFlowGUI flow, List<ReferenceTicketCandidate> desiredCandidates, int maximumReferenceCount, bool silentAdds)
         {
             if (flow == null)
             {
@@ -874,7 +1023,9 @@ namespace OC2MenuManager
             }
 
             ReferenceTicketStatesForFlowBuffer.Sort(CompareReferenceTicketStates);
-            int desiredCount = desiredCandidates != null ? desiredCandidates.Count : 0;
+            int desiredCount = desiredCandidates != null
+                ? Math.Min(desiredCandidates.Count, Math.Max(0, maximumReferenceCount))
+                : 0;
             Dictionary<int, ReferenceTicketState> existingStatesByRecipeId = ExistingReferenceTicketStatesByRecipeIdBuffer;
             existingStatesByRecipeId.Clear();
             HashSet<int> desiredRecipeIds = DesiredReferenceTicketRecipeIdsBuffer;
@@ -1103,7 +1254,7 @@ namespace OC2MenuManager
                 return;
             }
 
-            if (!HasFreeReferenceTicketTable(flow))
+            if (!HasFreeTicketTable(flow))
             {
                 ScheduleReferenceTicketRetry();
                 return;

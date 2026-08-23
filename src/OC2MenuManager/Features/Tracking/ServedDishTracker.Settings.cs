@@ -375,7 +375,7 @@ namespace OC2MenuManager
             {
                 InvalidateTicketWidgets();
             });
-            DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, MaxReferenceTicketDisplayCount, Ui("在真实菜单栏里额外显示多少个猜单。0 关闭。", "How many extra guess orders to show for off-menu candidates. Set to 0 to disable."));
+            DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, MaxReferenceTicketDisplayCount, Ui("猜单数量上限。实际数量会自动降到 10 减去当前真实订单数；真实订单永远优先。0 关闭。", "Maximum extra guess orders. The active count automatically drops to 10 minus the current real-order count; real orders always take priority. Set to 0 to disable."));
             DrawColorRow(Ui("猜单颜色", "Guess Color"), menuReferenceTicketTintColor, Ui("菜单栏里猜单的颜色。A 通道控制整张单的透明度，显示时会额外压暗一点。", "Color for guess orders. The A channel controls full-order opacity, and guess orders are rendered slightly dimmer on top of that."), delegate
             {
                 InvalidateTicketWidgets();

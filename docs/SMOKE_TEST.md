@@ -8,7 +8,7 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 2. Start Overcooked! 2 and confirm the BepInEx log loads `com.ch3ngyz.plugin.OC2MenuManager` without missing-assembly errors.
 3. Press `F6` and verify the settings window opens.
 4. Enter a standard scene and verify dish selection, history overlay, prepared counts, ticket tinting, and guess tickets.
-5. Set five guess tickets, then repeatedly serve and expire real orders. Verify real orders remain first, guesses rotate, and no negative-table or capacity warning repeats.
+5. Set five guess tickets, keep five real tickets active, then repeatedly serve and expire orders. Verify the active total stays at ten, real orders remain first, guesses rotate, and no negative-table or capacity warning repeats.
 6. Exercise the carnival menu toggles and built-in No Menu mode, then return to the frontend without an exception.
 
 ## Compatibility data
@@ -31,11 +31,13 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 
 1. Start once with Recipe Extension installed but disabled; verify standard Menu Manager behavior and no generated recipes in the current catalog.
 2. Enable Recipe Extension 1.1, start a supported level, and verify its generated recipes appear after round initialization.
-3. Enable the extension's six-order option and Menu Manager's five guesses. Keep six real tickets active, then serve and expire many consecutive orders; verify all eleven slots remain safe and guesses continue rotating.
+3. Enable the extension's six-order option and Menu Manager's five-guess maximum. Keep six real tickets active, then serve and expire many consecutive orders; verify only four guesses remain active, the total stays at ten, and every served ticket is destroyed.
 4. Verify the 153-entry pool produces finite percentages, no duplicate selector rows, correct prepared matches, and no repeated compatibility warnings.
 5. Test `5_6_Dynamic_Lvl_03` and `1_6_Dynamic_Lvl_01` across every phase; verify generated dishes follow Recipe Extension's phase-specific exclusions.
-6. Run a DIY level with Recipe Extension enabled and verify both catalogs coexist without duplicate IDs or exceptions.
-7. Disable Recipe Extension for the next round and verify generated-only selector entries are removed from the active scene catalog.
+6. Run DIY level `s_rw_5` with Recipe Extension enabled and the five-guess maximum. Fill all eight real slots and verify guesses reduce to two before the incoming real tickets are created.
+7. Serve and expire early, middle, and late `s_rw_5` orders. Verify score updates once, each real ticket completes its normal animation and disappears, and no invalid table release or stuck order remains.
+8. Run another DIY level with Recipe Extension enabled and verify both catalogs coexist without duplicate IDs or exceptions.
+9. Disable Recipe Extension for the next round and verify generated-only selector entries are removed from the active scene catalog.
 
 ## No Menu lifecycle
 

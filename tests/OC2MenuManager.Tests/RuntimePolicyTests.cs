@@ -9,12 +9,72 @@ public sealed class RuntimePolicyTests
 {
     [Theory]
     [InlineData(5, 5, 5, 10)]
-    [InlineData(6, 6, 5, 11)]
-    [InlineData(5, 8, 5, 13)]
+    [InlineData(6, 6, 4, 10)]
+    [InlineData(8, 8, 2, 10)]
+    [InlineData(8, 3, 5, 8)]
+    [InlineData(8, 11, 0, 11)]
+    [InlineData(int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue)]
     [InlineData(-1, -1, -1, 0)]
-    public void TicketCapacityIncludesRealOrdersAndReferences(int limit, int realCount, int references, int expected)
+    public void TicketCapacityCoversRealOrdersAndActiveReferences(int limit, int realCount, int references, int expected)
     {
         Assert.Equal(expected, TicketCapacityPolicy.CalculateTargetCapacity(limit, realCount, references));
+    }
+
+    [Theory]
+    [InlineData(3, 5, 10, 5)]
+    [InlineData(5, 5, 10, 5)]
+    [InlineData(6, 5, 10, 4)]
+    [InlineData(7, 5, 10, 3)]
+    [InlineData(8, 5, 10, 2)]
+    [InlineData(9, 5, 10, 1)]
+    [InlineData(10, 5, 10, 0)]
+    [InlineData(11, 5, 10, 0)]
+    [InlineData(-1, 5, 10, 5)]
+    [InlineData(5, -1, 10, 0)]
+    [InlineData(5, 5, -1, 0)]
+    public void GuessTicketsUseOnlyTheRemainingCombinedBudget(int realCount, int configuredGuesses, int combinedLimit, int expected)
+    {
+        Assert.Equal(expected, TicketCapacityPolicy.CalculateAllowedReferenceTickets(realCount, configuredGuesses, combinedLimit));
+    }
+
+    [Theory]
+    [InlineData(5, 8, 6, 3, 8)]
+    [InlineData(5, 5, 6, 3, 6)]
+    [InlineData(5, 5, 5, 9, 9)]
+    [InlineData(-1, -1, -1, -1, 0)]
+    public void EffectiveRealLimitUsesTheLargestUnmodifiedContract(int baseLimit, int rawLimit, int reportedLimit, int observed, int expected)
+    {
+        Assert.Equal(expected, TicketCapacityPolicy.CalculateEffectiveRealLimit(baseLimit, rawLimit, reportedLimit, observed));
+    }
+
+    [Theory]
+    [InlineData(0, 10, true)]
+    [InlineData(9, 10, true)]
+    [InlineData(-1, 10, false)]
+    [InlineData(10, 10, false)]
+    [InlineData(0, 0, false)]
+    [InlineData(0, -1, false)]
+    public void TableIndexValidationRejectsUnsafeReleases(int tableIndex, int tableCount, bool expected)
+    {
+        Assert.Equal(expected, TicketCapacityPolicy.IsValidTableIndex(tableIndex, tableCount));
+    }
+
+    [Fact]
+    public void IncomingRealOrdersTrimGuessesWithoutTruncatingRealCapacity()
+    {
+        const int configuredGuesses = 5;
+        const int combinedLimit = 10;
+        const int diyRealLimit = 8;
+
+        for (var projectedRealCount = 4; projectedRealCount <= 11; projectedRealCount++)
+        {
+            var guesses = TicketCapacityPolicy.CalculateAllowedReferenceTickets(projectedRealCount, configuredGuesses, combinedLimit);
+            var capacity = TicketCapacityPolicy.CalculateTargetCapacity(diyRealLimit, projectedRealCount, guesses);
+
+            Assert.True(capacity >= projectedRealCount);
+            Assert.True(projectedRealCount > combinedLimit || projectedRealCount + guesses <= combinedLimit);
+            Assert.Equal(projectedRealCount > combinedLimit ? projectedRealCount : Math.Max(diyRealLimit, projectedRealCount + guesses), capacity);
+        }
     }
 
     [Fact]

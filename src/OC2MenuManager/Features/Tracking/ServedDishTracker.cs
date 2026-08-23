@@ -60,7 +60,7 @@ namespace OC2MenuManager
                 TrackerSection,
                 "最大猜单数量",
                 migratedReferenceTicketCountValue ?? DefaultReferenceTicketDisplayCount,
-                new ConfigDescription("在菜单栏额外显示多少个猜单。0 关闭，最多 5 个。", new AcceptableValueRange<int>(0, MaxReferenceTicketDisplayCount)));
+                new ConfigDescription("猜单数量上限。0 关闭，最多 5 个；实际数量会自动降到 10 减去当前真实订单数，真实订单不会被减少。", new AcceptableValueRange<int>(0, MaxReferenceTicketDisplayCount)));
             menuReferenceTicketTintColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "猜单颜色",

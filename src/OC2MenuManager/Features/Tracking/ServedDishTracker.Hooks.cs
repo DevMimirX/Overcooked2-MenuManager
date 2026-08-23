@@ -62,6 +62,9 @@ namespace OC2MenuManager
             cachedCurrentSceneInfoFrame = int.MinValue;
             ReferenceRealTicketLimitByFlowId.Clear();
             invalidReferenceTableWarningLogged = false;
+            invalidRealTableWarningLogged = false;
+            invalidTableReleaseWarningLogged = false;
+            ticketAdmissionFailureWarningLogged = false;
             referenceTicketAddFailureLogged = false;
             ClearOnMenuCounts();
             ClearPreparedState();

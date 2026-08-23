@@ -7,6 +7,7 @@ using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
+using OC2MenuManager.Infrastructure;
 using OrderController;
 using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
@@ -61,8 +62,35 @@ namespace OC2MenuManager
         }
 
         [HarmonyPatch(typeof(RecipeFlowGUI), "AddElement")]
+        [HarmonyPrefix]
+        private static void RecipeFlowGUI_AddElement_Prefix(RecipeFlowGUI __instance, VoidGeneric<RecipeFlowGUI.ElementToken> _expirationCallback)
+        {
+            if (__instance == null || IsMenuManagerReferenceTicketAdd(_expirationCallback))
+            {
+                return;
+            }
+
+            try
+            {
+                PrepareForIncomingRealTicket(__instance);
+            }
+            catch (Exception ex)
+            {
+                if (!ticketAdmissionFailureWarningLogged)
+                {
+                    ticketAdmissionFailureWarningLogged = true;
+                    _MODEntry.LogWarning("[ServedDishTracker] Could not reserve a real-order ticket slot, but the game's AddElement call was left unchanged: " + ex.GetType().Name + ": " + ex.Message);
+                }
+            }
+        }
+
+        [HarmonyPatch(typeof(RecipeFlowGUI), "AddElement")]
         [HarmonyPostfix]
-        private static void RecipeFlowGUI_AddElement_Postfix(RecipeFlowGUI __instance, OrderDefinitionNode _data, ref RecipeFlowGUI.ElementToken __result)
+        private static void RecipeFlowGUI_AddElement_Postfix(
+            RecipeFlowGUI __instance,
+            OrderDefinitionNode _data,
+            VoidGeneric<RecipeFlowGUI.ElementToken> _expirationCallback,
+            ref RecipeFlowGUI.ElementToken __result)
         {
             if (__instance == null || _data == null)
             {
@@ -75,7 +103,74 @@ namespace OC2MenuManager
                 return;
             }
 
+            bool isReferenceTicket = IsMenuManagerReferenceTicketAdd(_expirationCallback);
+            if (!isReferenceTicket && RecipeFlowOccupiedTablesField != null)
+            {
+                try
+                {
+                    bool[] occupiedTables = RecipeFlowOccupiedTablesField.GetValue(__instance) as bool[];
+                    int tableCount = occupiedTables != null ? occupiedTables.Length : 0;
+                    int tableIndex = widgetData.m_widget.GetTableNumber();
+                    if (!TicketCapacityPolicy.IsValidTableIndex(tableIndex, tableCount) && !invalidRealTableWarningLogged)
+                    {
+                        invalidRealTableWarningLogged = true;
+                        _MODEntry.LogWarning("[ServedDishTracker] A real order received an invalid RecipeFlowGUI table index " + tableIndex + " for capacity " + tableCount + ". Removal protection remains active for this round.");
+                    }
+                }
+                catch
+                {
+                }
+            }
+
             RegisterTicketWidget(widgetData.m_widget, _data.m_uID, widgetData.m_order);
+            if (!isReferenceTicket)
+            {
+                try
+                {
+                    ReorderActiveTicketWidgets(__instance);
+                }
+                catch
+                {
+                    // Ticket ordering is cosmetic and must never escape the game's AddElement call.
+                }
+            }
+        }
+
+        private static bool IsMenuManagerReferenceTicketAdd(VoidGeneric<RecipeFlowGUI.ElementToken> expirationCallback)
+        {
+            return ReferenceEquals(expirationCallback, ReferenceTicketExpiredCallback);
+        }
+
+        [HarmonyPatch(typeof(RecipeFlowGUI), "ReleaseTable")]
+        [HarmonyPrefix]
+        private static bool RecipeFlowGUI_ReleaseTable_Prefix(RecipeFlowGUI __instance, int _tableId)
+        {
+            if (__instance == null || RecipeFlowOccupiedTablesField == null)
+            {
+                return true;
+            }
+
+            try
+            {
+                bool[] occupiedTables = RecipeFlowOccupiedTablesField.GetValue(__instance) as bool[];
+                int tableCount = occupiedTables != null ? occupiedTables.Length : 0;
+                if (TicketCapacityPolicy.IsValidTableIndex(_tableId, tableCount))
+                {
+                    return true;
+                }
+
+                if (!invalidTableReleaseWarningLogged)
+                {
+                    invalidTableReleaseWarningLogged = true;
+                    _MODEntry.LogWarning("[ServedDishTracker] Ignored an invalid RecipeFlowGUI table release (index " + _tableId + ", capacity " + tableCount + ") so the served ticket could finish removing.");
+                }
+
+                return false;
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         [HarmonyPatch(typeof(RecipeFlowGUI), "RemoveElement")]

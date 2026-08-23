@@ -67,6 +67,7 @@ namespace OC2MenuManager
         private const int TicketWidgetRefreshDelayFrames = 30;
         private const int TicketWidgetRetryIntervalFrames = 90;
         private const int BaseMenuTicketCapacity = 5;
+        private const int MaxCombinedActiveTicketCount = 10;
         private const int MaxReferenceTicketDisplayCount = 5;
         private const int DefaultReferenceTicketDisplayCount = 3;
         private const int ReferenceTicketOrderBase = 1000000;
@@ -252,6 +253,9 @@ namespace OC2MenuManager
         private static bool referenceTicketsDirty = true;
         private static bool ticketWidgetTintActive;
         private static bool invalidReferenceTableWarningLogged;
+        private static bool invalidRealTableWarningLogged;
+        private static bool invalidTableReleaseWarningLogged;
+        private static bool ticketAdmissionFailureWarningLogged;
         private static bool referenceTicketAddFailureLogged;
         private static bool diyFileSystemWarningLogged;
         private static bool cachedCurrentSceneInfoValid;

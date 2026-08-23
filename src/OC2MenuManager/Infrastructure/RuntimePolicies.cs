@@ -82,12 +82,41 @@ namespace OC2MenuManager.Infrastructure
 
     internal static class TicketCapacityPolicy
     {
+        internal static int CalculateAllowedReferenceTickets(int activeRealTickets, int configuredReferenceTickets, int maxCombinedTickets)
+        {
+            int safeRealCount = Math.Max(0, activeRealTickets);
+            int safeReferenceCount = Math.Max(0, configuredReferenceTickets);
+            int safeCombinedLimit = Math.Max(0, maxCombinedTickets);
+            if (safeRealCount >= safeCombinedLimit)
+            {
+                return 0;
+            }
+
+            return Math.Min(safeReferenceCount, safeCombinedLimit - safeRealCount);
+        }
+
+        internal static int CalculateEffectiveRealLimit(int baseLimit, int rawConfiguredLimit, int reportedLimit, int observedRealTickets)
+        {
+            return Math.Max(
+                Math.Max(0, baseLimit),
+                Math.Max(
+                    Math.Max(0, rawConfiguredLimit),
+                    Math.Max(Math.Max(0, reportedLimit), Math.Max(0, observedRealTickets))));
+        }
+
         internal static int CalculateTargetCapacity(int effectiveRealLimit, int activeRealTickets, int requestedReferenceTickets)
         {
             int safeRealLimit = Math.Max(0, effectiveRealLimit);
             int safeRealCount = Math.Max(0, activeRealTickets);
             int safeReferenceCount = Math.Max(0, requestedReferenceTickets);
-            return Math.Max(safeRealLimit, safeRealCount) + safeReferenceCount;
+            long activeTicketCapacity = (long)safeRealCount + safeReferenceCount;
+            long targetCapacity = Math.Max((long)safeRealLimit, activeTicketCapacity);
+            return targetCapacity >= int.MaxValue ? int.MaxValue : (int)targetCapacity;
+        }
+
+        internal static bool IsValidTableIndex(int tableIndex, int tableCount)
+        {
+            return tableIndex >= 0 && tableIndex < Math.Max(0, tableCount);
         }
     }
 
