@@ -1,6 +1,6 @@
-// Tracks completed dishes through event-registered container sources. Matching
-// reuses candidate and team buffers so high-variety DIY and Recipe Extension
-// rounds do not allocate transient collections for each source refresh.
+// Tracks completed dishes through event-registered container sources. Each
+// physical source owns one canonical count plus every base-game-compatible ID
+// used for tinting; cooking-wrapper fallback never discards step or progress.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -11,6 +11,7 @@ using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
+using OC2MenuManager.Infrastructure;
 using OrderController;
 using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
@@ -187,21 +188,18 @@ namespace OC2MenuManager
             }
 
             int gameObjectInstanceId = component.gameObject.GetInstanceID();
-            int existingSourceId;
+            int existingSourceId = 0;
             if (PreparedSourceIdsByGameObjectId.TryGetValue(gameObjectInstanceId, out existingSourceId))
             {
                 PreparedSourceState existingSource;
                 if (!PreparedSourcesByInstanceId.TryGetValue(existingSourceId, out existingSource) || existingSource == null)
                 {
                     PreparedSourceIdsByGameObjectId.Remove(gameObjectInstanceId);
+                    existingSourceId = 0;
                 }
                 else if (GetPreparedSourcePriority(existingSource.Component) <= GetPreparedSourcePriority(component))
                 {
                     return;
-                }
-                else
-                {
-                    RemovePreparedSource(existingSourceId);
                 }
             }
 
@@ -218,21 +216,23 @@ namespace OC2MenuManager
                 QueuePreparedSourceRefresh(instanceId);
             };
 
-            PreparedSourcesByInstanceId[instanceId] = source;
-            PreparedSourceIdsByGameObjectId[gameObjectInstanceId] = instanceId;
-
             try
             {
                 provider.RegisterOrderCompositionChangedCallback(source.Callback);
             }
             catch (Exception ex)
             {
-                PreparedSourcesByInstanceId.Remove(instanceId);
-                PreparedSourceIdsByGameObjectId.Remove(gameObjectInstanceId);
                 LogTrackingHookFailure("subscribing to a prepared-source composition", ex);
                 return;
             }
 
+            if (existingSourceId != 0)
+            {
+                RemovePreparedSource(existingSourceId);
+            }
+
+            PreparedSourcesByInstanceId[instanceId] = source;
+            PreparedSourceIdsByGameObjectId[gameObjectInstanceId] = instanceId;
             QueuePreparedSourceRefresh(instanceId);
         }
 
@@ -443,6 +443,16 @@ namespace OC2MenuManager
                 return;
             }
 
+            if (source.PendingRemoval && source.GameObjectInstanceId != 0)
+            {
+                int mappedSourceId;
+                if (!PreparedSourceIdsByGameObjectId.TryGetValue(source.GameObjectInstanceId, out mappedSourceId)
+                    || mappedSourceId != instanceId)
+                {
+                    return;
+                }
+            }
+
             source.PendingRemoval = false;
             source.RemovalGraceUntilFrame = 0;
 
@@ -455,7 +465,7 @@ namespace OC2MenuManager
             SceneInfo scene;
             if (!TryGetPreparedSceneInfo(out scene))
             {
-                SetPreparedSourceMatch(source, 0);
+                ClearPreparedSourceMatch(source);
                 return;
             }
 
@@ -465,17 +475,32 @@ namespace OC2MenuManager
                 bool isCookedSource = source.CookingHandler != null;
                 if (isCookedSource && !IsPreparedCookingSourceCooked(source, composition))
                 {
-                    SetPreparedSourceMatch(source, 0);
+                    ClearPreparedSourceMatch(source);
                     return;
                 }
 
-                int matchedRecipeId = MatchPreparedRecipe(scene, composition, isCookedSource);
-                SetPreparedSourceMatch(source, matchedRecipeId);
+                int matchedRecipeId = MatchPreparedRecipe(scene, composition, isCookedSource, source);
+                SetPreparedSourceMatch(
+                    source,
+                    matchedRecipeId,
+                    PreparedMatchedRecipeIdsBuffer,
+                    PreparedMatchedRecipeIdsSetBuffer);
             }
             catch
             {
-                SetPreparedSourceMatch(source, 0);
+                ClearPreparedSourceMatch(source);
             }
+        }
+
+        private static void ClearPreparedSourceMatch(PreparedSourceState source)
+        {
+            PreparedMatchedRecipeIdsBuffer.Clear();
+            PreparedMatchedRecipeIdsSetBuffer.Clear();
+            SetPreparedSourceMatch(
+                source,
+                0,
+                PreparedMatchedRecipeIdsBuffer,
+                PreparedMatchedRecipeIdsSetBuffer);
         }
 
         private static bool IsPreparedCookingSourceCooked(PreparedSourceState source, AssembledDefinitionNode composition)
@@ -495,8 +520,16 @@ namespace OC2MenuManager
             return cookedNode != null && cookedNode.m_progress == CookedCompositeOrderNode.CookingProgress.Cooked;
         }
 
-        private static int MatchPreparedRecipe(SceneInfo scene, AssembledDefinitionNode composition, bool allowCookedFallback)
+        private static int MatchPreparedRecipe(
+            SceneInfo scene,
+            AssembledDefinitionNode composition,
+            bool allowCookedFallback,
+            PreparedSourceState source)
         {
+            PreparedMatchedRecipeIdsBuffer.Clear();
+            PreparedMatchedRecipeIdsSetBuffer.Clear();
+            PreparedAssignmentCandidatesBuffer.Clear();
+            PreparedTicketPrioritiesByRecipeBuffer.Clear();
             if (scene == null || composition == null)
             {
                 return 0;
@@ -514,6 +547,8 @@ namespace OC2MenuManager
                 return 0;
             }
 
+            Dictionary<int, int> currentMenuCounts = GetCurrentOnMenuCounts(scene);
+            BuildPreparedTicketPriorities(scene);
             AssembledDefinitionNode unwrappedSimplifiedComposition = null;
             bool cookedFallbackInitialized = false;
             for (int i = 0; i < candidateRecipeIds.Count; i++)
@@ -525,46 +560,98 @@ namespace OC2MenuManager
                 }
 
                 AssembledDefinitionNode simplifiedDefinition = GetSimplifiedPreparedRecipeDefinition(recipe);
-                if (simplifiedDefinition != null
-                    && MatchesPreparedRecipeDefinition(recipe.Definition, simplifiedDefinition, simplifiedComposition))
+                bool matches = simplifiedDefinition != null
+                    && MatchesPreparedRecipeDefinition(recipe.Definition, simplifiedDefinition, simplifiedComposition);
+                if (!matches && allowCookedFallback)
                 {
-                    return recipe.Id;
+                    CookedCompositeAssembledNode requiredCooked = simplifiedDefinition as CookedCompositeAssembledNode;
+                    CookedCompositeAssembledNode providedCooked = simplifiedComposition as CookedCompositeAssembledNode;
+                    if (CanUseCookedContainerFallback(requiredCooked, providedCooked))
+                    {
+                        if (!cookedFallbackInitialized)
+                        {
+                            unwrappedSimplifiedComposition = UnwrapCookedCompositeNode(simplifiedComposition);
+                            cookedFallbackInitialized = true;
+                        }
+
+                        AssembledDefinitionNode unwrappedSimplifiedDefinition = GetUnwrappedPreparedRecipeDefinition(recipe);
+                        matches = unwrappedSimplifiedComposition != null
+                            && unwrappedSimplifiedDefinition != null
+                            && !ReferenceEquals(unwrappedSimplifiedComposition, simplifiedComposition)
+                            && !ReferenceEquals(unwrappedSimplifiedDefinition, simplifiedDefinition)
+                            && MatchesPreparedRecipeDefinition(
+                                recipe.Definition,
+                                unwrappedSimplifiedDefinition,
+                                unwrappedSimplifiedComposition);
+                    }
                 }
 
-                if (!allowCookedFallback)
+                if (!matches || !PreparedMatchedRecipeIdsSetBuffer.Add(recipe.Id))
                 {
                     continue;
                 }
 
-                if (!cookedFallbackInitialized)
-                {
-                    unwrappedSimplifiedComposition = simplifiedComposition != null
-                        ? UnwrapCookedCompositeNode(simplifiedComposition)
-                        : null;
-                    cookedFallbackInitialized = true;
-                }
-
-                if (simplifiedComposition == null || ReferenceEquals(unwrappedSimplifiedComposition, simplifiedComposition))
-                {
-                    continue;
-                }
-
-                if (simplifiedDefinition != null
-                    && MatchesPreparedRecipeDefinition(recipe.Definition, simplifiedDefinition, unwrappedSimplifiedComposition))
-                {
-                    return recipe.Id;
-                }
-
-                AssembledDefinitionNode unwrappedSimplifiedDefinition = GetUnwrappedPreparedRecipeDefinition(recipe);
-                if (unwrappedSimplifiedDefinition != null
-                    && !ReferenceEquals(unwrappedSimplifiedDefinition, simplifiedDefinition)
-                    && MatchesPreparedRecipeDefinition(recipe.Definition, unwrappedSimplifiedDefinition, unwrappedSimplifiedComposition))
-                {
-                    return recipe.Id;
-                }
+                PreparedMatchedRecipeIdsBuffer.Add(recipe.Id);
+                PreparedTicketPriority ticketPriority;
+                bool hasTicketPriority = PreparedTicketPrioritiesByRecipeBuffer.TryGetValue(recipe.Id, out ticketPriority);
+                PreparedAssignmentCandidatesBuffer.Add(new PreparedRecipeAssignmentCandidate(
+                    recipe.Id,
+                    GetCount(currentMenuCounts, recipe.Id),
+                    GetCount(PreparedCountsByRecipe, recipe.Id),
+                    source != null && source.MatchedRecipeId == recipe.Id,
+                    hasTicketPriority ? ticketPriority.Order : int.MaxValue,
+                    hasTicketPriority ? ticketPriority.Team : int.MaxValue,
+                    i));
             }
 
-            return 0;
+            return PreparedRecipeAssignmentPolicy.SelectCanonical(PreparedAssignmentCandidatesBuffer);
+        }
+
+        private static void BuildPreparedTicketPriorities(SceneInfo scene)
+        {
+            PreparedTicketPrioritiesByRecipeBuffer.Clear();
+            if (scene == null)
+            {
+                return;
+            }
+
+            foreach (TicketWidgetState state in TicketWidgetsByInstanceId.Values)
+            {
+                if (state == null
+                    || state.Widget == null
+                    || state.IsReferenceTicket
+                    || state.Order < 0
+                    || !IsTracked(scene, state.RecipeId))
+                {
+                    continue;
+                }
+
+                PreparedTicketPriority candidate = new PreparedTicketPriority
+                {
+                    Order = state.Order,
+                    Team = (int)state.TeamId
+                };
+                PreparedTicketPriority existing;
+                if (!PreparedTicketPrioritiesByRecipeBuffer.TryGetValue(state.RecipeId, out existing)
+                    || candidate.Order < existing.Order
+                    || (candidate.Order == existing.Order && candidate.Team < existing.Team))
+                {
+                    PreparedTicketPrioritiesByRecipeBuffer[state.RecipeId] = candidate;
+                }
+            }
+        }
+
+        private static bool CanUseCookedContainerFallback(
+            CookedCompositeAssembledNode required,
+            CookedCompositeAssembledNode provided)
+        {
+            return required != null
+                && provided != null
+                && required.m_cookingStep != null
+                && provided.m_cookingStep != null
+                && required.m_cookingStep.m_uID == provided.m_cookingStep.m_uID
+                && required.m_progress == CookedCompositeOrderNode.CookingProgress.Cooked
+                && provided.m_progress == CookedCompositeOrderNode.CookingProgress.Cooked;
         }
 
         private static bool MatchesPreparedRecipeDefinition(
@@ -732,36 +819,100 @@ namespace OC2MenuManager
             return PreparedCandidateRecipeIdsBuffer;
         }
 
-        private static void SetPreparedSourceMatch(PreparedSourceState source, int matchedRecipeId)
+        private static void SetPreparedSourceMatch(
+            PreparedSourceState source,
+            int matchedRecipeId,
+            IList<int> compatibleRecipeIds,
+            HashSet<int> compatibleRecipeIdSet)
         {
-            if (source == null || source.MatchedRecipeId == matchedRecipeId)
+            if (source == null)
             {
                 return;
             }
 
-            if (source.MatchedRecipeId != 0)
+            bool compatibilityChanged = SynchronizePreparedSourceCompatibility(
+                source,
+                compatibleRecipeIds,
+                compatibleRecipeIdSet);
+            int previousMatchedRecipeId = source.MatchedRecipeId;
+            bool assignmentChanged = previousMatchedRecipeId != matchedRecipeId;
+            if (!assignmentChanged && !compatibilityChanged)
             {
-                AdjustPreparedCount(source.MatchedRecipeId, -1);
+                return;
             }
 
-            source.MatchedRecipeId = matchedRecipeId;
-            if (matchedRecipeId != 0)
+            if (assignmentChanged)
             {
-                bool consumedPendingTransfer = ConsumePendingPreparedTransfer(matchedRecipeId, source.InstanceId);
-                if (!consumedPendingTransfer)
+                if (previousMatchedRecipeId != 0)
                 {
-                    AdjustPreparedCount(matchedRecipeId, 1);
+                    AdjustPreparedCount(previousMatchedRecipeId, -1);
+                }
+
+                source.MatchedRecipeId = matchedRecipeId;
+                if (matchedRecipeId != 0)
+                {
+                    bool consumedPendingTransfer = previousMatchedRecipeId == 0
+                        && ConsumePendingPreparedTransfer(source, matchedRecipeId);
+                    if (!consumedPendingTransfer)
+                    {
+                        AdjustPreparedCount(matchedRecipeId, 1);
+                    }
                 }
             }
 
-            InvalidateOverlay();
-            InvalidateReferenceTickets();
+            if (assignmentChanged)
+            {
+                InvalidateOverlay();
+                InvalidateReferenceTickets();
+            }
+
             InvalidateTicketWidgets();
         }
 
-        private static bool ConsumePendingPreparedTransfer(int matchedRecipeId, int targetInstanceId)
+        private static bool SynchronizePreparedSourceCompatibility(
+            PreparedSourceState source,
+            IList<int> compatibleRecipeIds,
+            HashSet<int> compatibleRecipeIdSet)
         {
-            if (matchedRecipeId == 0)
+            PreparedCompatibilityRemovalBuffer.Clear();
+            foreach (int recipeId in source.CompatibleRecipeIds)
+            {
+                if (compatibleRecipeIdSet == null || !compatibleRecipeIdSet.Contains(recipeId))
+                {
+                    PreparedCompatibilityRemovalBuffer.Add(recipeId);
+                }
+            }
+
+            bool changed = false;
+            for (int i = 0; i < PreparedCompatibilityRemovalBuffer.Count; i++)
+            {
+                int recipeId = PreparedCompatibilityRemovalBuffer[i];
+                if (source.CompatibleRecipeIds.Remove(recipeId))
+                {
+                    AdjustPreparedCompatibilityCount(recipeId, -1);
+                    changed = true;
+                }
+            }
+
+            if (compatibleRecipeIds != null)
+            {
+                for (int i = 0; i < compatibleRecipeIds.Count; i++)
+                {
+                    int recipeId = compatibleRecipeIds[i];
+                    if (source.CompatibleRecipeIds.Add(recipeId))
+                    {
+                        AdjustPreparedCompatibilityCount(recipeId, 1);
+                        changed = true;
+                    }
+                }
+            }
+
+            return changed;
+        }
+
+        private static bool ConsumePendingPreparedTransfer(PreparedSourceState targetSource, int matchedRecipeId)
+        {
+            if (targetSource == null || matchedRecipeId == 0 || targetSource.CompatibleRecipeIds.Count == 0)
             {
                 return false;
             }
@@ -772,9 +923,10 @@ namespace OC2MenuManager
             {
                 PreparedSourceState pendingSource = pair.Value;
                 if (pendingSource == null
-                    || pair.Key == targetInstanceId
+                    || pair.Key == targetSource.InstanceId
                     || !pendingSource.PendingRemoval
-                    || pendingSource.MatchedRecipeId != matchedRecipeId)
+                    || pendingSource.MatchedRecipeId == 0
+                    || !HaveCompatiblePreparedRecipe(pendingSource, targetSource))
                 {
                     continue;
                 }
@@ -789,11 +941,23 @@ namespace OC2MenuManager
                 return false;
             }
 
+            if (pendingSourceState.MatchedRecipeId != matchedRecipeId)
+            {
+                AdjustPreparedCount(pendingSourceState.MatchedRecipeId, -1);
+                AdjustPreparedCount(matchedRecipeId, 1);
+            }
+
+            RemovePreparedSourceCompatibility(pendingSourceState);
             PreparedCookStateBySourceId.Remove(pendingSourceId);
             DirtyPreparedSourceIds.Remove(pendingSourceId);
             if (pendingSourceState.GameObjectInstanceId != 0)
             {
-                PreparedSourceIdsByGameObjectId.Remove(pendingSourceState.GameObjectInstanceId);
+                int mappedSourceId;
+                if (PreparedSourceIdsByGameObjectId.TryGetValue(pendingSourceState.GameObjectInstanceId, out mappedSourceId)
+                    && mappedSourceId == pendingSourceId)
+                {
+                    PreparedSourceIdsByGameObjectId.Remove(pendingSourceState.GameObjectInstanceId);
+                }
             }
 
             if (pendingSourceState.Provider != null && pendingSourceState.Callback != null)
@@ -811,6 +975,19 @@ namespace OC2MenuManager
             return true;
         }
 
+        private static bool HaveCompatiblePreparedRecipe(PreparedSourceState left, PreparedSourceState right)
+        {
+            foreach (int recipeId in left.CompatibleRecipeIds)
+            {
+                if (right.CompatibleRecipeIds.Contains(recipeId))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private static void AdjustPreparedCount(int recipeId, int delta)
         {
             int nextValue = Math.Max(0, GetCount(PreparedCountsByRecipe, recipeId) + delta);
@@ -822,6 +999,34 @@ namespace OC2MenuManager
             {
                 PreparedCountsByRecipe.Remove(recipeId);
             }
+        }
+
+        private static void AdjustPreparedCompatibilityCount(int recipeId, int delta)
+        {
+            int nextValue = Math.Max(0, GetCount(PreparedCompatibilityCountsByRecipe, recipeId) + delta);
+            if (nextValue > 0)
+            {
+                PreparedCompatibilityCountsByRecipe[recipeId] = nextValue;
+            }
+            else
+            {
+                PreparedCompatibilityCountsByRecipe.Remove(recipeId);
+            }
+        }
+
+        private static void RemovePreparedSourceCompatibility(PreparedSourceState source)
+        {
+            if (source == null || source.CompatibleRecipeIds.Count == 0)
+            {
+                return;
+            }
+
+            foreach (int recipeId in source.CompatibleRecipeIds)
+            {
+                AdjustPreparedCompatibilityCount(recipeId, -1);
+            }
+
+            source.CompatibleRecipeIds.Clear();
         }
 
         private static void RemovePreparedSource(int instanceId)
@@ -836,6 +1041,7 @@ namespace OC2MenuManager
             {
                 source.PendingRemoval = true;
                 source.RemovalGraceUntilFrame = Time.frameCount + PreparedSourceRemovalGraceFrames;
+                DirtyPreparedSourceIds.Remove(instanceId);
                 int targetFrame = source.RemovalGraceUntilFrame;
                 if (nextPreparedSourcePruneFrame == 0 || targetFrame < nextPreparedSourcePruneFrame)
                 {
@@ -857,11 +1063,22 @@ namespace OC2MenuManager
                 }
             }
 
-            if (source.MatchedRecipeId != 0)
+            bool hadPreparedAssignment = source.MatchedRecipeId != 0;
+            if (hadPreparedAssignment)
             {
                 AdjustPreparedCount(source.MatchedRecipeId, -1);
+            }
+
+            bool hadCompatibility = source.CompatibleRecipeIds.Count > 0;
+            RemovePreparedSourceCompatibility(source);
+            if (hadPreparedAssignment)
+            {
                 InvalidateOverlay();
                 InvalidateReferenceTickets();
+            }
+
+            if (hadPreparedAssignment || hadCompatibility)
+            {
                 InvalidateTicketWidgets();
             }
 
@@ -869,7 +1086,12 @@ namespace OC2MenuManager
             DirtyPreparedSourceIds.Remove(instanceId);
             if (source.GameObjectInstanceId != 0)
             {
-                PreparedSourceIdsByGameObjectId.Remove(source.GameObjectInstanceId);
+                int mappedSourceId;
+                if (PreparedSourceIdsByGameObjectId.TryGetValue(source.GameObjectInstanceId, out mappedSourceId)
+                    && mappedSourceId == instanceId)
+                {
+                    PreparedSourceIdsByGameObjectId.Remove(source.GameObjectInstanceId);
+                }
             }
         }
 

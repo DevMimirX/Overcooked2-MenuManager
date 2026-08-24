@@ -9,6 +9,85 @@ namespace OC2MenuManager.Tests;
 
 public sealed class RuntimePolicyTests
 {
+    [Fact]
+    public void PreparedAssignmentPrefersUnmetLiveDemandOverCatalogOrder()
+    {
+        var candidates = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 0, 0, false, int.MaxValue, int.MaxValue, 0),
+            new PreparedRecipeAssignmentCandidate(202, 1, 0, false, 3, 0, 1)
+        };
+
+        Assert.Equal(202, PreparedRecipeAssignmentPolicy.SelectCanonical(candidates));
+    }
+
+    [Fact]
+    public void PreparedAssignmentDistributesPhysicalDishesAcrossEquivalentLiveRecipes()
+    {
+        var firstSourceCandidates = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 1, 0, false, 1, 0, 0),
+            new PreparedRecipeAssignmentCandidate(202, 1, 0, false, 2, 0, 1)
+        };
+        var secondSourceCandidates = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 1, 1, false, 1, 0, 0),
+            new PreparedRecipeAssignmentCandidate(202, 1, 0, false, 2, 0, 1)
+        };
+
+        Assert.Equal(101, PreparedRecipeAssignmentPolicy.SelectCanonical(firstSourceCandidates));
+        Assert.Equal(202, PreparedRecipeAssignmentPolicy.SelectCanonical(secondSourceCandidates));
+    }
+
+    [Fact]
+    public void PreparedAssignmentDiscountsItsOwnExistingCount()
+    {
+        var candidates = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 1, 1, true, 5, 0, 0),
+            new PreparedRecipeAssignmentCandidate(202, 1, 1, false, 1, 0, 1)
+        };
+
+        Assert.Equal(101, PreparedRecipeAssignmentPolicy.SelectCanonical(candidates));
+    }
+
+    [Fact]
+    public void PreparedAssignmentRetainsACompatibleCurrentRecipeWhenDemandIsCovered()
+    {
+        var candidates = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 0, 1, true, int.MaxValue, int.MaxValue, 0),
+            new PreparedRecipeAssignmentCandidate(202, 1, 1, false, 1, 0, 1)
+        };
+
+        Assert.Equal(101, PreparedRecipeAssignmentPolicy.SelectCanonical(candidates));
+    }
+
+    [Fact]
+    public void PreparedAssignmentUsesTeamThenCatalogAsDeterministicLiveTicketTies()
+    {
+        var candidates = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 1, 0, false, 2, 1, 0),
+            new PreparedRecipeAssignmentCandidate(202, 1, 0, false, 2, 0, 1)
+        };
+
+        Assert.Equal(202, PreparedRecipeAssignmentPolicy.SelectCanonical(candidates));
+    }
+
+    [Fact]
+    public void PreparedAssignmentFallsBackToCatalogOrderWithoutLiveDemand()
+    {
+        var candidates = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 0, 0, false, int.MaxValue, int.MaxValue, 4),
+            new PreparedRecipeAssignmentCandidate(202, 0, 0, false, int.MaxValue, int.MaxValue, 2)
+        };
+
+        Assert.Equal(202, PreparedRecipeAssignmentPolicy.SelectCanonical(candidates));
+        Assert.Equal(0, PreparedRecipeAssignmentPolicy.SelectCanonical(null!));
+    }
+
     [Theory]
     [InlineData(true, true, false, true, true)]
     [InlineData(false, true, false, true, false)]

@@ -1,6 +1,6 @@
-// Defines the tracker runtime model and its run-owned caches. A run owns all
-// team-specific probability and overlay state so consumers never share mutable
-// rows across teams and cache invalidation remains event-driven.
+// Defines tracker runtime models and their owned caches. Team runs never share
+// mutable probability rows, while each prepared source owns its compatible
+// recipe IDs so physical counts and visual compatibility remain distinct.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -115,8 +115,15 @@ namespace OC2MenuManager
             public ClientCookingHandler CookingHandler;
             public OrderCompositionChangedCallback Callback;
             public int MatchedRecipeId;
+            public readonly HashSet<int> CompatibleRecipeIds = new HashSet<int>();
             public bool PendingRemoval;
             public int RemovalGraceUntilFrame;
+        }
+
+        private struct PreparedTicketPriority
+        {
+            public int Order;
+            public int Team;
         }
 
         /// <summary>

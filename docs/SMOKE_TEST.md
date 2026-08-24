@@ -30,6 +30,14 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 6. Repeat several off/on cycles with translucent colors. Verify no CanvasGroup leak, opacity drift, stuck interaction/raycast setting, repeated warning, or steady-state ticket scan appears.
 7. Confirm out-of-round, No Menu, Horde, disabled tracking, temporarily unavailable controllers, and an intentionally broken reflection contract leave base-game visuals safe; transient controller availability retries at the bounded interval and a missing contract logs once.
 
+## Ingredient-order prepared tinting
+
+1. In a generated-recipe level, activate two tracked real tickets whose definitions contain the same processed ingredients in different list orders. Prepare one valid dish and verify every compatible real ticket receives the prepared tint while the overlay's total numeric prepared count increases by exactly one.
+2. Repeat with two identical recipe-ID tickets and in couch versus across both team bars. Verify all compatible real tickets tint, prepared accounting remains kitchen-wide, and guess-ticket tint and opacity do not change.
+3. Move the prepared dish between a cooker, carrier, and plate. Verify the source transfer neither duplicates nor briefly loses the physical prepared count, and removing or serving it clears every compatibility tint.
+4. Use the same ingredients with a different cooking-step ID, raw progress, burnt progress, and an incorrect mixing state. Verify none receives prepared tint; then use the correct cooking step and completed state and verify it does.
+5. Exercise exact `WildcardOrderNode` direction and a valid cooked-container fallback. Verify only matches accepted by the audited base-game direction qualify, and container unwrapping never crosses cooking-step IDs or completion states.
+
 ## Compatibility data
 
 1. Start with an existing `OC2MenuManager.standalone.cfg` and verify its values are retained.

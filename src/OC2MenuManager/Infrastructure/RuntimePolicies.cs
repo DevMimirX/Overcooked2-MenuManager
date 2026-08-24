@@ -71,6 +71,144 @@ namespace OC2MenuManager.Infrastructure
     }
 
     /// <summary>
+    /// Describes one recipe that is composition-compatible with a physical
+    /// prepared source. Assignment remains singular even when the same source
+    /// can satisfy several order-insensitive recipe definitions.
+    /// </summary>
+    internal struct PreparedRecipeAssignmentCandidate
+    {
+        internal PreparedRecipeAssignmentCandidate(
+            int recipeId,
+            int onMenuCount,
+            int assignedPreparedCount,
+            bool isCurrentAssignment,
+            int earliestTicketOrder,
+            int earliestTicketTeam,
+            int catalogOrder)
+        {
+            RecipeId = recipeId;
+            OnMenuCount = onMenuCount;
+            AssignedPreparedCount = assignedPreparedCount;
+            IsCurrentAssignment = isCurrentAssignment;
+            EarliestTicketOrder = earliestTicketOrder;
+            EarliestTicketTeam = earliestTicketTeam;
+            CatalogOrder = catalogOrder;
+        }
+
+        internal int RecipeId { get; private set; }
+        internal int OnMenuCount { get; private set; }
+        internal int AssignedPreparedCount { get; private set; }
+        internal bool IsCurrentAssignment { get; private set; }
+        internal int EarliestTicketOrder { get; private set; }
+        internal int EarliestTicketTeam { get; private set; }
+        internal int CatalogOrder { get; private set; }
+    }
+
+    /// <summary>
+    /// Assigns each physical prepared source to one compatible recipe for
+    /// numeric counts. Live unmet demand wins, the source's current assignment
+    /// is discounted from existing counts, and stable deterministic fallbacks
+    /// prevent equivalent generated recipes from making counts oscillate.
+    /// </summary>
+    internal static class PreparedRecipeAssignmentPolicy
+    {
+        internal static int SelectCanonical(IList<PreparedRecipeAssignmentCandidate> candidates)
+        {
+            if (candidates == null || candidates.Count == 0)
+            {
+                return 0;
+            }
+
+            int selectedIndex = -1;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                PreparedRecipeAssignmentCandidate candidate = candidates[i];
+                int assignedExcludingCurrent = Math.Max(
+                    0,
+                    candidate.AssignedPreparedCount - (candidate.IsCurrentAssignment ? 1 : 0));
+                if (candidate.OnMenuCount <= assignedExcludingCurrent)
+                {
+                    continue;
+                }
+
+                if (selectedIndex < 0 || HasEarlierLiveTicket(candidate, candidates[selectedIndex]))
+                {
+                    selectedIndex = i;
+                }
+            }
+
+            if (selectedIndex >= 0)
+            {
+                return candidates[selectedIndex].RecipeId;
+            }
+
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                if (candidates[i].IsCurrentAssignment)
+                {
+                    return candidates[i].RecipeId;
+                }
+            }
+
+            selectedIndex = -1;
+            for (int i = 0; i < candidates.Count; i++)
+            {
+                PreparedRecipeAssignmentCandidate candidate = candidates[i];
+                if (candidate.OnMenuCount <= 0)
+                {
+                    continue;
+                }
+
+                if (selectedIndex < 0 || HasEarlierLiveTicket(candidate, candidates[selectedIndex]))
+                {
+                    selectedIndex = i;
+                }
+            }
+
+            if (selectedIndex >= 0)
+            {
+                return candidates[selectedIndex].RecipeId;
+            }
+
+            selectedIndex = 0;
+            for (int i = 1; i < candidates.Count; i++)
+            {
+                PreparedRecipeAssignmentCandidate candidate = candidates[i];
+                PreparedRecipeAssignmentCandidate selected = candidates[selectedIndex];
+                if (candidate.CatalogOrder < selected.CatalogOrder
+                    || (candidate.CatalogOrder == selected.CatalogOrder && candidate.RecipeId < selected.RecipeId))
+                {
+                    selectedIndex = i;
+                }
+            }
+
+            return candidates[selectedIndex].RecipeId;
+        }
+
+        private static bool HasEarlierLiveTicket(
+            PreparedRecipeAssignmentCandidate candidate,
+            PreparedRecipeAssignmentCandidate selected)
+        {
+            if (candidate.EarliestTicketOrder != selected.EarliestTicketOrder)
+            {
+                return candidate.EarliestTicketOrder < selected.EarliestTicketOrder;
+            }
+
+            if (candidate.EarliestTicketTeam != selected.EarliestTicketTeam)
+            {
+                return candidate.EarliestTicketTeam < selected.EarliestTicketTeam;
+            }
+
+            if (candidate.CatalogOrder != selected.CatalogOrder)
+            {
+                return candidate.CatalogOrder < selected.CatalogOrder;
+            }
+
+            return candidate.RecipeId < selected.RecipeId;
+        }
+    }
+
+    /// <summary>
     /// Validates and calculates next-recipe probability data without depending on
     /// Unity or mutable game controllers.
     /// </summary>

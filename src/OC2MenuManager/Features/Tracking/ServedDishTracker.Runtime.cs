@@ -280,9 +280,15 @@ namespace OC2MenuManager
             PreparedCookStateBySourceId.Clear();
             PreparedSourceComponentByHandlerId.Clear();
             PreparedCountsByRecipe.Clear();
+            PreparedCompatibilityCountsByRecipe.Clear();
             DirtyPreparedSourceIds.Clear();
             PreparedSourceRefreshBuffer.Clear();
             PreparedCandidateRecipeIdsBuffer.Clear();
+            PreparedMatchedRecipeIdsBuffer.Clear();
+            PreparedMatchedRecipeIdsSetBuffer.Clear();
+            PreparedAssignmentCandidatesBuffer.Clear();
+            PreparedTicketPrioritiesByRecipeBuffer.Clear();
+            PreparedCompatibilityRemovalBuffer.Clear();
             nextPreparedSourceRefreshFrame = 0;
             nextPreparedSourcePruneFrame = 0;
             nextPreparedBootstrapFrame = 0;
@@ -658,6 +664,7 @@ namespace OC2MenuManager
             return PreparedSourcesByInstanceId.Count > 0
                 || PreparedSourceIdsByGameObjectId.Count > 0
                 || PreparedCountsByRecipe.Count > 0
+                || PreparedCompatibilityCountsByRecipe.Count > 0
                 || PreparedSourceComponentByHandlerId.Count > 0
                 || PreparedCookStateBySourceId.Count > 0
                 || DirtyPreparedSourceIds.Count > 0;

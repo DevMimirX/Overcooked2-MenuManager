@@ -197,6 +197,8 @@ Prepared tracking tries to recognize finished dishes from several places, such a
 - some carried completed dishes
 - some cooker-completed dishes
 
+Ingredient lists use the base game's order-insensitive delivery rule, so generated recipes that differ only by ingredient sequence remain compatible. Cooking method and completion state still have to match: a different cooking step, raw dish, burnt dish, or incorrect mixing state is not treated as prepared. One physical dish is counted once, while every tracked real ticket that could accept it receives the prepared tint.
+
 This is one of the heavier features in the mod. If you need better performance, try disabling it first.
 
 #### Ticket Colors
@@ -206,6 +208,7 @@ This is one of the heavier features in the mod. If you need better performance, 
 - guess tickets always retain their configured `Guess Color` and opacity independently of this toggle
 - turning it on immediately recolors existing tracked real tickets on the next repaint
 - enabling `Enable Menu Tracking` during a round also discovers and recolors orders that were already visible
+- if several live tickets are game-equivalent apart from ingredient ordering, a compatible prepared dish colors all of them without multiplying its numeric prepared count
 
 Color rows:
 

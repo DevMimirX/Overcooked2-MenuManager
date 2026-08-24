@@ -1,6 +1,6 @@
-// Owns tracker configuration, reflection contracts, and reusable runtime
-// buffers. Buffers here are main-thread only and are reused to keep order and
-// prepared-dish events from creating garbage in recipe-heavy levels.
+// Owns tracker configuration, reflection contracts, compatibility indexes, and
+// reusable runtime buffers. State here is main-thread only and is reused to keep
+// order and prepared-dish events allocation-free after capacity warm-up.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -93,6 +93,7 @@ namespace OC2MenuManager
         private static readonly Dictionary<int, int> CombinedOnMenuCountsBuffer = new Dictionary<int, int>();
         private static readonly Dictionary<TeamID, ServerOrderControllerBase> AuthoritativeOrderControllersByTeam = new Dictionary<TeamID, ServerOrderControllerBase>();
         private static readonly Dictionary<int, int> PreparedCountsByRecipe = new Dictionary<int, int>();
+        private static readonly Dictionary<int, int> PreparedCompatibilityCountsByRecipe = new Dictionary<int, int>();
         private static readonly Dictionary<int, PreparedSourceState> PreparedSourcesByInstanceId = new Dictionary<int, PreparedSourceState>();
         private static readonly Dictionary<int, int> PreparedSourceIdsByGameObjectId = new Dictionary<int, int>();
         private static readonly Dictionary<int, CookedCompositeOrderNode.CookingProgress> PreparedCookStateBySourceId = new Dictionary<int, CookedCompositeOrderNode.CookingProgress>();
@@ -133,12 +134,16 @@ namespace OC2MenuManager
         private static double[] ProbabilityEntryValuesBuffer = new double[0];
         private static double[] ProbabilityRawWeightsBuffer = new double[0];
         private static float[] ProbabilityCarnivalWeightsBuffer = new float[0];
-        private static readonly Dictionary<int, int> PreparedRemainingByRecipeBuffer = new Dictionary<int, int>();
         private static readonly Dictionary<int, int> MenuOrderByRecipeBuffer = new Dictionary<int, int>();
         private static readonly List<int> PreparedCandidateRecipeIdsBuffer = new List<int>();
         private static readonly List<RunInfo> PreparedCandidateRunsBuffer = new List<RunInfo>();
         private static readonly List<Dictionary<int, double>> PreparedCandidateProbabilityMapsBuffer = new List<Dictionary<int, double>>();
         private static readonly List<List<int>> PreparedCandidateActiveRecipeIdsBuffer = new List<List<int>>();
+        private static readonly List<int> PreparedMatchedRecipeIdsBuffer = new List<int>();
+        private static readonly HashSet<int> PreparedMatchedRecipeIdsSetBuffer = new HashSet<int>();
+        private static readonly List<PreparedRecipeAssignmentCandidate> PreparedAssignmentCandidatesBuffer = new List<PreparedRecipeAssignmentCandidate>();
+        private static readonly Dictionary<int, PreparedTicketPriority> PreparedTicketPrioritiesByRecipeBuffer = new Dictionary<int, PreparedTicketPriority>();
+        private static readonly List<int> PreparedCompatibilityRemovalBuffer = new List<int>();
         private static readonly List<ReferenceTicketCandidate> ReferenceTicketCandidatesBuffer = new List<ReferenceTicketCandidate>();
         private static readonly List<ReferenceTicketCandidate> ReferenceTicketCandidatePool = new List<ReferenceTicketCandidate>();
         private static readonly List<ReferenceTicketState> ReferenceTicketStates = new List<ReferenceTicketState>();

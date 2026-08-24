@@ -1,6 +1,6 @@
 // Hardens RecipeFlowGUI capacity/removal and owns ticket presentation state.
-// Real-ticket safety patches remain unconditional; cosmetic registration and
-// ordering run only when history tracking actually consumes that state.
+// Real-ticket prepared tint consumes source compatibility, while reference
+// tickets keep independent styling and safety patches remain unconditional.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -1583,16 +1583,6 @@ namespace OC2MenuManager
             }
 
             bool showPrepared = IsPreparedTrackingEnabled();
-            Dictionary<int, int> preparedRemainingByRecipe = PreparedRemainingByRecipeBuffer;
-            preparedRemainingByRecipe.Clear();
-            if (showPrepared)
-            {
-                foreach (KeyValuePair<int, int> pair in PreparedCountsByRecipe)
-                {
-                    preparedRemainingByRecipe[pair.Key] = pair.Value;
-                }
-            }
-
             TicketWidgetsBuffer.Clear();
             StaleTicketWidgetIdsBuffer.Clear();
             foreach (KeyValuePair<int, TicketWidgetState> pair in TicketWidgetsByInstanceId)
@@ -1613,20 +1603,6 @@ namespace OC2MenuManager
                 {
                     TicketWidgetsByInstanceId.Remove(StaleTicketWidgetIdsBuffer[i]);
                 }
-            }
-
-            if (showPrepared)
-            {
-                TicketWidgetsBuffer.Sort(delegate(TicketWidgetState a, TicketWidgetState b)
-                {
-                    int recipeCompare = a.RecipeId.CompareTo(b.RecipeId);
-                    if (recipeCompare != 0)
-                    {
-                        return recipeCompare;
-                    }
-
-                    return a.Order.CompareTo(b.Order);
-                });
             }
 
             bool tintRealTickets = IsMenuTicketTintEnabled();
@@ -1662,16 +1638,8 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                bool hasPreparedAssignment = false;
-                if (showPrepared)
-                {
-                    int remainingPrepared;
-                    if (preparedRemainingByRecipe.TryGetValue(state.RecipeId, out remainingPrepared) && remainingPrepared > 0)
-                    {
-                        preparedRemainingByRecipe[state.RecipeId] = remainingPrepared - 1;
-                        hasPreparedAssignment = true;
-                    }
-                }
+                bool hasPreparedAssignment = showPrepared
+                    && GetCount(PreparedCompatibilityCountsByRecipe, state.RecipeId) > 0;
 
                 Color tint = hasPreparedAssignment ? preparedTint : onMenuTint;
                 if (!ApplyTicketWidgetTint(state, tint, tint))
