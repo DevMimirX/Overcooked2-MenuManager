@@ -390,7 +390,7 @@ namespace OC2MenuManager
                 {
                     enabled.Value = value;
                     InvalidateReferenceTickets();
-                    SynchronizeTicketWidgetTints(IsMenuTicketTintEnabled(), value);
+                    SynchronizeRealTicketWidgetTints(IsMenuTicketTintEnabled(), value);
                     InvalidateOverlay();
                 }
             }, Ui("追踪功能总开关：控制历史、概率、已备、悬浮窗、菜单颜色和猜单；不影响麻团、无菜单或安全修复。", "Master tracking switch for history, probabilities, prepared state, the overlay, ticket colors, and guesses. Carnival, No Menu, and safety fixes remain independent."));
@@ -433,9 +433,9 @@ namespace OC2MenuManager
                 if (menuTicketTintEnabled != null)
                 {
                     menuTicketTintEnabled.Value = value;
-                    SynchronizeTicketWidgetTints(IsMenuTicketTintEnabled(), value);
+                    SynchronizeRealTicketWidgetTints(IsMenuTicketTintEnabled(), value);
                 }
-            }, Ui("给关卡里的菜单栏上色。", "Adds color to the in-level order tickets."));
+            }, Ui("只给真实菜单上色；猜单始终保留猜单颜色。", "Colors only real order tickets; guess tickets always keep their guess styling."));
             DrawColorRow(Ui("在单颜色", "On-Menu Color"), menuTicketOnMenuTintColor, Ui("菜单栏里“在单未备”的颜色。A 通道控制整张单的透明度。", "Color for orders that are on the menu but not prepared yet. The A channel controls full-order opacity."), delegate
             {
                 InvalidateTicketWidgets();

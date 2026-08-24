@@ -1367,17 +1367,19 @@ namespace OC2MenuManager
         }
 
         /// <summary>
-        /// Applies a user-visible ticket-tint availability change immediately while
-        /// leaving gameplay-driven refreshes on their existing batched schedule.
+        /// Applies a user-visible real-ticket tint change immediately while leaving
+        /// guess-ticket presentation untouched and gameplay refreshes batched.
         /// </summary>
-        private static void SynchronizeTicketWidgetTints(bool shouldTint, bool reconcileExisting)
+        private static void SynchronizeRealTicketWidgetTints(
+            bool shouldTintRealTickets,
+            bool reconcileExistingRealTickets)
         {
-            lastMenuTicketTintEnabled = shouldTint;
-            if (!shouldTint)
+            lastMenuTicketTintEnabled = shouldTintRealTickets;
+            if (!shouldTintRealTickets)
             {
                 if (TicketWidgetsByInstanceId.Count > 0)
                 {
-                    RestoreAllTicketWidgetTints();
+                    RestoreRealTicketWidgetTints();
                 }
 
                 ticketWidgetReconciliationPending = false;
@@ -1388,7 +1390,7 @@ namespace OC2MenuManager
             }
 
             bool inActiveRound = IsInActiveRound();
-            if (reconcileExisting && inActiveRound)
+            if (reconcileExistingRealTickets && inActiveRound)
             {
                 ticketWidgetReconciliationAttempts = 0;
                 ticketWidgetReconciliationPending = true;
@@ -1554,7 +1556,7 @@ namespace OC2MenuManager
             if (TicketWidgetsByInstanceId.Count == 0)
             {
                 ticketWidgetsDirty = reconciliationNeedsRetry;
-                ticketWidgetTintActive = false;
+                realTicketWidgetTintActive = false;
                 nextTicketWidgetRefreshFrame = reconciliationNeedsRetry
                     ? Time.frameCount + TicketWidgetRetryIntervalFrames
                     : 0;
@@ -1570,9 +1572,9 @@ namespace OC2MenuManager
 
             if (!HasAnyTrackedRecipes(scene))
             {
-                if (ticketWidgetTintActive)
+                if (realTicketWidgetTintActive)
                 {
-                    RestoreAllTicketWidgetTints();
+                    RestoreRealTicketWidgetTints();
                 }
 
                 ticketWidgetsDirty = false;
@@ -1627,8 +1629,9 @@ namespace OC2MenuManager
                 });
             }
 
+            bool tintRealTickets = IsMenuTicketTintEnabled();
             bool needsRetry = false;
-            bool appliedTint = false;
+            bool appliedRealTicketTint = false;
             Color referenceDisplayTint = GetReferenceTicketDisplayTintColor();
             Color referenceTopTint = GetReferenceTicketTopTintColor(referenceDisplayTint);
             Color onMenuTint = GetMenuTicketOnMenuTintColor();
@@ -1642,10 +1645,11 @@ namespace OC2MenuManager
                     {
                         needsRetry = true;
                     }
-                    else
-                    {
-                        appliedTint = true;
-                    }
+                    continue;
+                }
+
+                if (!tintRealTickets)
+                {
                     continue;
                 }
 
@@ -1676,13 +1680,13 @@ namespace OC2MenuManager
                 }
                 else
                 {
-                    appliedTint = true;
+                    appliedRealTicketTint = true;
                 }
             }
 
             needsRetry |= reconciliationNeedsRetry;
             ticketWidgetsDirty = needsRetry;
-            ticketWidgetTintActive = appliedTint;
+            realTicketWidgetTintActive = appliedRealTicketTint;
             nextTicketWidgetRefreshFrame = needsRetry ? Time.frameCount + TicketWidgetRetryIntervalFrames : 0;
         }
 

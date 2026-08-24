@@ -23,8 +23,8 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 ## Live ticket tint controls
 
 1. Confirm the visible master row is named `启用菜单追踪 / Enable Menu Tracking`; the existing persisted `启用历史菜单追踪` value must remain unchanged after upgrading.
-2. In a standard round with several tracked and untracked real orders plus guess tickets, turn `Ticket Colors` off. Verify existing widgets restore their original tint, opacity, interaction, and raycast state on the next repaint without changing history, probabilities, prepared counts, selections, or guesses.
-3. Turn `Ticket Colors` back on and verify all existing tracked real and guess tickets recolor on the next repaint without waiting for a new order. Untracked real tickets must remain at their original color.
+2. In a standard round with several tracked and untracked real orders plus guess tickets, turn `Ticket Colors` off. Verify only real widgets restore their original tint, opacity, interaction, and raycast state on the next repaint. Active guesses must retain exactly the same configured guess color and opacity, and history, probabilities, prepared counts, selections, and guesses must remain unchanged.
+3. Turn `Ticket Colors` back on and verify all existing tracked real tickets recolor on the next repaint without waiting for a new order. Guess tickets must remain visually unchanged and untracked real tickets must remain at their original color.
 4. Disable `Enable Menu Tracking`, allow more real orders to appear, then re-enable it. Verify every existing real ticket is discovered through its active-order UI token and recolored immediately.
 5. Repeat the activation test in couch versus with both teams using the same recipe ID, and with Recipe Extension six-ticket mode plus enough guesses to fill the ten-ticket bar. Verify each team remains correctly registered and no ticket collection is reordered or modified by reconciliation.
 6. Repeat several off/on cycles with translucent colors. Verify no CanvasGroup leak, opacity drift, stuck interaction/raycast setting, repeated warning, or steady-state ticket scan appears.

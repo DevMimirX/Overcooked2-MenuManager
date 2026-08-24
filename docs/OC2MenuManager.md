@@ -202,7 +202,9 @@ This is one of the heavier features in the mod. If you need better performance, 
 #### Ticket Colors
 
 - enables color tinting on the real order cards at the top of the screen
-- turning it off immediately restores existing tickets; turning it on immediately recolors existing tracked real and guess tickets on the next repaint
+- turning it off immediately restores existing real tickets without changing active guess tickets
+- guess tickets always retain their configured `Guess Color` and opacity independently of this toggle
+- turning it on immediately recolors existing tracked real tickets on the next repaint
 - enabling `Enable Menu Tracking` during a round also discovers and recolors orders that were already visible
 
 Color rows:

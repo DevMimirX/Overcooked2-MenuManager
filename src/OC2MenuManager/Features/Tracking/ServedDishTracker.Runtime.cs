@@ -195,7 +195,9 @@ namespace OC2MenuManager
 
         private static void InvalidateTicketWidgets()
         {
-            if (!IsMenuTicketTintEnabled() && !ticketWidgetTintActive)
+            if (!IsMenuTicketTintEnabled()
+                && !realTicketWidgetTintActive
+                && ReferenceTicketStates.Count == 0)
             {
                 ticketWidgetsDirty = false;
                 nextTicketWidgetRefreshFrame = 0;
@@ -316,7 +318,7 @@ namespace OC2MenuManager
             ticketWidgetsDirty = false;
             ticketWidgetReconciliationPending = false;
             ticketWidgetReconciliationAttempts = 0;
-            ticketWidgetTintActive = false;
+            realTicketWidgetTintActive = false;
             nextTicketWidgetRefreshFrame = 0;
         }
 
@@ -433,7 +435,20 @@ namespace OC2MenuManager
                 RestoreTicketWidgetTint(state);
             }
 
-            ticketWidgetTintActive = false;
+            realTicketWidgetTintActive = false;
+        }
+
+        private static void RestoreRealTicketWidgetTints()
+        {
+            foreach (TicketWidgetState state in TicketWidgetsByInstanceId.Values)
+            {
+                if (state != null && !state.IsReferenceTicket)
+                {
+                    RestoreTicketWidgetTint(state);
+                }
+            }
+
+            realTicketWidgetTintActive = false;
         }
 
         private static void IncrementOnMenuCount(string sceneName, TeamID teamId, int recipeId)

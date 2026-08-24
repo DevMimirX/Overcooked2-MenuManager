@@ -53,7 +53,7 @@ namespace OC2MenuManager
                 TrackerSection,
                 "菜单颜色",
                 true,
-                "是否给关卡里的菜单栏上色。关闭后可以进一步降低运行开销。");
+                "是否给关卡里的真实菜单上色。猜单始终使用猜单颜色，不受此开关影响。关闭后可以进一步降低运行开销。");
             menuTicketOnMenuTintColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "在单颜色",
@@ -242,7 +242,7 @@ namespace OC2MenuManager
             bool shouldTintMenuTickets = IsMenuTicketTintEnabled();
             if (shouldTintMenuTickets != lastMenuTicketTintEnabled)
             {
-                SynchronizeTicketWidgetTints(shouldTintMenuTickets, shouldTintMenuTickets);
+                SynchronizeRealTicketWidgetTints(shouldTintMenuTickets, shouldTintMenuTickets);
             }
 
             if (IsPreparedTrackingEnabled())
@@ -279,15 +279,13 @@ namespace OC2MenuManager
 
                 if (!shouldTintMenuTickets)
                 {
-                    if (ticketWidgetTintActive)
+                    if (realTicketWidgetTintActive)
                     {
-                        RestoreAllTicketWidgetTints();
+                        RestoreRealTicketWidgetTints();
                     }
-
-                    ticketWidgetsDirty = false;
-                    nextTicketWidgetRefreshFrame = 0;
                 }
-                else if (ticketWidgetsDirty)
+
+                if (ticketWidgetsDirty)
                 {
                     if (Time.frameCount >= nextTicketWidgetRefreshFrame)
                     {

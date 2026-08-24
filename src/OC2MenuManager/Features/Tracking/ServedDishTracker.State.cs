@@ -315,7 +315,7 @@ namespace OC2MenuManager
         private static bool ticketWidgetsDirty = true;
         private static bool ticketWidgetReconciliationPending;
         private static bool referenceTicketsDirty = true;
-        private static bool ticketWidgetTintActive;
+        private static bool realTicketWidgetTintActive;
         private static bool invalidReferenceTableWarningLogged;
         private static bool invalidRealTableWarningLogged;
         private static bool invalidTableReleaseWarningLogged;
