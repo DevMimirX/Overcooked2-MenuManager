@@ -38,7 +38,12 @@ namespace OC2MenuManager
                 TrackerSection,
                 "启用历史菜单追踪",
                 migratedEnabledValue ?? true,
-                "标准关卡历史菜单追踪。先在独立菜单窗口里选择关卡，再勾选要追踪的菜品。进入关卡时会自动锁定为当前关卡。");
+                "菜单追踪功能总开关。控制历史、概率、已备、悬浮窗、菜单颜色和猜单；不影响麻团、无菜单或安全修复。先在独立菜单窗口里选择关卡和菜品。");
+            overlayEnabled = _MODEntry.SettingsConfig.Bind<bool>(
+                TrackerSection,
+                "显示悬浮窗",
+                false,
+                "是否显示左侧历史菜单追踪悬浮窗。只控制悬浮窗，不影响历史记录、已备跟踪、菜单颜色或猜单。");
             preparedTrackingEnabled = _MODEntry.SettingsConfig.Bind<bool>(
                 TrackerSection,
                 "启用已备跟踪",
@@ -237,8 +242,7 @@ namespace OC2MenuManager
             bool shouldTintMenuTickets = IsMenuTicketTintEnabled();
             if (shouldTintMenuTickets != lastMenuTicketTintEnabled)
             {
-                lastMenuTicketTintEnabled = shouldTintMenuTickets;
-                InvalidateTicketWidgets();
+                SynchronizeTicketWidgetTints(shouldTintMenuTickets, shouldTintMenuTickets);
             }
 
             if (IsPreparedTrackingEnabled())
@@ -369,7 +373,7 @@ namespace OC2MenuManager
         {
             Event currentEvent = Event.current;
             bool isRepaintEvent = currentEvent == null || currentEvent.type == EventType.Repaint;
-            if (overlayVisible && isRepaintEvent)
+            if (overlayEnabled != null && overlayEnabled.Value && overlayVisible && isRepaintEvent)
             {
                 overlayHost.OnGUI();
             }

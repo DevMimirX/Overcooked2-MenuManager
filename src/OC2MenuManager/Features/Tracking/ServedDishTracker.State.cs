@@ -75,6 +75,7 @@ namespace OC2MenuManager
         private const int PreparedBootstrapFallbackIntervalFrames = 3600;
         private const int TicketWidgetRefreshDelayFrames = 30;
         private const int TicketWidgetRetryIntervalFrames = 90;
+        private const int MaxTicketWidgetReconciliationAttempts = 8;
         private const int BaseMenuTicketCapacity = 5;
         private const int MaxCombinedActiveTicketCount = 10;
         private const int MaxReferenceTicketDisplayCount = 5;
@@ -192,6 +193,7 @@ namespace OC2MenuManager
         };
 
         private static ConfigEntry<bool> enabled;
+        private static ConfigEntry<bool> overlayEnabled;
         private static ConfigEntry<bool> preparedTrackingEnabled;
         private static ConfigEntry<bool> menuTicketTintEnabled;
         private static ConfigEntry<TrackerLanguage> languageMode;
@@ -274,6 +276,9 @@ namespace OC2MenuManager
         private static readonly FieldInfo ActiveOrderRecipeListEntryField = ActiveOrderType != null
             ? ActiveOrderType.GetField("RecipeListEntry", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             : null;
+        private static readonly FieldInfo ActiveOrderUiTokenField = ActiveOrderType != null
+            ? ActiveOrderType.GetField("UIToken", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            : null;
         private static readonly FieldInfo RecipeFlowMaxOrdersAllowedField = typeof(RecipeFlowGUI).GetField("m_maxOrdersAllowed", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeFlowOccupiedTablesField = typeof(RecipeFlowGUI).GetField("m_occupiedTables", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeFlowWidgetsField = typeof(RecipeFlowGUI).GetField("m_widgets", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -300,6 +305,7 @@ namespace OC2MenuManager
         private static int nextPreparedBootstrapFrame;
         private static int nextPreparedBootstrapFallbackFrame;
         private static int nextTicketWidgetRefreshFrame;
+        private static int ticketWidgetReconciliationAttempts;
         private static int nextReferenceTicketSyncFrame;
         private static int nextHotkeyFilePollFrame;
         private static int nextOverlayRefreshFrame;
@@ -307,12 +313,15 @@ namespace OC2MenuManager
         private static bool overlayVisible;
         private static bool overlayDirty = true;
         private static bool ticketWidgetsDirty = true;
+        private static bool ticketWidgetReconciliationPending;
         private static bool referenceTicketsDirty = true;
         private static bool ticketWidgetTintActive;
         private static bool invalidReferenceTableWarningLogged;
         private static bool invalidRealTableWarningLogged;
         private static bool invalidTableReleaseWarningLogged;
         private static bool ticketAdmissionFailureWarningLogged;
+        private static bool ticketWidgetReconciliationContractWarningLogged;
+        private static bool ticketWidgetReconciliationRetryWarningLogged;
         private static bool referenceTicketAddFailureLogged;
         private static bool trackingHookFailureWarningLogged;
         private static bool cachedCurrentSceneInfoValid;

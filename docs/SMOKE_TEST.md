@@ -7,9 +7,28 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 1. Install only BepInEx and the packaged `OC2MenuManager.dll`; do not install HostUtilities, OC2Mods.Shared, ConfigurationManager, OC2NoMenu, OC2DIYLevel, or Recipe Extension.
 2. Start Overcooked! 2 and confirm the BepInEx log loads `com.ch3ngyz.plugin.OC2MenuManager` without missing-assembly errors.
 3. Press `F6` and verify the settings window opens.
-4. Enter a standard scene and verify dish selection, history overlay, prepared counts, ticket tinting, and guess tickets.
+4. With a clean configuration, verify history tracking is available but `Show Floating Overlay` is off and the left panel stays hidden in a standard scene. Turn it on and verify dish selection, history overlay, prepared counts, ticket tinting, and guess tickets.
 5. Set five guess tickets and keep five real tickets active. Verify successful delivery removes exactly one real ticket and rotates guesses; expiration plays the failure/reset behavior but keeps the same real ticket and does not change served history. Confirm the active total stays at ten and no negative-table or capacity warning repeats.
 6. Exercise the carnival menu toggles and built-in No Menu mode, then return to the frontend without an exception.
+
+## Floating overlay quick controls
+
+1. Confirm `Show Floating Overlay` appears directly below `Enable Menu Tracking`, `Max Guess Count` appears immediately below it exactly once, and the advanced position, size, font, alignment, and color controls remain in `Overlay`.
+2. In a standard round, serve and prepare dishes with the overlay on. Turn it off and confirm the panel disappears on the next repaint while served/on-menu/prepared counts, probabilities, selected dishes, ticket colors, and guess orders continue unchanged.
+3. Turn the overlay back on and confirm the current view rebuilds on the next update without resetting any state.
+4. Change the toggle, finish the round, change scenes, and restart the game. Verify the saved value persists. Remove only the `显示悬浮窗` key from a disposable configuration and verify it defaults to off again.
+5. Verify disabled history tracking, active No Menu, Horde, out-of-round state, and a missing or empty current-scene catalog suppress the panel even when `Show Floating Overlay` is on.
+6. Move `Max Guess Count` through `0-5`; verify `0` removes guesses, each other value remains effective, and overlay visibility never changes the guess count.
+
+## Live ticket tint controls
+
+1. Confirm the visible master row is named `启用菜单追踪 / Enable Menu Tracking`; the existing persisted `启用历史菜单追踪` value must remain unchanged after upgrading.
+2. In a standard round with several tracked and untracked real orders plus guess tickets, turn `Ticket Colors` off. Verify existing widgets restore their original tint, opacity, interaction, and raycast state on the next repaint without changing history, probabilities, prepared counts, selections, or guesses.
+3. Turn `Ticket Colors` back on and verify all existing tracked real and guess tickets recolor on the next repaint without waiting for a new order. Untracked real tickets must remain at their original color.
+4. Disable `Enable Menu Tracking`, allow more real orders to appear, then re-enable it. Verify every existing real ticket is discovered through its active-order UI token and recolored immediately.
+5. Repeat the activation test in couch versus with both teams using the same recipe ID, and with Recipe Extension six-ticket mode plus enough guesses to fill the ten-ticket bar. Verify each team remains correctly registered and no ticket collection is reordered or modified by reconciliation.
+6. Repeat several off/on cycles with translucent colors. Verify no CanvasGroup leak, opacity drift, stuck interaction/raycast setting, repeated warning, or steady-state ticket scan appears.
+7. Confirm out-of-round, No Menu, Horde, disabled tracking, temporarily unavailable controllers, and an intentionally broken reflection contract leave base-game visuals safe; transient controller availability retries at the bounded interval and a missing contract logs once.
 
 ## Compatibility data
 
@@ -52,7 +71,7 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 7. Serve and expire early, middle, and late `s_rw_5` orders. Verify successful score/history updates occur once and remove the matching ticket; expiration leaves score/history and the active ticket unchanged while resetting its timer. Confirm no invalid table release or unintended stuck order remains.
 8. Run another DIY level with Recipe Extension enabled and verify both catalogs coexist without duplicate IDs or exceptions.
 9. Disable Recipe Extension for the next round and verify generated-only selector entries are removed from the active scene catalog.
-10. Disable Menu Manager history tracking while keeping Recipe Extension enabled. Fill the available real-order slots and verify every incoming real ticket still receives capacity and removes normally.
+10. Disable `Enable Menu Tracking` while keeping Recipe Extension enabled. Fill the available real-order slots and verify every incoming real ticket still receives capacity and removes normally.
 11. On `Day_3_4`, test Good Menu alone and Good Menu plus Good Cake. Verify generated recipes remain eligible, opening restrictions affect only the original Carnival indices, and forced-cake checkpoints select the original cake entries without corrupting extension frequencies.
 12. Enable the fixed/TAS Carnival menu and verify its exact base-recipe sequence still takes precedence over Recipe Extension.
 13. Verify generated dishes appear automatically in both `F6` and the in-round overlay after server/client synchronization, without pressing Refresh. Confirm identical display names with different IDs remain separate and show their IDs.
@@ -98,7 +117,7 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 4. Add or remove an order in a 153-entry Recipe Extension pool and verify probability reconstruction occurs once per affected team; the overlay, prepared candidates, and guess-ticket sync must reuse that result until the next invalidating event.
 5. In couch versus, verify each team retains an independent sorted-row/probability cache and switching overlay sections does not force the other team's cache to rebuild.
 6. Repeat order changes for at least one minute and verify the ordered Recipe Extension snapshot is reflected only during round synchronization; collection/array allocations must not recur from entry expansion, reconstructed count sets, Carnival weight buffers, or prepared-candidate team lists after their initial capacity warm-up.
-7. Disable history tracking and close `F6`; verify no controller lookup, ticket registration/reorder, prepared maintenance, or overlay rebuild remains in the steady-state frame path. Real-ticket admission and invalid `ReleaseTable` protection must still work.
+7. Disable `Enable Menu Tracking` and close `F6`; verify no controller lookup, ticket registration/reorder, prepared maintenance, or overlay rebuild remains in the steady-state frame path. Real-ticket admission and invalid `ReleaseTable` protection must still work.
 8. On a non-16:9 resolution, verify DPI recalculation occurs only after an actual width/height change.
 9. Dirty one prepared source and verify its delivered composition is simplified once per refresh, while recipe simplifications are reused.
 10. Keep the settings window open and verify scene/category selector models are reused between source or selection changes; with the full scene dropdown open, only visible rows plus one overscan row per edge should be drawn.

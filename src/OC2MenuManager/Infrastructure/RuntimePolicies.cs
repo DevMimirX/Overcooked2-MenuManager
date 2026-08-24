@@ -54,6 +54,23 @@ namespace OC2MenuManager.Infrastructure
     }
 
     /// <summary>
+    /// Determines whether the optional tracker overlay may be presented. This
+    /// policy intentionally excludes collection, ticket, probability, and guess
+    /// state so hiding the panel never disables gameplay-facing tracking.
+    /// </summary>
+    internal static class OverlayVisibilityPolicy
+    {
+        internal static bool IsRuntimeEligible(
+            bool trackingEnabled,
+            bool overlayEnabled,
+            bool noMenuActive,
+            bool inActiveRound)
+        {
+            return trackingEnabled && overlayEnabled && !noMenuActive && inActiveRound;
+        }
+    }
+
+    /// <summary>
     /// Validates and calculates next-recipe probability data without depending on
     /// Unity or mutable game controllers.
     /// </summary>

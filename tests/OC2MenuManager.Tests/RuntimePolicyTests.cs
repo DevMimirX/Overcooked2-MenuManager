@@ -10,6 +10,28 @@ namespace OC2MenuManager.Tests;
 public sealed class RuntimePolicyTests
 {
     [Theory]
+    [InlineData(true, true, false, true, true)]
+    [InlineData(false, true, false, true, false)]
+    [InlineData(true, false, false, true, false)]
+    [InlineData(true, true, true, true, false)]
+    [InlineData(true, true, false, false, false)]
+    public void FloatingOverlayRequiresExplicitVisibilityAndAnEligibleTrackedRound(
+        bool trackingEnabled,
+        bool overlayEnabled,
+        bool noMenuActive,
+        bool inActiveRound,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            OverlayVisibilityPolicy.IsRuntimeEligible(
+                trackingEnabled,
+                overlayEnabled,
+                noMenuActive,
+                inActiveRound));
+    }
+
+    [Theory]
     [InlineData(5, 5, 5, 10)]
     [InlineData(6, 6, 4, 10)]
     [InlineData(8, 8, 2, 10)]

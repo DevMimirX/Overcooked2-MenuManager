@@ -314,6 +314,8 @@ namespace OC2MenuManager
             TicketWidgetsByInstanceId.Clear();
             TicketWidgetsBuffer.Clear();
             ticketWidgetsDirty = false;
+            ticketWidgetReconciliationPending = false;
+            ticketWidgetReconciliationAttempts = 0;
             ticketWidgetTintActive = false;
             nextTicketWidgetRefreshFrame = 0;
         }
@@ -646,19 +648,13 @@ namespace OC2MenuManager
                 || DirtyPreparedSourceIds.Count > 0;
         }
 
-        private static bool ShouldShowOverlay()
-        {
-            return ShouldShowOverlay(IsInActiveRound());
-        }
-
         private static bool ShouldShowOverlay(bool inActiveRound)
         {
-            if (enabled == null || !enabled.Value || NoMenuMode.IsActiveForRound)
-            {
-                return false;
-            }
-
-            if (!inActiveRound)
+            if (!OverlayVisibilityPolicy.IsRuntimeEligible(
+                enabled != null && enabled.Value,
+                overlayEnabled != null && overlayEnabled.Value,
+                NoMenuMode.IsActiveForRound,
+                inActiveRound))
             {
                 return false;
             }

@@ -384,16 +384,30 @@ namespace OC2MenuManager
         private static void DrawTrackingSettingsSection()
         {
             DrawSectionHeader(Ui("历史菜单追踪", "Menu History Tracker"));
-            DrawToggleRow(Ui("启用历史菜单追踪", "Enable History Tracking"), enabled != null && enabled.Value, delegate(bool value)
+            DrawToggleRow(Ui("启用菜单追踪", "Enable Menu Tracking"), enabled != null && enabled.Value, delegate(bool value)
             {
                 if (enabled != null)
                 {
                     enabled.Value = value;
                     InvalidateReferenceTickets();
-                    InvalidateTicketWidgets();
+                    SynchronizeTicketWidgetTints(IsMenuTicketTintEnabled(), value);
                     InvalidateOverlay();
                 }
-            }, Ui("标准关卡历史菜单追踪。", "Tracks menu history on standard levels."));
+            }, Ui("追踪功能总开关：控制历史、概率、已备、悬浮窗、菜单颜色和猜单；不影响麻团、无菜单或安全修复。", "Master tracking switch for history, probabilities, prepared state, the overlay, ticket colors, and guesses. Carnival, No Menu, and safety fixes remain independent."));
+            DrawToggleRow(Ui("显示悬浮窗", "Show Floating Overlay"), overlayEnabled != null && overlayEnabled.Value, delegate(bool value)
+            {
+                if (overlayEnabled != null)
+                {
+                    overlayEnabled.Value = value;
+                    overlayVisible = false;
+                    InvalidateOverlay();
+                    if (value)
+                    {
+                        nextOverlayRefreshFrame = 0;
+                    }
+                }
+            }, Ui("只控制左侧悬浮窗；不会关闭历史记录、已备跟踪、菜单颜色或猜单。", "Controls only the left floating overlay; history, prepared tracking, ticket colors, and guess orders continue."));
+            DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, MaxReferenceTicketDisplayCount, Ui("猜单数量上限。实际数量会自动降到 10 减去当前真实订单数；真实订单永远优先。0 关闭。", "Maximum extra guess orders. The active count automatically drops to 10 minus the current real-order count; real orders always take priority. Set to 0 to disable."));
             DrawToggleRow(Ui("启用已备跟踪", "Enable Prepared Tracking"), preparedTrackingEnabled != null && preparedTrackingEnabled.Value, delegate(bool value)
             {
                 if (preparedTrackingEnabled != null)
@@ -419,7 +433,7 @@ namespace OC2MenuManager
                 if (menuTicketTintEnabled != null)
                 {
                     menuTicketTintEnabled.Value = value;
-                    InvalidateTicketWidgets();
+                    SynchronizeTicketWidgetTints(IsMenuTicketTintEnabled(), value);
                 }
             }, Ui("给关卡里的菜单栏上色。", "Adds color to the in-level order tickets."));
             DrawColorRow(Ui("在单颜色", "On-Menu Color"), menuTicketOnMenuTintColor, Ui("菜单栏里“在单未备”的颜色。A 通道控制整张单的透明度。", "Color for orders that are on the menu but not prepared yet. The A channel controls full-order opacity."), delegate
@@ -430,7 +444,6 @@ namespace OC2MenuManager
             {
                 InvalidateTicketWidgets();
             });
-            DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, MaxReferenceTicketDisplayCount, Ui("猜单数量上限。实际数量会自动降到 10 减去当前真实订单数；真实订单永远优先。0 关闭。", "Maximum extra guess orders. The active count automatically drops to 10 minus the current real-order count; real orders always take priority. Set to 0 to disable."));
             DrawColorRow(Ui("猜单颜色", "Guess Color"), menuReferenceTicketTintColor, Ui("菜单栏里猜单的颜色。A 通道控制整张单的透明度，显示时会额外压暗一点。", "Color for guess orders. The A channel controls full-order opacity, and guess orders are rendered slightly dimmer on top of that."), delegate
             {
                 InvalidateTicketWidgets();

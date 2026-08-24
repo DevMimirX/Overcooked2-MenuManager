@@ -2,6 +2,7 @@
 // Real-ticket safety patches remain unconditional; cosmetic registration and
 // ordering run only when history tracking actually consumes that state.
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -138,7 +139,11 @@ namespace OC2MenuManager
                     return;
                 }
 
-                RegisterTicketWidget(widgetData.m_widget, _data.m_uID, widgetData.m_order, __instance);
+                RegisterTicketWidget(
+                    widgetData.m_widget,
+                    _data.m_uID,
+                    widgetData.m_order,
+                    ResolveTeamForRecipeFlow(__instance));
                 if (!isReferenceTicket && ReferenceTicketStates.Count > 0)
                 {
                     ReorderActiveTicketWidgets(__instance);
@@ -954,7 +959,7 @@ namespace OC2MenuManager
             RecipeWidgetUIController widget,
             int recipeId,
             int order,
-            RecipeFlowGUI flow)
+            TeamID teamId)
         {
             if (widget == null)
             {
@@ -967,7 +972,7 @@ namespace OC2MenuManager
             {
                 existingState.RecipeId = recipeId;
                 existingState.Order = order;
-                existingState.TeamId = ResolveTeamForRecipeFlow(flow);
+                existingState.TeamId = teamId;
                 existingState.IsDyingReferenceTicket = false;
                 ticketWidgetsDirty = true;
                 return;
@@ -988,7 +993,7 @@ namespace OC2MenuManager
             state.InstanceId = instanceId;
             state.RecipeId = recipeId;
             state.Order = order;
-            state.TeamId = ResolveTeamForRecipeFlow(flow);
+            state.TeamId = teamId;
             state.Widget = widget;
             state.DisplayConfig = displayConfig;
             state.TopDisplayConfig = topDisplayConfig;
@@ -1361,13 +1366,198 @@ namespace OC2MenuManager
             return color;
         }
 
+        /// <summary>
+        /// Applies a user-visible ticket-tint availability change immediately while
+        /// leaving gameplay-driven refreshes on their existing batched schedule.
+        /// </summary>
+        private static void SynchronizeTicketWidgetTints(bool shouldTint, bool reconcileExisting)
+        {
+            lastMenuTicketTintEnabled = shouldTint;
+            if (!shouldTint)
+            {
+                if (TicketWidgetsByInstanceId.Count > 0)
+                {
+                    RestoreAllTicketWidgetTints();
+                }
+
+                ticketWidgetReconciliationPending = false;
+                ticketWidgetReconciliationAttempts = 0;
+                ticketWidgetsDirty = false;
+                nextTicketWidgetRefreshFrame = 0;
+                return;
+            }
+
+            bool inActiveRound = IsInActiveRound();
+            if (reconcileExisting && inActiveRound)
+            {
+                ticketWidgetReconciliationAttempts = 0;
+                ticketWidgetReconciliationPending = true;
+            }
+            ticketWidgetsDirty = true;
+            nextTicketWidgetRefreshFrame = 0;
+            if (inActiveRound)
+            {
+                RefreshTicketWidgetTints();
+            }
+        }
+
+        /// <summary>
+        /// Rehydrates presentation state for real tickets that predate tracker
+        /// activation by resolving each base-game active order through its UI token.
+        /// The method reads authoritative controller collections without modifying them.
+        /// </summary>
+        private static bool TryReconcileActiveTicketWidgets()
+        {
+            if (ActiveOrdersField == null
+                || ActiveOrderRecipeListEntryField == null
+                || ActiveOrderUiTokenField == null
+                || ClientOrderControllerGuiField == null)
+            {
+                if (!ticketWidgetReconciliationContractWarningLogged)
+                {
+                    ticketWidgetReconciliationContractWarningLogged = true;
+                    _MODEntry.LogWarning("[ServedDishTracker] Existing order tickets could not be recolored because the active-order UI-token contract is unavailable. Base-game ticket visuals were left unchanged.");
+                }
+
+                return true;
+            }
+
+            List<TeamFlowContext> flowContexts = GetReferenceTicketFlowContexts();
+            if (flowContexts.Count == 0)
+            {
+                return false;
+            }
+
+            bool complete = true;
+            for (int i = 0; i < flowContexts.Count; i++)
+            {
+                TeamFlowContext context = flowContexts[i];
+                if (context == null || context.OrderController == null || context.Flow == null)
+                {
+                    complete = false;
+                    continue;
+                }
+
+                IList activeOrders;
+                try
+                {
+                    activeOrders = ActiveOrdersField.GetValue(context.OrderController) as IList;
+                }
+                catch (Exception ex)
+                {
+                    LogTrackingHookFailure("reading active tickets for live recoloring", ex);
+                    complete = false;
+                    continue;
+                }
+
+                if (activeOrders == null)
+                {
+                    complete = false;
+                    continue;
+                }
+
+                for (int j = 0; j < activeOrders.Count; j++)
+                {
+                    try
+                    {
+                        object activeOrder = activeOrders[j];
+                        if (activeOrder == null)
+                        {
+                            complete = false;
+                            continue;
+                        }
+
+                        RecipeList.Entry recipeEntry = ActiveOrderRecipeListEntryField.GetValue(activeOrder) as RecipeList.Entry;
+                        object tokenValue = ActiveOrderUiTokenField.GetValue(activeOrder);
+                        if (recipeEntry == null
+                            || recipeEntry.m_order == null
+                            || !(tokenValue is RecipeFlowGUI.ElementToken))
+                        {
+                            complete = false;
+                            continue;
+                        }
+
+                        RecipeFlowGUI.RecipeWidgetData widgetData = context.Flow.GetData((RecipeFlowGUI.ElementToken)tokenValue);
+                        if (widgetData == null || widgetData.m_widget == null)
+                        {
+                            complete = false;
+                            continue;
+                        }
+
+                        RegisterTicketWidget(
+                            widgetData.m_widget,
+                            recipeEntry.m_order.m_uID,
+                            widgetData.m_order,
+                            context.TeamId);
+                        if (!TicketWidgetsByInstanceId.ContainsKey(widgetData.m_widget.GetInstanceID()))
+                        {
+                            complete = false;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        LogTrackingHookFailure("reconciling an existing ticket for live recoloring", ex);
+                        complete = false;
+                    }
+                }
+            }
+
+            for (int i = 0; i < ReferenceTicketStates.Count; i++)
+            {
+                ReferenceTicketState referenceState = ReferenceTicketStates[i];
+                if (referenceState == null || referenceState.Widget == null || referenceState.Flow == null)
+                {
+                    continue;
+                }
+
+                int referenceOrder = GetReferenceTicketOrder(referenceState);
+                RegisterTicketWidget(
+                    referenceState.Widget,
+                    referenceState.RecipeId,
+                    referenceOrder,
+                    referenceState.TeamId);
+                if (!TicketWidgetsByInstanceId.ContainsKey(referenceState.Widget.GetInstanceID()))
+                {
+                    complete = false;
+                    continue;
+                }
+
+                ApplyReferenceTicketPresentation(referenceState, referenceOrder);
+            }
+
+            return complete;
+        }
+
         private static void RefreshTicketWidgetTints()
         {
+            bool reconciliationNeedsRetry = false;
+            if (ticketWidgetReconciliationPending
+                || (ticketWidgetReconciliationAttempts == 0
+                    && TicketWidgetsByInstanceId.Count == 0
+                    && IsMenuTicketTintEnabled()
+                    && IsInActiveRound()))
+            {
+                ticketWidgetReconciliationAttempts++;
+                bool reconciliationComplete = TryReconcileActiveTicketWidgets();
+                ticketWidgetReconciliationPending = !reconciliationComplete
+                    && ticketWidgetReconciliationAttempts < MaxTicketWidgetReconciliationAttempts;
+                if (!reconciliationComplete
+                    && !ticketWidgetReconciliationPending
+                    && !ticketWidgetReconciliationRetryWarningLogged)
+                {
+                    ticketWidgetReconciliationRetryWarningLogged = true;
+                    _MODEntry.LogWarning("[ServedDishTracker] Existing order-ticket recoloring did not become available after bounded retries. Base-game visuals were preserved; newly added tickets can still register normally.");
+                }
+                reconciliationNeedsRetry = ticketWidgetReconciliationPending;
+            }
+
             if (TicketWidgetsByInstanceId.Count == 0)
             {
-                ticketWidgetsDirty = false;
+                ticketWidgetsDirty = reconciliationNeedsRetry;
                 ticketWidgetTintActive = false;
-                nextTicketWidgetRefreshFrame = 0;
+                nextTicketWidgetRefreshFrame = reconciliationNeedsRetry
+                    ? Time.frameCount + TicketWidgetRetryIntervalFrames
+                    : 0;
                 return;
             }
 
@@ -1490,6 +1680,7 @@ namespace OC2MenuManager
                 }
             }
 
+            needsRetry |= reconciliationNeedsRetry;
             ticketWidgetsDirty = needsRetry;
             ticketWidgetTintActive = appliedTint;
             nextTicketWidgetRefreshFrame = needsRetry ? Time.frameCount + TicketWidgetRetryIntervalFrames : 0;

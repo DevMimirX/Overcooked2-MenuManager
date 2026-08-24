@@ -121,11 +121,12 @@ You can change the hotkey in either of these ways:
 1. Open the mod window with `F6`.
 2. In `Tracked Dishes`, choose a scene.
 3. Select the dishes you want to track.
-4. Turn on `Enable History Tracking`.
-5. If you want prepared-dish recognition, turn on `Enable Prepared Tracking`.
-6. If you want the real top order cards tinted, turn on `Ticket Colors`.
-7. Adjust `Max Guess Count` if you want extra guess orders on the top row.
-8. Adjust the `Overlay` position and font settings until the left-side panel fits your screen.
+4. Turn on `Enable Menu Tracking`.
+5. Turn on `Show Floating Overlay` if you want the left-side panel; it is off by default.
+6. Adjust `Max Guess Count` if you want extra guess orders on the top row.
+7. If you want prepared-dish recognition, turn on `Enable Prepared Tracking`.
+8. If you want the real top order cards tinted, turn on `Ticket Colors`.
+9. Adjust the advanced `Overlay` position and font settings until the panel fits your screen.
 
 ## Settings Window Layout
 
@@ -168,11 +169,20 @@ Recipe Extension dishes are generated from the real level at round initializatio
 
 This is the main tracking section.
 
-#### Enable History Tracking
+#### Enable Menu Tracking
 
-- enables the tracker on standard levels
-- drives the left overlay
-- drives guess-order selection for the top row
+- is the master switch for history, probabilities, prepared tracking, floating-overlay eligibility, ticket colors, and guess-order selection
+- leaves Carnival controls, No Menu, the settings window, and unconditional ticket-capacity safety fixes active when it is off
+- keeps its existing saved value; only the visible label changed
+
+#### Show Floating Overlay
+
+- appears directly below `Enable Menu Tracking`
+- defaults to `Off` when the setting has never been saved
+- controls only the left-side presentation; history, prepared tracking, ticket colors, probabilities, selections, and guess orders continue while it is off
+- applies immediately during a round and persists across rounds, scene changes, and game restarts
+
+`Max Guess Count` is placed immediately below this toggle for quick access.
 
 #### Enable Prepared Tracking
 
@@ -192,6 +202,8 @@ This is one of the heavier features in the mod. If you need better performance, 
 #### Ticket Colors
 
 - enables color tinting on the real order cards at the top of the screen
+- turning it off immediately restores existing tickets; turning it on immediately recolors existing tracked real and guess tickets on the next repaint
+- enabling `Enable Menu Tracking` during a round also discovers and recolors orders that were already visible
 
 Color rows:
 
@@ -209,6 +221,8 @@ Opacity:
 - guess orders are rendered a little dimmer than the chosen base color so they stay visually secondary
 
 #### Max Guess Count
+
+This row appears immediately below `Show Floating Overlay` and is shown only once in the settings window.
 
 Range:
 
@@ -313,7 +327,7 @@ These are special gameplay-related toggles.
 
 ### Overlay
 
-This section controls the in-game text panel on the left side.
+This section keeps the advanced position, size, font, alignment, and color controls for the in-game text panel. Panel visibility is controlled by `Show Floating Overlay` near the top of `Menu History Tracker`.
 
 Available settings:
 
@@ -353,7 +367,7 @@ Items:
 
 ## How the Overlay Works
 
-The left overlay is the compact todo-style panel.
+The left overlay is the compact todo-style panel. It is hidden by default until both `Enable Menu Tracking` and `Show Floating Overlay` are on. Turning only the overlay off does not clear or pause any tracking state, so turning it back on rebuilds the current view without resetting counts.
 
 It shows:
 
@@ -541,6 +555,7 @@ They show off-menu candidates that still have a positive chance to appear.
 
 Try:
 
+- turning off `Show Floating Overlay` when you do not need the left panel
 - lowering `Max Guess Count`
 - lowering `Overlay Dish Limit`
 - increasing the text-length settings
@@ -571,7 +586,7 @@ If you only want the essentials:
 3. press `F6`
 4. choose a scene
 5. pick the dishes to track
-6. enable `Enable History Tracking`
-7. optionally enable `Enable Prepared Tracking` and `Ticket Colors`
+6. enable `Enable Menu Tracking`
+7. optionally enable `Show Floating Overlay`, `Enable Prepared Tracking`, and `Ticket Colors`
 
 That is enough for normal use.
