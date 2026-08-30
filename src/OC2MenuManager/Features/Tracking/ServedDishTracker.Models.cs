@@ -311,6 +311,7 @@ namespace OC2MenuManager
         private sealed class ReferenceTicketState
         {
             public int FlowInstanceId;
+            public int TableNumber;
             public TeamID TeamId;
             public RecipeFlowGUI Flow;
             public int RecipeId;

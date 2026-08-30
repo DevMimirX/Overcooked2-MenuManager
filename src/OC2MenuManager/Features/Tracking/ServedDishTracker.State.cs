@@ -303,6 +303,7 @@ namespace OC2MenuManager
         private static readonly FieldInfo RecipeFlowWidgetsField = typeof(RecipeFlowGUI).GetField("m_widgets", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeFlowNextIndexField = typeof(RecipeFlowGUI).GetField("m_nextIndex", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly MethodInfo RecipeFlowGetMaxOrderNumberMethod = AccessTools.Method(typeof(RecipeFlowGUI), "GetMaxOrderNumber");
+        private static readonly FieldInfo ClientPlatePlateField = typeof(ClientPlate).GetField("m_plate", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo FrontendCoopGameSessionPrefabsField = AccessTools.Field(typeof(T17FrontendFlow), "m_CoopGameSessionPrefabs");
         private static readonly FieldInfo FrontendCompetitiveGameSessionPrefabsField = AccessTools.Field(typeof(T17FrontendFlow), "m_CompetitiveGameSessionPrefabs");
         private static readonly FieldInfo RecipeWidgetRecipeTreeField = typeof(RecipeWidgetUIController).GetField("m_recipeTree", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -343,6 +344,7 @@ namespace OC2MenuManager
         private static bool ticketWidgetReconciliationContractWarningLogged;
         private static bool ticketWidgetReconciliationRetryWarningLogged;
         private static bool referenceTicketAddFailureLogged;
+        private static bool referenceTicketRemovalFailureLogged;
         private static bool trackingHookFailureWarningLogged;
         private static bool cachedCurrentSceneInfoValid;
         private static bool lastMenuTicketTintEnabled = true;

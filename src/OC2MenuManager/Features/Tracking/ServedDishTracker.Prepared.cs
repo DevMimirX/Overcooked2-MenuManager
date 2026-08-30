@@ -532,7 +532,31 @@ namespace OC2MenuManager
             try
             {
                 bool allowCookedFallback = source.CookingHandler != null;
-                int canonicalRecipeId = MatchPreparedRecipe(scene, composition, allowCookedFallback, source);
+                bool sourceIsPlate = source.Component is ClientPlate;
+                PlatingStepData sourcePlatingStep = null;
+                if (sourceIsPlate)
+                {
+                    if (ClientPlatePlateField == null)
+                    {
+                        throw new MissingFieldException(typeof(ClientPlate).FullName, "m_plate");
+                    }
+
+                    Plate plate = ClientPlatePlateField.GetValue(source.Component) as Plate;
+                    if (plate == null)
+                    {
+                        throw new InvalidOperationException("The synchronized Plate backing a ClientPlate is unavailable.");
+                    }
+
+                    sourcePlatingStep = plate.m_platingStep;
+                }
+
+                int canonicalRecipeId = MatchPreparedRecipe(
+                    scene,
+                    composition,
+                    allowCookedFallback,
+                    source,
+                    sourceIsPlate,
+                    sourcePlatingStep);
                 source.ConsecutiveRefreshFailures = 0;
                 SetPreparedSourceState(
                     source,
@@ -623,7 +647,9 @@ namespace OC2MenuManager
             SceneInfo scene,
             AssembledDefinitionNode composition,
             bool allowCookedFallback,
-            PreparedSourceState source)
+            PreparedSourceState source,
+            bool sourceIsPlate,
+            PlatingStepData sourcePlatingStep)
         {
             PreparedCoveredRecipeIdsBuffer.Clear();
             PreparedCoveredRecipeIdsSetBuffer.Clear();
@@ -659,6 +685,14 @@ namespace OC2MenuManager
             {
                 RecipeInfo recipe;
                 if (!scene.RecipesById.TryGetValue(candidateRecipeIds[i], out recipe) || recipe == null || recipe.Definition == null)
+                {
+                    continue;
+                }
+
+                if (!PreparedPlatingCompatibilityPolicy.IsCompatible(
+                    sourceIsPlate,
+                    recipe.Definition.m_platingStep,
+                    sourcePlatingStep))
                 {
                     continue;
                 }
@@ -1539,10 +1573,25 @@ namespace OC2MenuManager
                     }
                 }
 
-                int instanceId = component.GetInstanceID();
-                if (PreparedSourcesByInstanceId.ContainsKey(instanceId))
+                int sourceInstanceId = component.GetInstanceID();
+                PreparedSourceState source;
+                if (!PreparedSourcesByInstanceId.TryGetValue(sourceInstanceId, out source)
+                    && component.gameObject != null)
                 {
-                    RemovePreparedSource(instanceId);
+                    int gameObjectInstanceId = component.gameObject.GetInstanceID();
+                    PreparedSourceIdsByGameObjectId.TryGetValue(gameObjectInstanceId, out sourceInstanceId);
+                    PreparedSourcesByInstanceId.TryGetValue(sourceInstanceId, out source);
+                }
+
+                // ItemPropertiesComponent and IngredientPropertiesComponent are
+                // composition providers rather than synchronisers. Their sibling
+                // network component reaches this hook when the physical item is
+                // destroyed, so resolve the one source owned by the GameObject.
+                // PendingRemoval prevents the remaining sibling OnDestroy calls
+                // from consuming the transfer grace more than once.
+                if (source != null && !source.PendingRemoval)
+                {
+                    RemovePreparedSource(sourceInstanceId);
                 }
             }
             catch (Exception ex)

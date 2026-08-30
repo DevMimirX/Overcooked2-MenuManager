@@ -88,6 +88,7 @@ namespace OC2MenuManager
             invalidTableReleaseWarningLogged = false;
             ticketAdmissionFailureWarningLogged = false;
             referenceTicketAddFailureLogged = false;
+            referenceTicketRemovalFailureLogged = false;
             trackingHookFailureWarningLogged = false;
             ClearOnMenuCounts();
             ClearPreparedState();

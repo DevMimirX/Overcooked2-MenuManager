@@ -340,8 +340,15 @@ namespace OC2MenuManager
                 RemoveReferenceTicketAt(i);
             }
 
-            referenceTicketsDirty = false;
-            nextReferenceTicketSyncFrame = 0;
+            if (ReferenceTicketStates.Count == 0)
+            {
+                referenceTicketsDirty = false;
+                nextReferenceTicketSyncFrame = 0;
+            }
+            else
+            {
+                ScheduleReferenceTicketRetry();
+            }
         }
 
         private static void RemoveReferenceTicketAt(int index)
@@ -357,61 +364,133 @@ namespace OC2MenuManager
             }
 
             ReferenceTicketState state = ReferenceTicketStates[index];
-            ReferenceTicketStates.RemoveAt(index);
             if (state == null)
             {
+                ReferenceTicketStates.RemoveAt(index);
                 return;
             }
 
             try
             {
-                if (state.Flow != null && state.Widget != null)
+                if (!TryDetachReferenceTicket(state, animateServedStyle))
                 {
-                    RecipeFlowGUI.RecipeWidgetData widgetData = state.Flow.GetData(state.Token);
-                    if (widgetData != null && animateServedStyle)
-                    {
-                        TicketWidgetState ticketState;
-                        if (TicketWidgetsByInstanceId.TryGetValue(state.Widget.GetInstanceID(), out ticketState) && ticketState != null)
-                        {
-                            ticketState.IsReferenceTicket = true;
-                            ticketState.IsDyingReferenceTicket = true;
-                        }
-
-                        state.Flow.RemoveElement(state.Token, new ReferenceTicketDestroyAnimation(GetReferenceTicketDestroyAnimationColor()));
-                        return;
-                    }
-
-                    IList activeWidgets = RecipeFlowWidgetsField != null ? RecipeFlowWidgetsField.GetValue(state.Flow) as IList : null;
-                    if (widgetData != null && activeWidgets == null)
-                    {
-                        state.Flow.RemoveElement(state.Token, new ReferenceTicketDestroyAnimation(GetReferenceTicketDestroyAnimationColor()));
-                        return;
-                    }
-
-                    bool removedActiveWidget = widgetData != null && activeWidgets != null && activeWidgets.Contains(widgetData);
-                    if (removedActiveWidget)
-                    {
-                        activeWidgets.Remove(widgetData);
-                        bool[] occupiedTables = RecipeFlowOccupiedTablesField != null ? RecipeFlowOccupiedTablesField.GetValue(state.Flow) as bool[] : null;
-                        int tableNumber = state.Widget.GetTableNumber();
-                        if (occupiedTables != null && tableNumber >= 0 && tableNumber < occupiedTables.Length)
-                        {
-                            occupiedTables[tableNumber] = false;
-                        }
-                    }
-
-                    UnregisterTicketWidget(state.Widget);
-                    UnityEngine.Object.Destroy(state.Widget.gameObject);
+                    throw new InvalidOperationException("RecipeFlowGUI retained the reference ticket after removal.");
                 }
-                else if (state.Widget != null)
-                {
-                    UnregisterTicketWidget(state.Widget);
-                    UnityEngine.Object.Destroy(state.Widget.gameObject);
-                }
+
+                ReferenceTicketStates.Remove(state);
             }
-            catch
+            catch (Exception ex)
             {
+                ScheduleReferenceTicketRetry();
+                if (!referenceTicketRemovalFailureLogged)
+                {
+                    referenceTicketRemovalFailureLogged = true;
+                    _MODEntry.LogWarning(
+                        "[ServedDishTracker] Reference-ticket cleanup was deferred so its GUI table remains tracked: "
+                        + ex.GetType().Name + ": " + ex.Message);
+                }
             }
+        }
+
+        private static bool TryDetachReferenceTicket(ReferenceTicketState state, bool animateServedStyle)
+        {
+            if (state == null)
+            {
+                return true;
+            }
+
+            if (state.Flow == null)
+            {
+                if (state.Widget != null)
+                {
+                    UnregisterTicketWidget(state.Widget);
+                    UnityEngine.Object.Destroy(state.Widget.gameObject);
+                }
+
+                return true;
+            }
+
+            RecipeFlowGUI.RecipeWidgetData widgetData = state.Flow.GetData(state.Token);
+            if (widgetData == null)
+            {
+                if (state.Widget != null)
+                {
+                    UnregisterTicketWidget(state.Widget);
+                    UnityEngine.Object.Destroy(state.Widget.gameObject);
+                }
+
+                return true;
+            }
+
+            RecipeWidgetUIController widget = widgetData.m_widget != null
+                ? widgetData.m_widget
+                : state.Widget;
+            if (animateServedStyle && widget != null)
+            {
+                TicketWidgetState ticketState;
+                if (TicketWidgetsByInstanceId.TryGetValue(widget.GetInstanceID(), out ticketState) && ticketState != null)
+                {
+                    ticketState.IsReferenceTicket = true;
+                    ticketState.IsDyingReferenceTicket = true;
+                }
+
+                state.Flow.RemoveElement(
+                    state.Token,
+                    new ReferenceTicketDestroyAnimation(GetReferenceTicketDestroyAnimationColor()));
+                bool detached = state.Flow.GetData(state.Token) == null;
+                if (!detached && ticketState != null)
+                {
+                    ticketState.IsDyingReferenceTicket = false;
+                }
+
+                return detached;
+            }
+
+            IList activeWidgets = RecipeFlowWidgetsField != null
+                ? RecipeFlowWidgetsField.GetValue(state.Flow) as IList
+                : null;
+            bool[] occupiedTables = RecipeFlowOccupiedTablesField != null
+                ? RecipeFlowOccupiedTablesField.GetValue(state.Flow) as bool[]
+                : null;
+            bool canDetachDirectly = activeWidgets != null
+                && activeWidgets.Contains(widgetData)
+                && TicketCapacityPolicy.IsValidTableIndex(state.TableNumber, occupiedTables != null ? occupiedTables.Length : 0);
+            if (canDetachDirectly)
+            {
+                activeWidgets.Remove(widgetData);
+                occupiedTables[state.TableNumber] = false;
+                if (widget != null)
+                {
+                    UnregisterTicketWidget(widget);
+                    UnityEngine.Object.Destroy(widget.gameObject);
+                }
+
+                return state.Flow.GetData(state.Token) == null;
+            }
+
+            if (widget == null)
+            {
+                return false;
+            }
+
+            TicketWidgetState fallbackTicketState;
+            if (TicketWidgetsByInstanceId.TryGetValue(widget.GetInstanceID(), out fallbackTicketState)
+                && fallbackTicketState != null)
+            {
+                fallbackTicketState.IsReferenceTicket = true;
+                fallbackTicketState.IsDyingReferenceTicket = true;
+            }
+
+            state.Flow.RemoveElement(
+                state.Token,
+                new ReferenceTicketDestroyAnimation(GetReferenceTicketDestroyAnimationColor()));
+            bool fallbackDetached = state.Flow.GetData(state.Token) == null;
+            if (!fallbackDetached && fallbackTicketState != null)
+            {
+                fallbackTicketState.IsDyingReferenceTicket = false;
+            }
+
+            return fallbackDetached;
         }
 
         private static void PruneReferenceTicketStates()
@@ -972,7 +1051,7 @@ namespace OC2MenuManager
             for (int i = 0; i < ReferenceTicketStates.Count; i++)
             {
                 ReferenceTicketState state = ReferenceTicketStates[i];
-                if (state != null && state.FlowInstanceId == flowInstanceId && state.Widget != null)
+                if (state != null && state.FlowInstanceId == flowInstanceId)
                 {
                     try
                     {
@@ -1063,7 +1142,7 @@ namespace OC2MenuManager
             for (int i = 0; i < ReferenceTicketStates.Count; i++)
             {
                 ReferenceTicketState state = ReferenceTicketStates[i];
-                if (state == null || state.FlowInstanceId != flowInstanceId || state.Widget == null)
+                if (state == null || state.FlowInstanceId != flowInstanceId)
                 {
                     continue;
                 }
@@ -1381,50 +1460,65 @@ namespace OC2MenuManager
                 ? (bool[])occupiedTablesBeforeAdd.Clone()
                 : null;
 
+            ReferenceTicketState addedState = null;
             try
             {
                 RecipeFlowGUI.ElementToken token = flow.AddElement(candidate.Recipe.Definition, ReferenceTicketSyntheticTimeLimit, ReferenceTicketExpiredCallback);
+                addedState = new ReferenceTicketState();
+                addedState.FlowInstanceId = flow.GetInstanceID();
+                addedState.TableNumber = -1;
+                addedState.TeamId = teamId;
+                addedState.Flow = flow;
+                addedState.RecipeId = candidate.Recipe.Id;
+                addedState.Definition = candidate.Recipe.Definition;
+                addedState.Probability = candidate.Probability;
+                addedState.Token = token;
+                ReferenceTicketStates.Add(addedState);
+
                 RecipeFlowGUI.RecipeWidgetData widgetData = flow.GetData(token);
                 if (widgetData == null || widgetData.m_widget == null)
                 {
+                    int unresolvedStateIndex = ReferenceTicketStates.IndexOf(addedState);
+                    if (unresolvedStateIndex >= 0)
+                    {
+                        RemoveReferenceTicketAt(unresolvedStateIndex);
+                    }
                     RollbackFailedReferenceTicketAdd(flow, activeWidgetCountBeforeAdd, childCountBeforeAdd, nextIndexBeforeAdd, occupiedTablesBeforeAdd);
                     return;
                 }
 
                 int tableNumber = widgetData.m_widget.GetTableNumber();
+                addedState.TableNumber = tableNumber;
+                addedState.Widget = widgetData.m_widget;
+
                 bool[] occupiedTables = RecipeFlowOccupiedTablesField != null ? RecipeFlowOccupiedTablesField.GetValue(flow) as bool[] : null;
                 if (occupiedTables == null || tableNumber < 0 || tableNumber >= occupiedTables.Length)
                 {
-                    RollbackFailedReferenceTicketAdd(flow, activeWidgetCountBeforeAdd, childCountBeforeAdd, nextIndexBeforeAdd, occupiedTablesBeforeAdd);
+                    int invalidStateIndex = ReferenceTicketStates.IndexOf(addedState);
+                    if (invalidStateIndex >= 0)
+                    {
+                        RemoveReferenceTicketAt(invalidStateIndex);
+                    }
                     if (!invalidReferenceTableWarningLogged)
                     {
                         invalidReferenceTableWarningLogged = true;
                         _MODEntry.LogWarning("[ServedDishTracker] Deferred a reference ticket because RecipeFlowGUI returned an invalid table index.");
                     }
+                    ScheduleReferenceTicketRetry();
                     return;
                 }
 
                 int referenceOrder = ReferenceTicketOrderBase + Mathf.Max(0, displayIndex);
                 widgetData.m_order = referenceOrder;
-                ReferenceTicketState state = new ReferenceTicketState();
-                state.FlowInstanceId = flow.GetInstanceID();
-                state.TeamId = teamId;
-                state.Flow = flow;
-                state.RecipeId = candidate.Recipe.Id;
-                state.Definition = candidate.Recipe.Definition;
-                state.Probability = candidate.Probability;
-                state.Token = token;
-                state.Widget = widgetData.m_widget;
-                ReferenceTicketStates.Add(state);
-                ApplyReferenceTicketPresentation(state, referenceOrder);
+                ApplyReferenceTicketPresentation(addedState, referenceOrder);
                 if (silentAppearance)
                 {
-                    BeginSilentReferenceTicketAppearance(state.Widget);
+                    BeginSilentReferenceTicketAppearance(addedState.Widget);
                 }
                 else
                 {
                     TicketWidgetState ticketState;
-                    if (TicketWidgetsByInstanceId.TryGetValue(state.Widget.GetInstanceID(), out ticketState) && ticketState != null)
+                    if (TicketWidgetsByInstanceId.TryGetValue(addedState.Widget.GetInstanceID(), out ticketState) && ticketState != null)
                     {
                         ticketState.IsDyingReferenceTicket = false;
                     }
@@ -1434,7 +1528,17 @@ namespace OC2MenuManager
             }
             catch (Exception ex)
             {
-                RollbackFailedReferenceTicketAdd(flow, activeWidgetCountBeforeAdd, childCountBeforeAdd, nextIndexBeforeAdd, occupiedTablesBeforeAdd);
+                int addedStateIndex = addedState != null
+                    ? ReferenceTicketStates.IndexOf(addedState)
+                    : -1;
+                if (addedStateIndex >= 0)
+                {
+                    RemoveReferenceTicketAt(addedStateIndex);
+                }
+                else
+                {
+                    RollbackFailedReferenceTicketAdd(flow, activeWidgetCountBeforeAdd, childCountBeforeAdd, nextIndexBeforeAdd, occupiedTablesBeforeAdd);
+                }
                 if (!referenceTicketAddFailureLogged)
                 {
                     referenceTicketAddFailureLogged = true;
@@ -1506,8 +1610,15 @@ namespace OC2MenuManager
                     occupiedTables[i] = previousOccupiedTables[i];
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                if (!referenceTicketRemovalFailureLogged)
+                {
+                    referenceTicketRemovalFailureLogged = true;
+                    _MODEntry.LogWarning(
+                        "[ServedDishTracker] Reference-ticket add rollback was incomplete; further synchronization will retry safely: "
+                        + ex.GetType().Name + ": " + ex.Message);
+                }
             }
         }
 

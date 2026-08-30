@@ -10,6 +10,20 @@ namespace OC2MenuManager.Tests;
 public sealed class RuntimePolicyTests
 {
     [Fact]
+    public void PreparedPlatingCompatibilityMirrorsBaseGamePlateGate()
+    {
+        object sharedStep = new();
+        object distinctStep = new();
+        object noStep = null!;
+
+        Assert.True(PreparedPlatingCompatibilityPolicy.IsCompatible(false, sharedStep, distinctStep));
+        Assert.True(PreparedPlatingCompatibilityPolicy.IsCompatible(true, sharedStep, sharedStep));
+        Assert.False(PreparedPlatingCompatibilityPolicy.IsCompatible(true, sharedStep, distinctStep));
+        Assert.True(PreparedPlatingCompatibilityPolicy.IsCompatible(true, noStep, noStep));
+        Assert.False(PreparedPlatingCompatibilityPolicy.IsCompatible(true, noStep, sharedStep));
+    }
+
+    [Fact]
     public void PreparedAssignmentPrefersUnmetLiveDemandOverCatalogOrder()
     {
         var candidates = new[]

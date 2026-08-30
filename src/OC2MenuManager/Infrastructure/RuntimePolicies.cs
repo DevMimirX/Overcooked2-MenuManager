@@ -209,6 +209,22 @@ namespace OC2MenuManager.Infrastructure
     }
 
     /// <summary>
+    /// Mirrors ServerOrderControllerBase's plating-step gate for physical plates.
+    /// Containers that have not yet been plated remain eligible for every recipe
+    /// whose composition they satisfy; a plated dish must use the same step asset.
+    /// </summary>
+    internal static class PreparedPlatingCompatibilityPolicy
+    {
+        internal static bool IsCompatible(
+            bool sourceIsPlate,
+            object requiredPlatingStep,
+            object sourcePlatingStep)
+        {
+            return !sourceIsPlate || ReferenceEquals(requiredPlatingStep, sourcePlatingStep);
+        }
+    }
+
+    /// <summary>
     /// Determines whether an off-menu recipe may be shown as a guess. Compatible
     /// coverage is intentionally broader than canonical physical accounting: one
     /// dish can cover every alternative recipe definition that would accept it.
