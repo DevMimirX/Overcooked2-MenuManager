@@ -1,6 +1,6 @@
 // Hardens RecipeFlowGUI capacity/removal and owns ticket presentation state.
-// Real-ticket prepared tint consumes source compatibility, while reference
-// tickets keep independent styling. Family and scene-specific selector groups
+// Real-ticket prepared tint and reference eligibility consume source coverage,
+// while reference tickets keep independent styling. Family and scene-specific groups
 // share stable ID-based batch behavior, and safety patches remain unconditional.
 using System;
 using System.Collections;
@@ -1724,7 +1724,7 @@ namespace OC2MenuManager
                 }
 
                 bool hasPreparedAssignment = showPrepared
-                    && GetCount(PreparedCompatibilityCountsByRecipe, state.RecipeId) > 0;
+                    && GetCount(PreparedCoverageCountsByRecipe, state.RecipeId) > 0;
 
                 Color tint = hasPreparedAssignment ? preparedTint : onMenuTint;
                 if (!ApplyTicketWidgetTint(state, tint, tint))

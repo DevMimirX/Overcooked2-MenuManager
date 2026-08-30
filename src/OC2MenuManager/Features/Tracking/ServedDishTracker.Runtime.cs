@@ -279,18 +279,21 @@ namespace OC2MenuManager
 
             PreparedSourcesByInstanceId.Clear();
             PreparedSourceIdsByGameObjectId.Clear();
+            PreparedSourceDueFramesByInstanceId.Clear();
             PreparedCookStateBySourceId.Clear();
             PreparedSourceComponentByHandlerId.Clear();
-            PreparedCountsByRecipe.Clear();
-            PreparedCompatibilityCountsByRecipe.Clear();
+            CanonicalPreparedCountsByRecipe.Clear();
+            PreparedCoverageCountsByRecipe.Clear();
             DirtyPreparedSourceIds.Clear();
             PreparedSourceRefreshBuffer.Clear();
             PreparedCandidateRecipeIdsBuffer.Clear();
-            PreparedMatchedRecipeIdsBuffer.Clear();
-            PreparedMatchedRecipeIdsSetBuffer.Clear();
+            PreparedCoveredRecipeIdsBuffer.Clear();
+            PreparedCoveredRecipeIdsSetBuffer.Clear();
             PreparedAssignmentCandidatesBuffer.Clear();
             PreparedTicketPrioritiesByRecipeBuffer.Clear();
-            PreparedCompatibilityRemovalBuffer.Clear();
+            PreparedCoverageRemovalBuffer.Clear();
+            PreparedMatchingDiagnosticKeys.Clear();
+            preparedMatchingDiagnosticCount = 0;
             nextPreparedSourceRefreshFrame = 0;
             nextPreparedSourcePruneFrame = 0;
             nextPreparedBootstrapFrame = 0;
@@ -508,13 +511,7 @@ namespace OC2MenuManager
             {
                 foreach (int instanceId in PreparedSourcesByInstanceId.Keys)
                 {
-                    DirtyPreparedSourceIds.Add(instanceId);
-                }
-
-                int targetFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
-                if (nextPreparedSourceRefreshFrame == 0 || targetFrame < nextPreparedSourceRefreshFrame)
-                {
-                    nextPreparedSourceRefreshFrame = targetFrame;
+                    QueuePreparedSourceRefresh(instanceId);
                 }
             }
         }
@@ -595,8 +592,8 @@ namespace OC2MenuManager
                     if (RunPreparedBootstrapStep())
                     {
                         preparedSourceBootstrapComplete = true;
-                        nextPreparedSourceRefreshFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
-                        nextPreparedSourcePruneFrame = Time.frameCount + PreparedSourcePruneIntervalFrames;
+                        RecalculateNextPreparedSourceRefreshFrame();
+                        RecalculateNextPreparedSourcePruneFrame();
                         nextPreparedBootstrapFallbackFrame = Time.frameCount + PreparedBootstrapFallbackIntervalFrames;
                     }
                     else
@@ -610,14 +607,13 @@ namespace OC2MenuManager
 
             if (DirtyPreparedSourceIds.Count > 0 && Time.frameCount >= nextPreparedSourceRefreshFrame)
             {
-                RefreshDirtyPreparedSources(MaxPreparedSourceRefreshesPerBatch);
-                nextPreparedSourceRefreshFrame = Time.frameCount + PreparedSourceRefreshIntervalFrames;
+                RefreshDirtyPreparedSources(MaxPreparedSourceRefreshesPerFrame);
             }
 
             if (Time.frameCount >= nextPreparedSourcePruneFrame)
             {
                 PrunePreparedSources();
-                nextPreparedSourcePruneFrame = Time.frameCount + PreparedSourcePruneIntervalFrames;
+                RecalculateNextPreparedSourcePruneFrame();
             }
         }
 
@@ -665,8 +661,9 @@ namespace OC2MenuManager
         {
             return PreparedSourcesByInstanceId.Count > 0
                 || PreparedSourceIdsByGameObjectId.Count > 0
-                || PreparedCountsByRecipe.Count > 0
-                || PreparedCompatibilityCountsByRecipe.Count > 0
+                || PreparedSourceDueFramesByInstanceId.Count > 0
+                || CanonicalPreparedCountsByRecipe.Count > 0
+                || PreparedCoverageCountsByRecipe.Count > 0
                 || PreparedSourceComponentByHandlerId.Count > 0
                 || PreparedCookStateBySourceId.Count > 0
                 || DirtyPreparedSourceIds.Count > 0;

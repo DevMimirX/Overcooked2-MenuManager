@@ -205,7 +205,7 @@ Prepared tracking tries to recognize finished dishes from several places, such a
 - some carried completed dishes
 - some cooker-completed dishes
 
-Ingredient lists use the base game's order-insensitive delivery rule, so generated recipes that differ only by ingredient sequence remain compatible. Cooking method and completion state still have to match: a different cooking step, raw dish, burnt dish, or incorrect mixing state is not treated as prepared. One physical dish is counted once, while every tracked real ticket that could accept it receives the prepared tint.
+Ingredient lists use the base game's order-insensitive delivery rule, so generated recipes that differ only by ingredient sequence remain compatible. Cooking method and completion state still have to match: a different cooking step, raw dish, burnt dish, or incorrect mixing state is not treated as prepared. One physical dish keeps one canonical accounting assignment, while every compatible recipe is covered for presentation. Every covered overlay row shows `[ v ]`, every compatible tracked real ticket receives the prepared tint, and every compatible guess is suppressed until that physical dish is served or removed.
 
 This is one of the heavier features in the mod. If you need better performance, try disabling it first.
 
@@ -457,7 +457,7 @@ A dish can become a guess order only if all of the following are true:
 
 - the dish is tracked
 - the dish is not currently on the real menu
-- the dish is not prepared
+- the dish is not covered by any compatible prepared source
 - the dish still has positive next-order probability
 
 The top guess-order list is built from the same sorted source as the `[ - ] Unprepared` rows in the left overlay.
@@ -516,7 +516,8 @@ If the mod feels heavy, try these changes first:
 Why:
 
 - prepared-source matching remains the heaviest optional feature
-- prepared maintenance runs only when a source changes, a prune is due, or a delayed recovery stage is scheduled; it is not a recipe scan performed every frame
+- prepared composition changes are coalesced for two frames and processed at up to four dirty sources per frame; a backlog continues on the following frame, while bootstrap and pruning retain their slower schedules
+- failed prepared-source reads or matches fail closed and receive three bounded retries at 15-frame intervals; distinct diagnostics are logged once per round and capped at eight
 - scene/controller discovery is cached, and recovery scans are delayed and split across frames
 - the scene search model is rebuilt only when its query or source catalog changes, and the expanded list draws only visible rows
 - ticket layout is left to the game; Menu Manager only reorders membership when the real/guess set changes

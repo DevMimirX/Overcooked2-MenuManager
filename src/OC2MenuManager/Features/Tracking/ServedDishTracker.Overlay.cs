@@ -1,7 +1,7 @@
 // Builds the history overlay and next-order probabilities from authoritative
-// round state. The latest dynamic phase is retained independently of team runs
-// so controllers created after a map switch inherit the correct phase. Cached
-// probability and sorted-row results rebuild only after explicit invalidation.
+// round state. Prepared presentation consumes compatible coverage rather than
+// singular physical accounting, so overlay status, ticket tint, and guesses agree.
+// Cached probability and sorted-row results rebuild only after invalidation.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -132,7 +132,7 @@ namespace OC2MenuManager
                     bool isDeferredTodo = row.ProbabilityAvailable
                         && row.Probability <= 0d
                         && row.OnMenu <= 0
-                        && (!showPrepared || row.Prepared <= 0);
+                        && (!showPrepared || row.PreparedCoverageCount <= 0);
                     builder.Append(GetOverlayTodoPrefix(row, showPrepared)).Append(' ');
                     builder.Append(GetOverlayDishNameText(scene, row, showPrepared));
                     builder.Append("  |  ");
@@ -224,7 +224,9 @@ namespace OC2MenuManager
                 row.Probability = GetProbability(probabilityByRecipeId, recipe.Id);
                 row.ProbabilityAvailable = run.ProbabilityAvailable;
                 row.Served = GetCount(run.ServedCounts, recipe.Id);
-                row.Prepared = showPrepared ? GetCount(PreparedCountsByRecipe, recipe.Id) : 0;
+                row.PreparedCoverageCount = showPrepared
+                    ? GetCount(PreparedCoverageCountsByRecipe, recipe.Id)
+                    : 0;
                 row.OnMenu = GetCount(currentMenuCounts, recipe.Id);
                 row.EarliestMenuOrder = GetMenuOrder(menuOrderByRecipeId, recipe.Id);
                 rowCount++;
@@ -327,14 +329,20 @@ namespace OC2MenuManager
                 return int.MaxValue;
             }
 
-            bool onMenuAndUnprepared = row.OnMenu > 0 && (!showPrepared || row.Prepared <= 0);
+            bool onMenuAndUnprepared = row.OnMenu > 0
+                && (!showPrepared || row.PreparedCoverageCount <= 0);
             if (onMenuAndUnprepared)
             {
                 return 0;
             }
 
-            bool prepared = showPrepared && row.Prepared > 0;
-            if (!prepared && row.ProbabilityAvailable && row.Probability > 0d)
+            bool prepared = showPrepared && row.PreparedCoverageCount > 0;
+            if (PreparedGuessEligibilityPolicy.IsEligible(
+                row.OnMenu,
+                row.ProbabilityAvailable,
+                row.Probability,
+                showPrepared,
+                row.PreparedCoverageCount))
             {
                 return 1;
             }
@@ -888,7 +896,7 @@ namespace OC2MenuManager
                 return "[   ]";
             }
 
-            if (showPrepared && row.Prepared > 0)
+            if (showPrepared && row.PreparedCoverageCount > 0)
             {
                 return "[ v ]";
             }
@@ -914,7 +922,7 @@ namespace OC2MenuManager
                 GetMaxOverlayDishDisplayLength());
             if (showPrepared)
             {
-                if (row.Prepared > 0)
+                if (row.PreparedCoverageCount > 0)
                 {
                     return WrapRichValue(name, new Color(0.56f, 0.94f, 0.56f, 1f));
                 }
@@ -1016,7 +1024,7 @@ namespace OC2MenuManager
             bool isDeferredTodo = row.ProbabilityAvailable
                 && row.Probability <= 0d
                 && row.OnMenu <= 0
-                && (!showPrepared || row.Prepared <= 0);
+                && (!showPrepared || row.PreparedCoverageCount <= 0);
             if (!isDeferredTodo)
             {
                 return baseColor;
@@ -1032,7 +1040,7 @@ namespace OC2MenuManager
                 return Color.clear;
             }
 
-            bool isPrepared = showPrepared && row.Prepared > 0;
+            bool isPrepared = showPrepared && row.PreparedCoverageCount > 0;
             if (isPrepared)
             {
                 return new Color(0.22f, 0.58f, 0.22f, 0.28f);
@@ -1041,7 +1049,7 @@ namespace OC2MenuManager
             if (row.ProbabilityAvailable
                 && row.Probability <= 0d
                 && row.OnMenu <= 0
-                && (!showPrepared || row.Prepared <= 0))
+                && (!showPrepared || row.PreparedCoverageCount <= 0))
             {
                 return new Color(0f, 0f, 0f, 0.22f);
             }
@@ -1056,7 +1064,7 @@ namespace OC2MenuManager
                 return Color.white;
             }
 
-            if (showPrepared && row.Prepared > 0)
+            if (showPrepared && row.PreparedCoverageCount > 0)
             {
                 return new Color(1f, 1f, 1f, 0.88f);
             }

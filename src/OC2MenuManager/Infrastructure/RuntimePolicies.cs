@@ -209,6 +209,27 @@ namespace OC2MenuManager.Infrastructure
     }
 
     /// <summary>
+    /// Determines whether an off-menu recipe may be shown as a guess. Compatible
+    /// coverage is intentionally broader than canonical physical accounting: one
+    /// dish can cover every alternative recipe definition that would accept it.
+    /// </summary>
+    internal static class PreparedGuessEligibilityPolicy
+    {
+        internal static bool IsEligible(
+            int onMenuCount,
+            bool probabilityAvailable,
+            double probability,
+            bool preparedTrackingEnabled,
+            int preparedCoverageCount)
+        {
+            return onMenuCount <= 0
+                && probabilityAvailable
+                && probability > 0d
+                && (!preparedTrackingEnabled || preparedCoverageCount <= 0);
+        }
+    }
+
+    /// <summary>
     /// Validates and calculates next-recipe probability data without depending on
     /// Unity or mutable game controllers.
     /// </summary>

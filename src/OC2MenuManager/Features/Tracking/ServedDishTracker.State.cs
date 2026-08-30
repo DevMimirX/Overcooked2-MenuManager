@@ -1,6 +1,6 @@
-// Owns tracker configuration, reflection contracts, compatibility indexes, and
-// reusable runtime buffers. State here is main-thread only and is reused to keep
-// order and prepared-dish events allocation-free after capacity warm-up.
+// Owns tracker configuration, reflection contracts, prepared accounting and
+// coverage indexes, and reusable runtime buffers. State here is main-thread only
+// and is reused to keep order and prepared-dish events allocation-free after warm-up.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -66,8 +66,11 @@ namespace OC2MenuManager
         private const int ControllerLookupRetryIntervalFrames = 120;
         private const int ManyRecipesCatalogRetryIntervalFrames = 120;
         private const int OverlayRefreshIntervalFrames = 24;
-        private const int PreparedSourceRefreshIntervalFrames = 45;
-        private const int MaxPreparedSourceRefreshesPerBatch = 1;
+        private const int PreparedSourceChangeDebounceFrames = 2;
+        private const int PreparedSourceFailureRetryFrames = 15;
+        private const int MaxPreparedSourceRefreshRetries = 3;
+        private const int MaxPreparedSourceRefreshesPerFrame = 4;
+        private const int MaxPreparedMatchingDiagnosticsPerRound = 8;
         private const int PreparedSourcePruneIntervalFrames = 5400;
         private const int PreparedSourceRemovalGraceFrames = 18;
         private const int PreparedBootstrapStepIntervalFrames = 60;
@@ -92,10 +95,11 @@ namespace OC2MenuManager
         private static readonly Dictionary<TeamID, Dictionary<int, int>> CurrentOnMenuCountsByTeam = new Dictionary<TeamID, Dictionary<int, int>>();
         private static readonly Dictionary<int, int> CombinedOnMenuCountsBuffer = new Dictionary<int, int>();
         private static readonly Dictionary<TeamID, ServerOrderControllerBase> AuthoritativeOrderControllersByTeam = new Dictionary<TeamID, ServerOrderControllerBase>();
-        private static readonly Dictionary<int, int> PreparedCountsByRecipe = new Dictionary<int, int>();
-        private static readonly Dictionary<int, int> PreparedCompatibilityCountsByRecipe = new Dictionary<int, int>();
+        private static readonly Dictionary<int, int> CanonicalPreparedCountsByRecipe = new Dictionary<int, int>();
+        private static readonly Dictionary<int, int> PreparedCoverageCountsByRecipe = new Dictionary<int, int>();
         private static readonly Dictionary<int, PreparedSourceState> PreparedSourcesByInstanceId = new Dictionary<int, PreparedSourceState>();
         private static readonly Dictionary<int, int> PreparedSourceIdsByGameObjectId = new Dictionary<int, int>();
+        private static readonly Dictionary<int, int> PreparedSourceDueFramesByInstanceId = new Dictionary<int, int>();
         private static readonly Dictionary<int, CookedCompositeOrderNode.CookingProgress> PreparedCookStateBySourceId = new Dictionary<int, CookedCompositeOrderNode.CookingProgress>();
         private static readonly Dictionary<int, Component> PreparedSourceComponentByHandlerId = new Dictionary<int, Component>();
         private static readonly Dictionary<int, TicketWidgetState> TicketWidgetsByInstanceId = new Dictionary<int, TicketWidgetState>();
@@ -140,11 +144,12 @@ namespace OC2MenuManager
         private static readonly List<RunInfo> PreparedCandidateRunsBuffer = new List<RunInfo>();
         private static readonly List<Dictionary<int, double>> PreparedCandidateProbabilityMapsBuffer = new List<Dictionary<int, double>>();
         private static readonly List<List<int>> PreparedCandidateActiveRecipeIdsBuffer = new List<List<int>>();
-        private static readonly List<int> PreparedMatchedRecipeIdsBuffer = new List<int>();
-        private static readonly HashSet<int> PreparedMatchedRecipeIdsSetBuffer = new HashSet<int>();
+        private static readonly List<int> PreparedCoveredRecipeIdsBuffer = new List<int>();
+        private static readonly HashSet<int> PreparedCoveredRecipeIdsSetBuffer = new HashSet<int>();
         private static readonly List<PreparedRecipeAssignmentCandidate> PreparedAssignmentCandidatesBuffer = new List<PreparedRecipeAssignmentCandidate>();
         private static readonly Dictionary<int, PreparedTicketPriority> PreparedTicketPrioritiesByRecipeBuffer = new Dictionary<int, PreparedTicketPriority>();
-        private static readonly List<int> PreparedCompatibilityRemovalBuffer = new List<int>();
+        private static readonly List<int> PreparedCoverageRemovalBuffer = new List<int>();
+        private static readonly HashSet<string> PreparedMatchingDiagnosticKeys = new HashSet<string>(StringComparer.Ordinal);
         private static readonly List<ReferenceTicketCandidate> ReferenceTicketCandidatesBuffer = new List<ReferenceTicketCandidate>();
         private static readonly List<ReferenceTicketCandidate> ReferenceTicketCandidatePool = new List<ReferenceTicketCandidate>();
         private static readonly List<ReferenceTicketState> ReferenceTicketStates = new List<ReferenceTicketState>();
@@ -368,6 +373,7 @@ namespace OC2MenuManager
         private static float pendingSceneDropdownWheelDelta;
         private static bool sceneDropdownScreenRectValid;
         private static bool preparedCandidateRecipeIdsDirty = true;
+        private static int preparedMatchingDiagnosticCount;
         private static int overlayRowsVersion;
 
     }

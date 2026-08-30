@@ -908,6 +908,8 @@ namespace OC2MenuManager
             info.Definition = definition;
             info.SimplifiedDefinition = null;
             info.SimplifiedUnwrappedDefinition = null;
+            info.SimplifiedDefinitionResolved = false;
+            info.SimplifiedUnwrappedDefinitionResolved = false;
         }
 
         private static bool ArePhaseRecipeListsEqual(List<int>[] left, List<int>[] right)

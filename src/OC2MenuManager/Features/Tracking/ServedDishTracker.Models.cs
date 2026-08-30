@@ -1,6 +1,7 @@
 // Defines tracker runtime models and their owned caches. Team runs never share
-// mutable probability rows, while each prepared source owns its compatible
-// recipe IDs so physical counts and visual compatibility remain distinct.
+// mutable probability rows, while each prepared source owns one canonical
+// recipe assignment plus every covered recipe ID so accounting and presentation
+// remain distinct.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -36,6 +37,11 @@ namespace OC2MenuManager
             Center
         }
 
+        /// <summary>
+        /// Owns one catalog recipe and its lazily simplified matching forms. A
+        /// resolved flag distinguishes a legitimate null result from an untried or
+        /// failed simplification so transient failures remain retryable.
+        /// </summary>
         private sealed class RecipeInfo
         {
             public int Id;
@@ -47,6 +53,8 @@ namespace OC2MenuManager
             public OrderDefinitionNode Definition;
             public AssembledDefinitionNode SimplifiedDefinition;
             public AssembledDefinitionNode SimplifiedUnwrappedDefinition;
+            public bool SimplifiedDefinitionResolved;
+            public bool SimplifiedUnwrappedDefinitionResolved;
         }
 
         /// <summary>
@@ -107,6 +115,11 @@ namespace OC2MenuManager
             public RecipeFlowGUI Flow;
         }
 
+        /// <summary>
+        /// Owns one registered physical source. CanonicalRecipeId accounts for the
+        /// dish once, CoveredRecipeIds publishes every compatible presentation, and
+        /// PendingTransferRecipeIds retains only the short-lived transfer signature.
+        /// </summary>
         private sealed class PreparedSourceState
         {
             public int InstanceId;
@@ -115,8 +128,10 @@ namespace OC2MenuManager
             public IClientOrderDefinition Provider;
             public ClientCookingHandler CookingHandler;
             public OrderCompositionChangedCallback Callback;
-            public int MatchedRecipeId;
-            public readonly HashSet<int> CompatibleRecipeIds = new HashSet<int>();
+            public int CanonicalRecipeId;
+            public readonly HashSet<int> CoveredRecipeIds = new HashSet<int>();
+            public readonly HashSet<int> PendingTransferRecipeIds = new HashSet<int>();
+            public int ConsecutiveRefreshFailures;
             public bool PendingRemoval;
             public int RemovalGraceUntilFrame;
         }
@@ -242,13 +257,17 @@ namespace OC2MenuManager
         private static readonly Color SettingsWindowBodyColor = new Color(0.10f, 0.10f, 0.10f, 1f);
         private static readonly Color SettingsWindowHeaderColor = new Color(0.17f, 0.17f, 0.17f, 1f);
 
+        /// <summary>
+        /// Projects one tracked recipe into the overlay. Prepared state is compatible
+        /// coverage rather than the source's singular canonical accounting assignment.
+        /// </summary>
         private sealed class OverlayRow
         {
             public RecipeInfo Recipe;
             public double Probability;
             public bool ProbabilityAvailable;
             public int Served;
-            public int Prepared;
+            public int PreparedCoverageCount;
             public int OnMenu;
             public int EarliestMenuOrder;
 
@@ -258,7 +277,7 @@ namespace OC2MenuManager
                 Probability = 0d;
                 ProbabilityAvailable = false;
                 Served = 0;
-                Prepared = 0;
+                PreparedCoverageCount = 0;
                 OnMenu = 0;
                 EarliestMenuOrder = int.MaxValue;
             }

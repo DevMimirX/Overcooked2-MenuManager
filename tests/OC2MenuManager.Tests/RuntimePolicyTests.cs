@@ -88,6 +88,65 @@ public sealed class RuntimePolicyTests
         Assert.Equal(0, PreparedRecipeAssignmentPolicy.SelectCanonical(null!));
     }
 
+    [Fact]
+    public void OneCanonicalPreparedDishCoversEveryCompatibleGuess()
+    {
+        var compatibleCandidates = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 0, 0, false, int.MaxValue, int.MaxValue, 0),
+            new PreparedRecipeAssignmentCandidate(202, 0, 0, false, int.MaxValue, int.MaxValue, 1)
+        };
+
+        Assert.Equal(101, PreparedRecipeAssignmentPolicy.SelectCanonical(compatibleCandidates));
+        Assert.False(PreparedGuessEligibilityPolicy.IsEligible(0, true, 0.6d, true, 1));
+        Assert.False(PreparedGuessEligibilityPolicy.IsEligible(0, true, 0.4d, true, 1));
+        Assert.True(PreparedGuessEligibilityPolicy.IsEligible(0, true, 0.6d, false, 1));
+        Assert.True(PreparedGuessEligibilityPolicy.IsEligible(0, true, 0.4d, true, 0));
+    }
+
+    [Theory]
+    [InlineData(1, true, 0.5d, true, 0, false)]
+    [InlineData(0, false, 0.5d, true, 0, false)]
+    [InlineData(0, true, 0d, true, 0, false)]
+    [InlineData(0, true, 0.5d, true, 1, false)]
+    [InlineData(0, true, 0.5d, false, 1, true)]
+    [InlineData(0, true, 0.5d, true, 0, true)]
+    public void GuessEligibilityRequiresOffMenuPositiveProbabilityWithoutActiveCoverage(
+        int onMenuCount,
+        bool probabilityAvailable,
+        double probability,
+        bool preparedTrackingEnabled,
+        int preparedCoverageCount,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            PreparedGuessEligibilityPolicy.IsEligible(
+                onMenuCount,
+                probabilityAvailable,
+                probability,
+                preparedTrackingEnabled,
+                preparedCoverageCount));
+    }
+
+    [Fact]
+    public void CanonicalPreparedAssignmentIsStableWhenProviderOrderChanges()
+    {
+        var forward = new[]
+        {
+            new PreparedRecipeAssignmentCandidate(101, 0, 0, false, int.MaxValue, int.MaxValue, 3),
+            new PreparedRecipeAssignmentCandidate(202, 0, 0, false, int.MaxValue, int.MaxValue, 1)
+        };
+        var reverse = new[]
+        {
+            forward[1],
+            forward[0]
+        };
+
+        Assert.Equal(202, PreparedRecipeAssignmentPolicy.SelectCanonical(forward));
+        Assert.Equal(202, PreparedRecipeAssignmentPolicy.SelectCanonical(reverse));
+    }
+
     [Theory]
     [InlineData(true, true, false, true, true)]
     [InlineData(false, true, false, true, false)]
