@@ -118,7 +118,7 @@ namespace OC2MenuManager
         private static readonly List<SceneInfo> SelectableScenesBuffer = new List<SceneInfo>();
         private static readonly List<OverlayRow> EmptyOverlayRowsBuffer = new List<OverlayRow>();
         private static readonly List<OverlayRenderRow> OverlayRenderRowsBuffer = new List<OverlayRenderRow>();
-        private static readonly List<CategorySelectionGroup> CategorySelectionGroupsBuffer = new List<CategorySelectionGroup>();
+        private static readonly List<RecipeSelectionGroup> CategorySelectionGroupsBuffer = new List<RecipeSelectionGroup>();
         private static readonly List<TicketWidgetState> TicketWidgetsBuffer = new List<TicketWidgetState>();
         private static readonly HashSet<int> DirtyPreparedSourceIds = new HashSet<int>();
         private static readonly List<int> PreparedSourceRefreshBuffer = new List<int>();
@@ -257,7 +257,14 @@ namespace OC2MenuManager
         private static int cachedCategorySelectionCatalogRevision = -1;
         private static int cachedCategorySelectionTierRevision = -1;
         private static string cachedCategorySelectionSceneName = string.Empty;
+        private static SceneInfo cachedCategorySelectionScene;
         private static bool cachedCategorySelectionChinese;
+        private static int cachedSecondarySelectionCatalogRevision = -1;
+        private static string cachedSecondarySelectionSceneName = string.Empty;
+        private static SceneInfo cachedSecondarySelectionScene;
+        private static SceneRecipeSelectionGroupSet cachedSecondarySelectionGroupSet;
+        private static readonly HashSet<string> SecondarySelectionWarningScenes =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static bool? migratedEnabledValue;
         private static TrackerLanguage? migratedLanguageValue;
         private static Color? migratedMenuTicketOnMenuTintColorValue;

@@ -152,6 +152,7 @@ What you can do here:
 - search by scene ID or either Chinese/English metadata name
 - pick tracked dishes for that scene
 - use scene-specific category buttons such as cake, burger, pizza, and so on
+- use an additional Player 1-4 assignment row when `s_rw_5` exposes the exact supported 50-recipe catalog
 - use bulk actions such as select all, clear, or refresh
 
 Important behavior:
@@ -167,6 +168,8 @@ Important behavior:
 DIY scenes appear once OC2DIYLevel finishes loading its frontend metadata. Menu Manager never scans the game directory, enumerates the `levels` folder, or loads DIY asset bundles itself. It accepts only OC2DIYLevel's in-memory catalog, so screenshots, text files, and other files beside the bundles are ignored. A temporary provider failure keeps the last valid catalog visible, while malformed or duplicate metadata entries are skipped and reported without hiding valid scenes. Selecting a scene lazily loads its recipes; a failed preload is retried automatically while the window is open, and the retry button forces another attempt. You no longer need to launch a DIY level once just to configure it.
 
 For DIY scenes, category buttons are inferred from the complete recipe set. Existing native names keep their normal family; custom names are matched as whole tokens across underscores, CamelCase, whitespace, Chinese text, and common transliterations. A conservative workflow pass can correct a semantic outlier only when its preparation facet, recipe kind, reflected cooking or mixing process, and required/base components agree more strongly with another family containing multiple anchors than with its current family. A shared pot, mixer, cup, model, or icon alone never merges families, and ambiguous evidence keeps the semantic result. Unrecognized families can still group by repeated author prefixes or suffixes, shared nested components, or cooking/mixing/plating structure. Only recipes with neither meaningful names nor usable structure use `Other`. These groups never rewrite dish names, are recomputed only when authoritative DIY recipe metadata is loaded or refreshed, and remain attached when a metadata-only custom recipe is upgraded to its runtime definition.
+
+`s_rw_5` also has a separate `Track by player` row derived from its published station assignment. Player 1 covers Hot Chocolate, Fruit Pie, and Pancake; Player 2 covers Cold Chocolate, Fruit Juice, and Donut; Player 3 covers Hot Fruit Drinks, Cake, and Fruit Platter; Player 4 covers Fruit Platter, Milk Drinks, Ice Milk, and Fruit Ice. Fruit Platters intentionally appear in both Player 3 and Player 4. These buttons are ordinary batch toggles: they change the same ID-based dish selection as the family buttons, are not persisted separately, and exclude Recipe Extension dishes. If the authored 50-recipe catalog changes incompatibly, the player row is hidden rather than showing a partial assignment.
 
 Recipe Extension dishes are generated from the real level at round initialization, so they appear automatically in the current scene selector and in-round overlay after synchronization completes. If a recently changed extension configuration does not appear, start a new round and inspect the one-time `[Compatibility]` warning in the BepInEx log; a failed active snapshot is deliberately not replaced with a partial catalog.
 

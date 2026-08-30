@@ -320,6 +320,41 @@ public sealed class RecipeCategoryCatalogTests
     }
 
     [Fact]
+    public void RwFivePlayerAssignmentsMatchTheCanonicalFamilyGroups()
+    {
+        Dictionary<int, RecipeCategoryAssignment> assignments =
+            RecipeCategoryCatalog.ClassifyDIYRecipes(BuildRwFiveFixture());
+        int[] authoredRecipeIds = assignments.Keys.OrderBy(recipeId => recipeId).ToArray();
+
+        Assert.Equal(
+            SceneRecipeGroupResolutionStatus.Resolved,
+            SceneRecipeGroupCatalog.Resolve(
+                "s_rw_5",
+                authoredRecipeIds,
+                authoredRecipeIds,
+                out SceneRecipeSelectionGroupSet? groups,
+                out _));
+        Assert.NotNull(groups);
+
+        Assert.True(new HashSet<string>(StringComparer.Ordinal)
+        {
+            "hotchocolate", "fruitpie", "pancake"
+        }.SetEquals(groups.Groups[0].RecipeIds.Select(recipeId => assignments[recipeId].Key)));
+        Assert.True(new HashSet<string>(StringComparer.Ordinal)
+        {
+            "coldchocolate", "fruitjuice", "donut"
+        }.SetEquals(groups.Groups[1].RecipeIds.Select(recipeId => assignments[recipeId].Key)));
+        Assert.True(new HashSet<string>(StringComparer.Ordinal)
+        {
+            "hotfruitdrink", "cake", "fruitplatter"
+        }.SetEquals(groups.Groups[2].RecipeIds.Select(recipeId => assignments[recipeId].Key)));
+        Assert.True(new HashSet<string>(StringComparer.Ordinal)
+        {
+            "fruitplatter", "milkdrink", "icemilk", "fruitice"
+        }.SetEquals(groups.Groups[3].RecipeIds.Select(recipeId => assignments[recipeId].Key)));
+    }
+
+    [Fact]
     public void WorkflowReconciliationKeepsSemanticCategoryWhenBaseEvidenceIsMissing()
     {
         var evidence = new List<RecipeCategoryEvidence>

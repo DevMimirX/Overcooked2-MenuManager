@@ -301,15 +301,6 @@ namespace OC2MenuManager
             public RecipeWidgetUIController Widget;
         }
 
-        private sealed class CategorySelectionGroup
-        {
-            public string CategoryKey;
-            public string EnglishName;
-            public string ChineseName;
-            public int CategoryTier;
-            public readonly List<int> RecipeIds = new List<int>();
-        }
-
         private sealed class TicketWidgetState
         {
             public int InstanceId;

@@ -1,7 +1,7 @@
 // Hardens RecipeFlowGUI capacity/removal and owns ticket presentation state.
 // Real-ticket prepared tint consumes source compatibility, while reference
-// tickets keep independent styling, selector batches use stable category keys,
-// and safety patches remain unconditional.
+// tickets keep independent styling. Family and scene-specific selector groups
+// share stable ID-based batch behavior, and safety patches remain unconditional.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -620,6 +620,7 @@ namespace OC2MenuManager
                 return;
             }
 
+            DrawSecondarySelectionGroupToggles(scene);
             DrawCategorySelectionToggles(scene);
             GUILayout.Space(2f);
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
@@ -644,26 +645,55 @@ namespace OC2MenuManager
 
         private static void DrawCategorySelectionToggles(SceneInfo scene)
         {
-            List<CategorySelectionGroup> groups = BuildCategorySelectionGroups(scene);
-            if (groups.Count == 0)
+            List<RecipeSelectionGroup> groups = BuildCategorySelectionGroups(scene);
+            DrawRecipeSelectionGroupToggles(
+                scene,
+                Ui("按类别批量勾选：", "Track by category:"),
+                groups,
+                true);
+        }
+
+        private static void DrawSecondarySelectionGroupToggles(SceneInfo scene)
+        {
+            SceneRecipeSelectionGroupSet groupSet = BuildSecondarySelectionGroupSet(scene);
+            if (groupSet == null)
+            {
+                return;
+            }
+
+            DrawRecipeSelectionGroupToggles(
+                scene,
+                UseChinese() ? groupSet.ChineseHeading : groupSet.EnglishHeading,
+                groupSet.Groups,
+                false);
+        }
+
+        private static void DrawRecipeSelectionGroupToggles(
+            SceneInfo scene,
+            string heading,
+            IList<RecipeSelectionGroup> groups,
+            bool includeAllPrefix)
+        {
+            if (scene == null || groups == null || groups.Count == 0)
             {
                 return;
             }
 
             GUILayout.Space(4f);
-            GUILayout.Label(Ui("按类别批量勾选：", "Track by category:"));
+            GUILayout.Label(heading);
             for (int i = 0; i < groups.Count;)
             {
                 GUILayout.BeginHorizontal();
                 for (int column = 0; column < 2 && i < groups.Count; column++, i++)
                 {
-                    CategorySelectionGroup group = groups[i];
-                    bool allTracked = AreAllCategoryRecipesTracked(scene, group);
-                    string categoryName = UseChinese() ? group.ChineseName : group.EnglishName;
-                    bool nextTracked = GUILayout.Toggle(allTracked, Ui("全部", "All ") + categoryName, GUILayout.MinWidth(160f), GUILayout.ExpandWidth(true));
+                    RecipeSelectionGroup group = groups[i];
+                    bool allTracked = AreAllGroupRecipesTracked(scene, group);
+                    string groupName = UseChinese() ? group.ChineseName : group.EnglishName;
+                    string label = includeAllPrefix ? Ui("全部", "All ") + groupName : groupName;
+                    bool nextTracked = GUILayout.Toggle(allTracked, label, GUILayout.MinWidth(160f), GUILayout.ExpandWidth(true));
                     if (nextTracked != allTracked)
                     {
-                        SetTrackedForCategory(scene, group, nextTracked);
+                        SetTrackedForGroup(scene, group, nextTracked);
                     }
                 }
                 GUILayout.EndHorizontal();
@@ -695,10 +725,57 @@ namespace OC2MenuManager
             return count;
         }
 
-        private static List<CategorySelectionGroup> BuildCategorySelectionGroups(SceneInfo scene)
+        private static SceneRecipeSelectionGroupSet BuildSecondarySelectionGroupSet(SceneInfo scene)
+        {
+            if (ReferenceEquals(cachedSecondarySelectionScene, scene)
+                && scene != null
+                && string.Equals(cachedSecondarySelectionSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase)
+                && cachedSecondarySelectionCatalogRevision == scene.CatalogRevision)
+            {
+                return cachedSecondarySelectionGroupSet;
+            }
+
+            cachedSecondarySelectionScene = scene;
+            cachedSecondarySelectionSceneName = scene != null ? scene.SceneName : string.Empty;
+            cachedSecondarySelectionCatalogRevision = scene != null ? scene.CatalogRevision : -1;
+            cachedSecondarySelectionGroupSet = null;
+            if (scene == null || scene.DIYRecipeIds.Count == 0 || scene.RecipesById.Count == 0)
+            {
+                return null;
+            }
+
+            string failureReason;
+            SceneRecipeGroupResolutionStatus status = SceneRecipeGroupCatalog.Resolve(
+                scene.SceneName,
+                scene.DIYRecipeIds,
+                scene.RecipesById.Keys,
+                out cachedSecondarySelectionGroupSet,
+                out failureReason);
+            if (status == SceneRecipeGroupResolutionStatus.Resolved)
+            {
+                return cachedSecondarySelectionGroupSet;
+            }
+
+            if (status == SceneRecipeGroupResolutionStatus.Incomplete
+                && SecondarySelectionWarningScenes.Add(scene.SceneName))
+            {
+                _MODEntry.LogWarning(
+                    "[ServedDishTracker] Secondary recipe groups are unavailable for "
+                    + scene.SceneName
+                    + ": "
+                    + failureReason
+                    + ".");
+            }
+
+            cachedSecondarySelectionGroupSet = null;
+            return null;
+        }
+
+        private static List<RecipeSelectionGroup> BuildCategorySelectionGroups(SceneInfo scene)
         {
             bool chinese = UseChinese();
-            if (scene != null
+            if (ReferenceEquals(cachedCategorySelectionScene, scene)
+                && scene != null
                 && string.Equals(cachedCategorySelectionSceneName, scene.SceneName, StringComparison.OrdinalIgnoreCase)
                 && cachedCategorySelectionCatalogRevision == scene.CatalogRevision
                 && cachedCategorySelectionTierRevision == categoryTierRevision
@@ -708,6 +785,7 @@ namespace OC2MenuManager
             }
 
             CategorySelectionGroupsBuffer.Clear();
+            cachedCategorySelectionScene = scene;
             cachedCategorySelectionSceneName = scene != null ? scene.SceneName : string.Empty;
             cachedCategorySelectionCatalogRevision = scene != null ? scene.CatalogRevision : -1;
             cachedCategorySelectionTierRevision = categoryTierRevision;
@@ -717,7 +795,7 @@ namespace OC2MenuManager
                 return CategorySelectionGroupsBuffer;
             }
 
-            Dictionary<string, CategorySelectionGroup> groupsByKey = new Dictionary<string, CategorySelectionGroup>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, RecipeSelectionGroup> groupsByKey = new Dictionary<string, RecipeSelectionGroup>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
             {
                 RecipeInfo recipe = scene.OrderedRecipes[i];
@@ -729,28 +807,28 @@ namespace OC2MenuManager
                 RecipeCategoryAssignment category = recipe.Category
                     ?? RecipeCategoryCatalog.ResolveKnownOrFallback(recipe.InternalName);
                 string categoryKey = string.IsNullOrEmpty(category.Key) ? "other" : category.Key;
-                CategorySelectionGroup group;
+                RecipeSelectionGroup group;
                 if (!groupsByKey.TryGetValue(categoryKey, out group))
                 {
-                    group = new CategorySelectionGroup();
-                    group.CategoryKey = categoryKey;
+                    group = new RecipeSelectionGroup();
+                    group.Key = categoryKey;
                     group.EnglishName = string.IsNullOrEmpty(category.EnglishName) ? "Other" : category.EnglishName;
                     group.ChineseName = string.IsNullOrEmpty(category.ChineseName) ? "其他" : category.ChineseName;
-                    group.CategoryTier = recipe.CategoryTier;
+                    group.SortTier = recipe.CategoryTier;
                     groupsByKey.Add(categoryKey, group);
                     CategorySelectionGroupsBuffer.Add(group);
                 }
                 else
                 {
-                    group.CategoryTier = Math.Min(group.CategoryTier, recipe.CategoryTier);
+                    group.SortTier = Math.Min(group.SortTier, recipe.CategoryTier);
                 }
 
                 group.RecipeIds.Add(recipe.Id);
             }
 
-            CategorySelectionGroupsBuffer.Sort(delegate(CategorySelectionGroup a, CategorySelectionGroup b)
+            CategorySelectionGroupsBuffer.Sort(delegate(RecipeSelectionGroup a, RecipeSelectionGroup b)
             {
-                int tierCompare = a.CategoryTier.CompareTo(b.CategoryTier);
+                int tierCompare = a.SortTier.CompareTo(b.SortTier);
                 if (tierCompare != 0)
                 {
                     return tierCompare;
@@ -761,12 +839,12 @@ namespace OC2MenuManager
                 int labelCompare = string.Compare(leftName, rightName, StringComparison.OrdinalIgnoreCase);
                 return labelCompare != 0
                     ? labelCompare
-                    : string.Compare(a.CategoryKey, b.CategoryKey, StringComparison.Ordinal);
+                    : string.Compare(a.Key, b.Key, StringComparison.Ordinal);
             });
             return CategorySelectionGroupsBuffer;
         }
 
-        private static bool AreAllCategoryRecipesTracked(SceneInfo scene, CategorySelectionGroup group)
+        private static bool AreAllGroupRecipesTracked(SceneInfo scene, RecipeSelectionGroup group)
         {
             if (scene == null || group == null || group.RecipeIds.Count == 0)
             {
@@ -784,7 +862,7 @@ namespace OC2MenuManager
             return true;
         }
 
-        private static void SetTrackedForCategory(SceneInfo scene, CategorySelectionGroup group, bool shouldTrack)
+        private static void SetTrackedForGroup(SceneInfo scene, RecipeSelectionGroup group, bool shouldTrack)
         {
             if (scene == null || group == null)
             {
