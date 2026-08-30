@@ -1,7 +1,7 @@
 // Owns the canonical recipe-category taxonomy, native-name classification,
-// deterministic DIY family inference, localization, and tier inheritance. The
-// classifier is side-effect free; provider adapters supply neutral evidence and
-// the game-facing tracker owns when assignments are refreshed.
+// deterministic DIY family and workflow inference, localization, and tier
+// inheritance. The classifier is side-effect free; provider adapters supply
+// bounded neutral evidence and the game-facing tracker owns assignment refreshes.
 #nullable disable
 #pragma warning disable CA1846, CA2249
 using System;
@@ -24,9 +24,28 @@ namespace OC2MenuManager
     {
         Native,
         Semantic,
+        Workflow,
         Scene,
         Structure,
         Fallback
+    }
+
+    /// <summary>
+    /// Describes one bounded component identity together with its authoring role.
+    /// Lower depths are closer to the recipe root and therefore stronger evidence.
+    /// </summary>
+    internal sealed class RecipeComponentEvidence
+    {
+        internal readonly string Identity;
+        internal readonly bool IsOptional;
+        internal readonly int Depth;
+
+        internal RecipeComponentEvidence(string identity, bool isOptional, int depth)
+        {
+            Identity = identity ?? string.Empty;
+            IsOptional = isOptional;
+            Depth = Math.Max(0, depth);
+        }
     }
 
     /// <summary>
@@ -37,14 +56,14 @@ namespace OC2MenuManager
     {
         internal readonly int RecipeId;
         internal readonly string InternalName;
+        internal string AuthoringName = string.Empty;
         internal DIYRecipeKind Kind;
         internal string CookingIdentity = string.Empty;
         internal string MixingIdentity = string.Empty;
         internal string PlatingIdentity = string.Empty;
         internal string ModelIdentity = string.Empty;
         internal string IconIdentity = string.Empty;
-        internal readonly List<string> RequiredComponentNames = new List<string>();
-        internal readonly List<string> OptionalComponentNames = new List<string>();
+        internal readonly List<RecipeComponentEvidence> Components = new List<RecipeComponentEvidence>();
 
         internal RecipeCategoryEvidence(int recipeId, string internalName)
         {
@@ -64,19 +83,25 @@ namespace OC2MenuManager
         internal readonly string ChineseName;
         internal readonly string TierKey;
         internal readonly RecipeCategorySource Source;
+        internal readonly string InitialCategoryKey;
+        internal readonly string InferenceDetail;
 
         internal RecipeCategoryAssignment(
             string key,
             string englishName,
             string chineseName,
             string tierKey,
-            RecipeCategorySource source)
+            RecipeCategorySource source,
+            string initialCategoryKey = null,
+            string inferenceDetail = null)
         {
             Key = key ?? string.Empty;
             EnglishName = englishName ?? string.Empty;
             ChineseName = chineseName ?? string.Empty;
             TierKey = tierKey ?? string.Empty;
             Source = source;
+            InitialCategoryKey = initialCategoryKey ?? string.Empty;
+            InferenceDetail = inferenceDetail ?? string.Empty;
         }
     }
 
@@ -139,6 +164,81 @@ namespace OC2MenuManager
             }
         }
 
+        /// <summary>Holds normalized workflow evidence for one tentatively classified recipe.</summary>
+        private sealed class WorkflowRecipe
+        {
+            internal readonly RecipeCategoryEvidence Evidence;
+            internal readonly string CategoryKey;
+            internal readonly RecipeCategorySource Source;
+            internal readonly List<string> Facets;
+            internal readonly Dictionary<string, int> ComponentWeights;
+            internal readonly string ProcessIdentity;
+
+            internal WorkflowRecipe(
+                RecipeCategoryEvidence evidence,
+                string categoryKey,
+                RecipeCategorySource source,
+                List<string> facets,
+                Dictionary<string, int> componentWeights,
+                string processIdentity)
+            {
+                Evidence = evidence;
+                CategoryKey = categoryKey;
+                Source = source;
+                Facets = facets;
+                ComponentWeights = componentWeights;
+                ProcessIdentity = processIdentity;
+            }
+        }
+
+        /// <summary>Groups immutable initial assignments used to evaluate workflow consensus.</summary>
+        private sealed class WorkflowFamily
+        {
+            internal readonly string Key;
+            internal readonly List<WorkflowRecipe> Members = new List<WorkflowRecipe>();
+
+            internal WorkflowFamily(string key)
+            {
+                Key = key;
+            }
+        }
+
+        /// <summary>Captures the independent evidence used to compare eligible workflow targets.</summary>
+        private sealed class WorkflowTargetScore
+        {
+            internal readonly string CategoryKey;
+            internal readonly string Facet;
+            internal readonly string ProcessIdentity;
+            internal readonly int NamedCoreCount;
+            internal readonly int SharedBaseCount;
+            internal readonly int WeightedOverlap;
+            internal readonly int CompatibleMemberCount;
+            internal readonly int FacetSupportCount;
+            internal readonly List<string> SharedComponents;
+
+            internal WorkflowTargetScore(
+                string categoryKey,
+                string facet,
+                string processIdentity,
+                int namedCoreCount,
+                int sharedBaseCount,
+                int weightedOverlap,
+                int compatibleMemberCount,
+                int facetSupportCount,
+                List<string> sharedComponents)
+            {
+                CategoryKey = categoryKey;
+                Facet = facet;
+                ProcessIdentity = processIdentity;
+                NamedCoreCount = namedCoreCount;
+                SharedBaseCount = sharedBaseCount;
+                WeightedOverlap = weightedOverlap;
+                CompatibleMemberCount = compatibleMemberCount;
+                FacetSupportCount = facetSupportCount;
+                SharedComponents = sharedComponents;
+            }
+        }
+
         private static readonly string[] OrderedCategoryKeys = new string[]
         {
             "pizza",
@@ -188,6 +288,20 @@ namespace OC2MenuManager
             "plain",
             "so",
             "new"
+        };
+        private static readonly HashSet<string> ComponentNoiseTokens = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "bowl",
+            "container",
+            "cup",
+            "dish",
+            "icon",
+            "model",
+            "plate",
+            "plating",
+            "prefab",
+            "serve",
+            "serving"
         };
 
         private static readonly string[] FruitMarkers = new string[]
@@ -273,20 +387,25 @@ namespace OC2MenuManager
                 string nativeKey = GetKnownCategoryKey(item.InternalName);
                 if (!string.IsNullOrEmpty(nativeKey))
                 {
-                    assignments.Add(item.RecipeId, CreateKnownAssignment(nativeKey, RecipeCategorySource.Native));
+                    assignments.Add(
+                        item.RecipeId,
+                        CreateKnownAssignment(nativeKey, RecipeCategorySource.Native, nativeKey, "exact-name"));
                     continue;
                 }
 
                 string semanticKey = GetDIYSemanticCategoryKey(item);
                 if (!string.IsNullOrEmpty(semanticKey))
                 {
-                    assignments.Add(item.RecipeId, CreateKnownAssignment(semanticKey, RecipeCategorySource.Semantic));
+                    assignments.Add(
+                        item.RecipeId,
+                        CreateKnownAssignment(semanticKey, RecipeCategorySource.Semantic, semanticKey, "whole-token-name"));
                     continue;
                 }
 
-                unresolved.Add(new RecipeCandidate(item, TokenizeMeaningfulName(item.InternalName)));
+                unresolved.Add(new RecipeCandidate(item, TokenizeMeaningfulName(BuildEvidenceName(item))));
             }
 
+            ReconcileWorkflowFamilies(orderedEvidence, assignments);
             AssignSceneFamilies(unresolved, assignments);
             AssignStructuralFamilies(unresolved, assignments);
             return assignments;
@@ -549,7 +668,9 @@ namespace OC2MenuManager
                 && string.Equals(left.EnglishName, right.EnglishName, StringComparison.Ordinal)
                 && string.Equals(left.ChineseName, right.ChineseName, StringComparison.Ordinal)
                 && string.Equals(left.TierKey, right.TierKey, StringComparison.OrdinalIgnoreCase)
-                && left.Source == right.Source;
+                && left.Source == right.Source
+                && string.Equals(left.InitialCategoryKey, right.InitialCategoryKey, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(left.InferenceDetail, right.InferenceDetail, StringComparison.Ordinal);
         }
 
         internal static string GetSourceName(RecipeCategorySource source)
@@ -560,6 +681,8 @@ namespace OC2MenuManager
                     return "native";
                 case RecipeCategorySource.Semantic:
                     return "semantic";
+                case RecipeCategorySource.Workflow:
+                    return "workflow";
                 case RecipeCategorySource.Scene:
                     return "scene";
                 case RecipeCategorySource.Structure:
@@ -652,7 +775,11 @@ namespace OC2MenuManager
             definitions.Add(key, new CategoryDefinition(key, englishName, chineseName, tierKey, defaultTier));
         }
 
-        private static RecipeCategoryAssignment CreateKnownAssignment(string categoryKey, RecipeCategorySource source)
+        private static RecipeCategoryAssignment CreateKnownAssignment(
+            string categoryKey,
+            RecipeCategorySource source,
+            string initialCategoryKey = null,
+            string inferenceDetail = null)
         {
             CategoryDefinition definition;
             string normalizedKey = NormalizeKey(categoryKey);
@@ -667,23 +794,33 @@ namespace OC2MenuManager
                 definition.EnglishName,
                 definition.ChineseName,
                 definition.TierKey,
-                source);
+                source,
+                initialCategoryKey,
+                inferenceDetail);
         }
 
         private static RecipeCategoryAssignment CreateInferredAssignment(
             string key,
             string label,
             string tierKey,
-            RecipeCategorySource source)
+            RecipeCategorySource source,
+            string inferenceDetail = null)
         {
             string resolvedLabel = string.IsNullOrEmpty(label) ? Definitions["other"].EnglishName : label;
             string resolvedTierKey = string.IsNullOrEmpty(tierKey) ? "other" : tierKey;
-            return new RecipeCategoryAssignment(key, resolvedLabel, resolvedLabel, resolvedTierKey, source);
+            return new RecipeCategoryAssignment(
+                key,
+                resolvedLabel,
+                resolvedLabel,
+                resolvedTierKey,
+                source,
+                string.Empty,
+                inferenceDetail);
         }
 
         private static string GetDIYSemanticCategoryKey(RecipeCategoryEvidence evidence)
         {
-            string searchable = BuildSearchableName(evidence.InternalName);
+            string searchable = BuildSearchableName(BuildEvidenceName(evidence));
 
             if (ContainsAny(searchable, "冷巧克力")
                 || HasToken(searchable, "coldchocolate")
@@ -917,6 +1054,525 @@ namespace OC2MenuManager
             return string.Empty;
         }
 
+        /// <summary>
+        /// Reconciles only high-confidence DIY semantic outliers against stable
+        /// scene families. Profiles are built once from the initial assignments so
+        /// provider ordering and earlier reassignments cannot affect later results.
+        /// </summary>
+        private static void ReconcileWorkflowFamilies(
+            List<RecipeCategoryEvidence> orderedEvidence,
+            Dictionary<int, RecipeCategoryAssignment> assignments)
+        {
+            List<WorkflowRecipe> recipes = new List<WorkflowRecipe>();
+            Dictionary<string, WorkflowFamily> families =
+                new Dictionary<string, WorkflowFamily>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, int> componentFrequencies =
+                new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+            for (int i = 0; i < orderedEvidence.Count; i++)
+            {
+                RecipeCategoryEvidence evidence = orderedEvidence[i];
+                RecipeCategoryAssignment assignment;
+                if (!assignments.TryGetValue(evidence.RecipeId, out assignment)
+                    || (assignment.Source != RecipeCategorySource.Native
+                        && assignment.Source != RecipeCategorySource.Semantic))
+                {
+                    continue;
+                }
+
+                Dictionary<string, int> componentWeights = BuildComponentWeights(evidence);
+                WorkflowRecipe recipe = new WorkflowRecipe(
+                    evidence,
+                    assignment.Key,
+                    assignment.Source,
+                    BuildWorkflowFacets(evidence),
+                    componentWeights,
+                    GetWorkflowProcessIdentity(evidence));
+                recipes.Add(recipe);
+
+                WorkflowFamily family;
+                if (!families.TryGetValue(assignment.Key, out family))
+                {
+                    family = new WorkflowFamily(assignment.Key);
+                    families.Add(assignment.Key, family);
+                }
+
+                family.Members.Add(recipe);
+                foreach (string componentKey in componentWeights.Keys)
+                {
+                    int frequency;
+                    componentFrequencies.TryGetValue(componentKey, out frequency);
+                    componentFrequencies[componentKey] = frequency + 1;
+                }
+            }
+
+            if (recipes.Count < 5 || families.Count < 2)
+            {
+                return;
+            }
+
+            HashSet<string> sceneCommonComponents = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, int> pair in componentFrequencies)
+            {
+                if (pair.Value * 2 > recipes.Count)
+                {
+                    sceneCommonComponents.Add(pair.Key);
+                }
+            }
+
+            List<string> orderedFamilyKeys = new List<string>(families.Keys);
+            orderedFamilyKeys.Sort(StringComparer.Ordinal);
+            for (int i = 0; i < recipes.Count; i++)
+            {
+                WorkflowRecipe recipe = recipes[i];
+                if (recipe.Source != RecipeCategorySource.Semantic
+                    || recipe.Evidence.Kind == DIYRecipeKind.Unknown
+                    || string.IsNullOrEmpty(recipe.ProcessIdentity)
+                    || recipe.Facets.Count == 0)
+                {
+                    continue;
+                }
+
+                WorkflowFamily currentFamily = families[recipe.CategoryKey];
+                List<string> outlierFacets = GetWorkflowOutlierFacets(recipe, currentFamily);
+                if (outlierFacets.Count == 0)
+                {
+                    continue;
+                }
+
+                WorkflowTargetScore best = null;
+                bool bestIsTied = false;
+                for (int familyIndex = 0; familyIndex < orderedFamilyKeys.Count; familyIndex++)
+                {
+                    string targetKey = orderedFamilyKeys[familyIndex];
+                    if (string.Equals(targetKey, recipe.CategoryKey, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    WorkflowTargetScore score = BuildWorkflowTargetScore(
+                        recipe,
+                        families[targetKey],
+                        outlierFacets,
+                        sceneCommonComponents,
+                        true);
+                    if (score == null)
+                    {
+                        continue;
+                    }
+
+                    int comparison = CompareWorkflowTargetScores(score, best);
+                    if (comparison > 0)
+                    {
+                        best = score;
+                        bestIsTied = false;
+                    }
+                    else if (comparison == 0)
+                    {
+                        bestIsTied = true;
+                    }
+                }
+
+                if (best == null || bestIsTied)
+                {
+                    continue;
+                }
+
+                WorkflowTargetScore current = BuildWorkflowTargetScore(
+                    recipe,
+                    currentFamily,
+                    outlierFacets,
+                    sceneCommonComponents,
+                    false);
+                if (current != null && CompareWorkflowComponentEvidence(best, current) <= 0)
+                {
+                    continue;
+                }
+
+                string detail = "from=" + recipe.CategoryKey
+                    + ";facet=" + best.Facet
+                    + ";kind=" + recipe.Evidence.Kind.ToString().ToLowerInvariant()
+                    + ";process=" + best.ProcessIdentity
+                    + ";components=" + JoinWorkflowComponents(best.SharedComponents);
+                assignments[recipe.Evidence.RecipeId] = CreateKnownAssignment(
+                    best.CategoryKey,
+                    RecipeCategorySource.Workflow,
+                    recipe.CategoryKey,
+                    detail);
+            }
+        }
+
+        private static List<string> GetWorkflowOutlierFacets(WorkflowRecipe recipe, WorkflowFamily currentFamily)
+        {
+            List<string> outliers = new List<string>();
+            int peerCount = currentFamily.Members.Count - 1;
+            if (peerCount < 2)
+            {
+                return outliers;
+            }
+
+            for (int facetIndex = 0; facetIndex < recipe.Facets.Count; facetIndex++)
+            {
+                string facet = recipe.Facets[facetIndex];
+                int support = 0;
+                for (int memberIndex = 0; memberIndex < currentFamily.Members.Count; memberIndex++)
+                {
+                    WorkflowRecipe peer = currentFamily.Members[memberIndex];
+                    if (peer.Evidence.RecipeId != recipe.Evidence.RecipeId && peer.Facets.Contains(facet))
+                    {
+                        support++;
+                    }
+                }
+
+                if (support < 2 || support * 2 <= peerCount)
+                {
+                    outliers.Add(facet);
+                }
+            }
+
+            return outliers;
+        }
+
+        private static WorkflowTargetScore BuildWorkflowTargetScore(
+            WorkflowRecipe recipe,
+            WorkflowFamily targetFamily,
+            List<string> outlierFacets,
+            HashSet<string> sceneCommonComponents,
+            bool requireFacetMatch)
+        {
+            List<WorkflowRecipe> compatibleMembers = new List<WorkflowRecipe>();
+            int eligibleMemberCount = 0;
+            for (int i = 0; i < targetFamily.Members.Count; i++)
+            {
+                WorkflowRecipe member = targetFamily.Members[i];
+                if (member.Evidence.RecipeId == recipe.Evidence.RecipeId)
+                {
+                    continue;
+                }
+
+                eligibleMemberCount++;
+                if (member.Evidence.Kind != recipe.Evidence.Kind || string.IsNullOrEmpty(member.ProcessIdentity))
+                {
+                    continue;
+                }
+
+                if (string.Equals(member.ProcessIdentity, recipe.ProcessIdentity, StringComparison.OrdinalIgnoreCase))
+                {
+                    compatibleMembers.Add(member);
+                }
+            }
+
+            if (compatibleMembers.Count < 2 || compatibleMembers.Count * 2 <= eligibleMemberCount)
+            {
+                return null;
+            }
+
+            string selectedFacet = string.Empty;
+            int selectedFacetSupport = 0;
+            for (int facetIndex = 0; requireFacetMatch && facetIndex < outlierFacets.Count; facetIndex++)
+            {
+                string facet = outlierFacets[facetIndex];
+                int support = 0;
+                for (int memberIndex = 0; memberIndex < compatibleMembers.Count; memberIndex++)
+                {
+                    if (compatibleMembers[memberIndex].Facets.Contains(facet))
+                    {
+                        support++;
+                    }
+                }
+
+                if (support >= 2
+                    && support * 2 > compatibleMembers.Count
+                    && (support > selectedFacetSupport
+                        || (support == selectedFacetSupport
+                            && string.Compare(facet, selectedFacet, StringComparison.Ordinal) < 0)))
+                {
+                    selectedFacet = facet;
+                    selectedFacetSupport = support;
+                }
+            }
+
+            if (requireFacetMatch && string.IsNullOrEmpty(selectedFacet))
+            {
+                return null;
+            }
+
+            List<string> nameTokens = TokenizeMeaningfulName(BuildEvidenceName(recipe.Evidence));
+            Dictionary<string, int> occurrenceCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, int> accumulatedWeights = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int memberIndex = 0; memberIndex < compatibleMembers.Count; memberIndex++)
+            {
+                foreach (KeyValuePair<string, int> component in compatibleMembers[memberIndex].ComponentWeights)
+                {
+                    if (sceneCommonComponents.Contains(component.Key)
+                        && !ComponentMatchesNameTokens(component.Key, nameTokens))
+                    {
+                        continue;
+                    }
+
+                    int occurrences;
+                    occurrenceCounts.TryGetValue(component.Key, out occurrences);
+                    occurrenceCounts[component.Key] = occurrences + 1;
+
+                    int accumulated;
+                    accumulatedWeights.TryGetValue(component.Key, out accumulated);
+                    accumulatedWeights[component.Key] = accumulated + component.Value;
+                }
+            }
+
+            int namedCoreCount = 0;
+            int sharedBaseCount = 0;
+            int weightedOverlap = 0;
+            List<string> sharedComponents = new List<string>();
+            foreach (KeyValuePair<string, int> component in recipe.ComponentWeights)
+            {
+                int occurrences;
+                int accumulated;
+                if ((sceneCommonComponents.Contains(component.Key)
+                        && !ComponentMatchesNameTokens(component.Key, nameTokens))
+                    || !occurrenceCounts.TryGetValue(component.Key, out occurrences)
+                    || !accumulatedWeights.TryGetValue(component.Key, out accumulated))
+                {
+                    continue;
+                }
+
+                sharedComponents.Add(component.Key);
+                weightedOverlap += Math.Min(component.Value * compatibleMembers.Count, accumulated);
+                if (component.Value >= 3 && occurrences >= 2)
+                {
+                    sharedBaseCount++;
+                }
+
+                if (occurrences * 2 >= compatibleMembers.Count
+                    && ComponentMatchesNameTokens(component.Key, nameTokens))
+                {
+                    namedCoreCount++;
+                }
+            }
+
+            if (sharedBaseCount == 0 || weightedOverlap == 0)
+            {
+                return null;
+            }
+
+            sharedComponents.Sort(StringComparer.Ordinal);
+            return new WorkflowTargetScore(
+                targetFamily.Key,
+                selectedFacet,
+                recipe.ProcessIdentity,
+                namedCoreCount,
+                sharedBaseCount,
+                weightedOverlap,
+                compatibleMembers.Count,
+                selectedFacetSupport,
+                sharedComponents);
+        }
+
+        private static int CompareWorkflowTargetScores(WorkflowTargetScore candidate, WorkflowTargetScore current)
+        {
+            if (candidate == null)
+            {
+                return current == null ? 0 : -1;
+            }
+
+            if (current == null)
+            {
+                return 1;
+            }
+
+            int comparison = CompareWorkflowComponentEvidence(candidate, current);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            long candidateFacetSupport = (long)candidate.FacetSupportCount * current.CompatibleMemberCount;
+            long currentFacetSupport = (long)current.FacetSupportCount * candidate.CompatibleMemberCount;
+            comparison = candidateFacetSupport.CompareTo(currentFacetSupport);
+            return comparison != 0
+                ? comparison
+                : candidate.CompatibleMemberCount.CompareTo(current.CompatibleMemberCount);
+        }
+
+        private static int CompareWorkflowComponentEvidence(
+            WorkflowTargetScore candidate,
+            WorkflowTargetScore current)
+        {
+            int comparison = candidate.NamedCoreCount.CompareTo(current.NamedCoreCount);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            comparison = candidate.SharedBaseCount.CompareTo(current.SharedBaseCount);
+            if (comparison != 0)
+            {
+                return comparison;
+            }
+
+            long candidateOverlap = (long)candidate.WeightedOverlap * current.CompatibleMemberCount;
+            long currentOverlap = (long)current.WeightedOverlap * candidate.CompatibleMemberCount;
+            return candidateOverlap.CompareTo(currentOverlap);
+        }
+
+        private static Dictionary<string, int> BuildComponentWeights(RecipeCategoryEvidence evidence)
+        {
+            Dictionary<string, int> weights = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < evidence.Components.Count; i++)
+            {
+                RecipeComponentEvidence component = evidence.Components[i];
+                if (component == null)
+                {
+                    continue;
+                }
+
+                string key = NormalizeComponentIdentity(component.Identity);
+                if (string.IsNullOrEmpty(key))
+                {
+                    continue;
+                }
+
+                int weight = component.IsOptional
+                    ? (component.Depth == 0 ? 2 : 1)
+                    : (component.Depth == 0 ? 4 : 3);
+                int existingWeight;
+                if (!weights.TryGetValue(key, out existingWeight) || weight > existingWeight)
+                {
+                    weights[key] = weight;
+                }
+            }
+
+            return weights;
+        }
+
+        private static string NormalizeComponentIdentity(string identity)
+        {
+            List<string> tokens = TokenizeMeaningfulName(identity);
+            List<string> meaningfulTokens = new List<string>();
+            for (int i = 0; i < tokens.Count; i++)
+            {
+                if (!ComponentNoiseTokens.Contains(tokens[i]))
+                {
+                    meaningfulTokens.Add(tokens[i]);
+                }
+            }
+
+            return meaningfulTokens.Count == 0
+                ? string.Empty
+                : JoinTokens(meaningfulTokens, 0, meaningfulTokens.Count, "-");
+        }
+
+        private static bool ComponentMatchesNameTokens(string componentKey, List<string> nameTokens)
+        {
+            List<string> componentTokens = Tokenize(componentKey);
+            for (int componentIndex = 0; componentIndex < componentTokens.Count; componentIndex++)
+            {
+                for (int nameIndex = 0; nameIndex < nameTokens.Count; nameIndex++)
+                {
+                    if (string.Equals(componentTokens[componentIndex], nameTokens[nameIndex], StringComparison.OrdinalIgnoreCase))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static List<string> BuildWorkflowFacets(RecipeCategoryEvidence evidence)
+        {
+            string searchable = BuildSearchableName(BuildEvidenceName(evidence));
+            List<string> facets = new List<string>();
+            AddWorkflowFacet(facets, "hot", HasToken(searchable, "hot") || ContainsAny(searchable, "热"));
+            AddWorkflowFacet(facets, "cold", HasToken(searchable, "cold") || ContainsAny(searchable, "冷"));
+            AddWorkflowFacet(
+                facets,
+                "ice",
+                HasToken(searchable, "ice") || HasToken(searchable, "iced") || ContainsAny(searchable, "冰", "加冰"));
+            AddWorkflowFacet(
+                facets,
+                "fried",
+                HasToken(searchable, "fried") || HasToken(searchable, "fry") || ContainsAny(searchable, "炸", "煎"));
+            AddWorkflowFacet(
+                facets,
+                "steamed",
+                HasToken(searchable, "steam") || HasToken(searchable, "steamed") || ContainsAny(searchable, "蒸"));
+            AddWorkflowFacet(
+                facets,
+                "baked",
+                HasToken(searchable, "bake") || HasToken(searchable, "baked") || HasToken(searchable, "roast")
+                    || HasToken(searchable, "grill") || HasToken(searchable, "grilled") || ContainsAny(searchable, "烤"));
+            AddWorkflowFacet(
+                facets,
+                "mixed",
+                HasToken(searchable, "mix") || HasToken(searchable, "mixed") || HasToken(searchable, "blend")
+                    || HasToken(searchable, "blended") || ContainsAny(searchable, "搅拌", "混合"));
+            AddWorkflowFacet(
+                facets,
+                "assembled",
+                HasToken(searchable, "assemble") || HasToken(searchable, "assembled")
+                    || HasToken(searchable, "composite") || ContainsAny(searchable, "拼装", "组合"));
+            return facets;
+        }
+
+        private static void AddWorkflowFacet(List<string> facets, string facet, bool present)
+        {
+            if (present && !facets.Contains(facet))
+            {
+                facets.Add(facet);
+            }
+        }
+
+        private static string GetWorkflowProcessIdentity(RecipeCategoryEvidence evidence)
+        {
+            string identity;
+            string prefix;
+            switch (evidence.Kind)
+            {
+                case DIYRecipeKind.Cooked:
+                    identity = evidence.CookingIdentity;
+                    prefix = "cook:";
+                    break;
+                case DIYRecipeKind.Mixed:
+                    identity = evidence.MixingIdentity;
+                    prefix = "mix:";
+                    break;
+                case DIYRecipeKind.Composite:
+                    identity = FirstNonEmpty(
+                        evidence.PlatingIdentity,
+                        evidence.ModelIdentity,
+                        evidence.IconIdentity);
+                    prefix = "assemble:";
+                    break;
+                default:
+                    return string.Empty;
+            }
+
+            return string.IsNullOrEmpty(identity) ? string.Empty : prefix + NormalizeIdentity(identity);
+        }
+
+        private static string BuildEvidenceName(RecipeCategoryEvidence evidence)
+        {
+            if (evidence == null || string.IsNullOrEmpty(evidence.AuthoringName)
+                || string.Equals(evidence.InternalName, evidence.AuthoringName, StringComparison.OrdinalIgnoreCase))
+            {
+                return evidence == null ? string.Empty : evidence.InternalName;
+            }
+
+            return evidence.InternalName + " " + evidence.AuthoringName;
+        }
+
+        private static string JoinWorkflowComponents(List<string> components)
+        {
+            if (components == null || components.Count == 0)
+            {
+                return "none";
+            }
+
+            int count = Math.Min(3, components.Count);
+            return JoinTokens(components, 0, count, ",");
+        }
+
         private static void AssignSceneFamilies(
             List<RecipeCandidate> unresolved,
             Dictionary<int, RecipeCategoryAssignment> assignments)
@@ -933,8 +1589,7 @@ namespace OC2MenuManager
                 }
 
                 List<string> recipeKeys = BuildBoundaryCandidateKeys(recipe.Tokens, candidates);
-                AppendComponentCandidateKeys(evidence.RequiredComponentNames, recipeKeys, candidates);
-                AppendComponentCandidateKeys(evidence.OptionalComponentNames, recipeKeys, candidates);
+                AppendComponentCandidateKeys(evidence.Components, recipeKeys, candidates);
                 keysByRecipe[evidence.RecipeId] = recipeKeys;
             }
 
@@ -1080,7 +1735,7 @@ namespace OC2MenuManager
                         string identity = FirstNonEmpty(evidence.PlatingIdentity, evidence.ModelIdentity, evidence.IconIdentity);
                         if (string.IsNullOrEmpty(identity))
                         {
-                            List<string> authoredTokens = TokenizeMeaningfulName(evidence.InternalName);
+                            List<string> authoredTokens = TokenizeMeaningfulName(BuildEvidenceName(evidence));
                             if (authoredTokens.Count == 0)
                             {
                                 assignments.Add(evidence.RecipeId, CreateKnownAssignment("other", RecipeCategorySource.Fallback));
@@ -1157,13 +1812,19 @@ namespace OC2MenuManager
         }
 
         private static void AppendComponentCandidateKeys(
-            List<string> componentNames,
+            List<RecipeComponentEvidence> components,
             List<string> recipeKeys,
             Dictionary<string, InferenceCandidate> candidates)
         {
-            for (int i = 0; i < componentNames.Count; i++)
+            for (int i = 0; i < components.Count; i++)
             {
-                List<string> tokens = TokenizeMeaningfulName(componentNames[i]);
+                RecipeComponentEvidence component = components[i];
+                if (component == null)
+                {
+                    continue;
+                }
+
+                List<string> tokens = TokenizeMeaningfulName(component.Identity);
                 if (tokens.Count == 0)
                 {
                     continue;

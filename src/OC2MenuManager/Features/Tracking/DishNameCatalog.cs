@@ -986,7 +986,7 @@ namespace OC2MenuManager
 
             StringBuilder builder = new StringBuilder();
             builder.AppendLine("# OC2MenuManager dish discovery report");
-            builder.AppendLine("# scene\tid\tinternal\tzh\tzh_short\ten\tcatalog\tcategory_key\tcategory_en\tcategory_zh\tcategory_source");
+            builder.AppendLine("# scene\tid\tinternal\tzh\tzh_short\ten\tcatalog\tcategory_key\tcategory_en\tcategory_zh\tcategory_source\tcategory_initial_key\tcategory_detail");
 
             HashSet<string> missingCatalogNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (KeyValuePair<string, SortedDictionary<int, DiscoveredRecipeEntry>> scenePair in DiscoveredRecipesByScene.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
@@ -1019,7 +1019,9 @@ namespace OC2MenuManager
                     builder.Append(category.Key).Append('\t');
                     builder.Append(category.EnglishName).Append('\t');
                     builder.Append(category.ChineseName).Append('\t');
-                    builder.Append(RecipeCategoryCatalog.GetSourceName(category.Source));
+                    builder.Append(RecipeCategoryCatalog.GetSourceName(category.Source)).Append('\t');
+                    builder.Append(category.InitialCategoryKey).Append('\t');
+                    builder.Append(category.InferenceDetail);
                     builder.AppendLine();
                 }
             }

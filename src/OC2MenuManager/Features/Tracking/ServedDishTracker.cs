@@ -183,6 +183,7 @@ namespace OC2MenuManager
             TryResetRoundRuntimeState("shutdown");
             overlayVisible = false;
             settingsWindowVisible = false;
+            DisposeSettingsInputBlocker();
             CloseSceneDropdown(true);
             capturingHotkey = false;
         }
@@ -209,6 +210,8 @@ namespace OC2MenuManager
                     capturingHotkey = false;
                 }
             }
+
+            SynchronizeSettingsInputBlocker();
 
             bool runtimeEnabled = enabled != null && enabled.Value;
             bool hasRuntimeState = HasPreparedRuntimeState()
@@ -370,6 +373,8 @@ namespace OC2MenuManager
         public static void OnGUI()
         {
             Event currentEvent = Event.current;
+            EventType originalEventType = currentEvent == null ? EventType.Ignore : currentEvent.type;
+            Vector2 originalMousePosition = currentEvent == null ? Vector2.zero : currentEvent.mousePosition;
             bool isRepaintEvent = currentEvent == null || currentEvent.type == EventType.Repaint;
             if (overlayEnabled != null && overlayEnabled.Value && overlayVisible && isRepaintEvent)
             {
@@ -409,10 +414,18 @@ namespace OC2MenuManager
             GUI.color = Color.white;
             GUI.backgroundColor = Color.white;
             GUI.contentColor = Color.white;
-            settingsWindowRect = GUI.Window(SettingsWindowId, settingsWindowRect, DrawSettingsWindow, Ui("菜单管理", "Menu Manager"));
+            settingsWindowRect = GUI.ModalWindow(SettingsWindowId, settingsWindowRect, DrawSettingsWindow, Ui("菜单管理", "Menu Manager"));
             GUI.color = previousColor;
             GUI.backgroundColor = previousBackgroundColor;
             GUI.contentColor = previousContentColor;
+
+            if (currentEvent != null
+                && currentEvent.type != EventType.Used
+                && IsSettingsWindowPointerEvent(originalEventType)
+                && settingsWindowRect.Contains(originalMousePosition))
+            {
+                currentEvent.Use();
+            }
         }
 
     }

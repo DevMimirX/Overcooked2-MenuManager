@@ -7,9 +7,10 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 1. Install only BepInEx and the packaged `OC2MenuManager.dll`; do not install HostUtilities, OC2Mods.Shared, ConfigurationManager, OC2NoMenu, OC2DIYLevel, or Recipe Extension.
 2. Start Overcooked! 2 and confirm the BepInEx log loads `com.ch3ngyz.plugin.OC2MenuManager` without missing-assembly errors.
 3. Press `F6` and verify the settings window opens.
-4. With a clean configuration, verify history tracking is available but `Show Floating Overlay` is off and the left panel stays hidden in a standard scene. Turn it on and verify dish selection, history overlay, prepared counts, ticket tinting, and guess tickets.
-5. Set five guess tickets and keep five real tickets active. Verify successful delivery removes exactly one real ticket and rotates guesses; expiration plays the failure/reset behavior but keeps the same real ticket and does not change served history. Confirm the active total stays at ten and no negative-table or capacity warning repeats.
-6. Exercise the carnival menu toggles and built-in No Menu mode, then return to the frontend without an exception.
+4. Place the window over frontend buttons and click, drag, scroll, and close it repeatedly. Verify the fully opaque panel remains interactive while no underlying button highlights, activates, starts a level, or receives the closing click; clicks outside the panel must also remain blocked until it closes.
+5. With a clean configuration, verify history tracking is available but `Show Floating Overlay` is off and the left panel stays hidden in a standard scene. Turn it on and verify dish selection, history overlay, prepared counts, ticket tinting, and guess tickets.
+6. Set five guess tickets and keep five real tickets active. Verify successful delivery removes exactly one real ticket and rotates guesses; expiration plays the failure/reset behavior but keeps the same real ticket and does not change served history. Confirm the active total stays at ten and no negative-table or capacity warning repeats.
+7. Exercise the carnival menu toggles and built-in No Menu mode, then return to the frontend without an exception.
 
 ## Floating overlay quick controls
 
@@ -51,14 +52,14 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 2. Install the audited OC2DIYLevel binary separately and restart. Before launching a DIY level, verify its frontend metadata reports 46 scenes and the selector's DIY count is 46.
 3. Search `s_rw_` and verify the five results are exactly `s_rw_1` through `s_rw_5`; repeat with one Chinese and one English metadata name, then select each result with one click.
 4. Keep `.png`, `.txt`, and other sidecar files beside the DIY bundles; verify they never appear as scenes in the selector and no Menu Manager directory enumeration appears in an I/O trace.
-5. Before launching `s_rw_5`, select it and verify all 50 configured dishes are available in exactly these groups: Cake 5, Pancake 4, Fruit Pie 5, Donut 4, Hot Chocolate 5, Cold Chocolate 4, Milk Drinks 5, Ice Milk 3, Fruit Juice 3, Hot Fruit Drinks 5, Fruit Ice 2, and Fruit Platter 5. No recipe should be in `Other`.
+5. Before launching `s_rw_5`, select it and verify all 50 configured dishes are available in exactly these groups: Cake 5, Pancake 4, Fruit Pie 5, Donut 4, Hot Chocolate 6, Cold Chocolate 5, Milk Drinks 3, Ice Milk 3, Fruit Juice 3, Hot Fruit Drinks 5, Fruit Ice 2, and Fruit Platter 5. `HotStrawberryMilk` must be in Hot Chocolate, `ColdMilk` must be in Cold Chocolate, and no recipe should be in `Other`.
 6. Switch between English and Chinese, verify group membership does not change, then toggle each category button off and on and confirm it affects exactly that stable group.
 7. Save a tracked subset, restart without launching the level, and verify the ID-based subset persists without any category data in the selections file.
 8. Launch the level and verify custom placeholder names are upgraded to their runtime definitions without duplicate dish IDs or category changes; prepared matching and guess tickets should work afterward.
 9. In a disposable provider profile, reorder the same recipes and refresh metadata; verify keys, labels, ordering, and membership remain identical. Then remove and add recipes authoritatively and verify stale assignments disappear and the selector refreshes once.
 10. In a disposable provider stub/profile, exercise malformed recipe evidence, a partial malformed catalog, a duplicate scene ID, and a temporary read failure. Verify valid scenes remain, failures are summarized once, and the last successful snapshot survives only the temporary/untrustworthy reads.
 11. Remove a valid DIY scene from authoritative metadata and refresh; verify the removed scene does not leak back from the hydrated scene cache. An authoritative empty catalog must also replace the prior snapshot.
-12. Inspect `OC2MenuManager.dish-catalog-report.txt` and verify each DIY row includes its category key, bilingual labels, and one of the five documented inference sources.
+12. Inspect `OC2MenuManager.dish-catalog-report.txt` and verify each DIY row includes its category key, bilingual labels, initial category key, decisive evidence, and one of the six documented inference sources. The two workflow-corrected RW5 rows must report `workflow` and their original `milkdrink` key.
 13. Remove OC2DIYLevel again and verify Menu Manager still loads normally.
 
 ## Scene selector usability

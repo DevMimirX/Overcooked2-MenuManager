@@ -42,6 +42,67 @@ namespace OC2MenuManager
             }
         }
 
+        private static void SynchronizeSettingsInputBlocker()
+        {
+            if (settingsInputBlockerUnavailable
+                || (!settingsWindowVisible && settingsInputBlocker == null))
+            {
+                return;
+            }
+
+            try
+            {
+                if (settingsInputBlocker == null)
+                {
+                    settingsInputBlocker = new SettingsInputBlocker();
+                }
+
+                settingsInputBlocker.SetActive(settingsWindowVisible);
+            }
+            catch (Exception ex)
+            {
+                settingsInputBlockerUnavailable = true;
+                _MODEntry.LogWarning(
+                    "[ServedDishTracker] Could not create the settings input shield; underlying menus may receive clicks: "
+                    + ex.GetType().Name
+                    + ": "
+                    + ex.Message);
+            }
+        }
+
+        private static void DisposeSettingsInputBlocker()
+        {
+            try
+            {
+                if (settingsInputBlocker != null)
+                {
+                    settingsInputBlocker.Dispose();
+                }
+            }
+            catch (Exception ex)
+            {
+                _MODEntry.LogWarning(
+                    "[ServedDishTracker] Failed to dispose the settings input shield: "
+                    + ex.GetType().Name
+                    + ": "
+                    + ex.Message);
+            }
+            finally
+            {
+                settingsInputBlocker = null;
+                settingsInputBlockerUnavailable = false;
+            }
+        }
+
+        private static bool IsSettingsWindowPointerEvent(EventType eventType)
+        {
+            return eventType == EventType.MouseDown
+                || eventType == EventType.MouseUp
+                || eventType == EventType.MouseMove
+                || eventType == EventType.MouseDrag
+                || eventType == EventType.ScrollWheel;
+        }
+
         private static void InitializeHotkeyConfig()
         {
             settingsWindowHotkey = DefaultSettingsWindowHotkey;

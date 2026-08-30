@@ -79,7 +79,7 @@ namespace OC2MenuManager
         private const string ManyRecipesSettingsTypeName = "OC2ManyRecipes.ManyRecipesSettings";
         private const int DIYEvidenceMaximumDepth = 4;
         private const int DIYEvidenceMaximumObjects = 64;
-        private const int DIYEvidenceMaximumComponentsPerKind = 32;
+        private const int DIYEvidenceMaximumComponents = 64;
 
         private static readonly List<RecipeList.Entry> ManyRecipeEntriesCache = new List<RecipeList.Entry>();
         private static readonly List<object> ManyRecipePatchIdentityBuffer = new List<object>();
@@ -836,9 +836,14 @@ namespace OC2MenuManager
         private static RecipeCategoryEvidence BuildCustomDIYCategoryEvidence(object recipeSource, int recipeId, string recipeName)
         {
             RecipeCategoryEvidence evidence = new RecipeCategoryEvidence(recipeId, recipeName);
+            evidence.AuthoringName = BoundDIYIdentity(GetStringMember(recipeSource, "name"));
             evidence.Kind = ReadDIYRecipeKind(GetMemberValue(recipeSource, "type"));
-            evidence.CookingIdentity = GetFirstDIYIdentity(recipeSource, "cookingStepSO", "cookingStepIconSO");
-            evidence.MixingIdentity = GetFirstDIYIdentity(recipeSource, "mixingIconSO");
+            evidence.CookingIdentity = GetFirstDIYIdentity(
+                recipeSource,
+                "cookingStepSO",
+                "cookingStepIconSO",
+                "cookingStepIcon");
+            evidence.MixingIdentity = GetFirstDIYIdentity(recipeSource, "mixingIconSO", "mixingIcon");
             evidence.PlatingIdentity = GetFirstDIYIdentity(recipeSource, "platingStepSO");
             evidence.ModelIdentity = GetFirstDIYIdentity(recipeSource, "modelSO", "model");
             evidence.IconIdentity = GetFirstDIYIdentity(recipeSource, "iconSO", "icon");
@@ -848,7 +853,8 @@ namespace OC2MenuManager
             AppendDIYComponentEvidence(
                 recipeSource,
                 "compositionSOs",
-                evidence.RequiredComponentNames,
+                evidence.Components,
+                false,
                 requiredVisited,
                 ref requiredObjectCount,
                 0);
@@ -858,7 +864,8 @@ namespace OC2MenuManager
             AppendDIYComponentEvidence(
                 recipeSource,
                 "optionalSOs",
-                evidence.OptionalComponentNames,
+                evidence.Components,
+                true,
                 optionalVisited,
                 ref optionalObjectCount,
                 0);
@@ -931,7 +938,8 @@ namespace OC2MenuManager
         private static void AppendDIYComponentEvidence(
             object owner,
             string memberName,
-            List<string> destination,
+            List<RecipeComponentEvidence> destination,
+            bool isOptional,
             HashSet<object> visited,
             ref int objectCount,
             int depth)
@@ -941,7 +949,7 @@ namespace OC2MenuManager
                 || visited == null
                 || depth > DIYEvidenceMaximumDepth
                 || objectCount >= DIYEvidenceMaximumObjects
-                || destination.Count >= DIYEvidenceMaximumComponentsPerKind)
+                || destination.Count >= DIYEvidenceMaximumComponents)
             {
                 return;
             }
@@ -962,7 +970,7 @@ namespace OC2MenuManager
                 return;
             }
 
-            for (int i = 0; i < componentCount && destination.Count < DIYEvidenceMaximumComponentsPerKind; i++)
+            for (int i = 0; i < componentCount && destination.Count < DIYEvidenceMaximumComponents; i++)
             {
                 object component;
                 try
@@ -980,7 +988,7 @@ namespace OC2MenuManager
                 }
 
                 objectCount++;
-                AddDistinctDIYIdentity(destination, GetDIYIdentity(component));
+                AddOrImproveDIYComponentEvidence(destination, GetDIYIdentity(component), isOptional, depth);
                 if (depth >= DIYEvidenceMaximumDepth || objectCount >= DIYEvidenceMaximumObjects)
                 {
                     continue;
@@ -990,6 +998,7 @@ namespace OC2MenuManager
                     component,
                     "compositionSOs",
                     destination,
+                    isOptional,
                     visited,
                     ref objectCount,
                     depth + 1);
@@ -997,6 +1006,7 @@ namespace OC2MenuManager
                     component,
                     "optionalSOs",
                     destination,
+                    true,
                     visited,
                     ref objectCount,
                     depth + 1);
@@ -1061,7 +1071,11 @@ namespace OC2MenuManager
             return identity.Length <= 160 ? identity : identity.Substring(0, 160);
         }
 
-        private static void AddDistinctDIYIdentity(List<string> destination, string identity)
+        private static void AddOrImproveDIYComponentEvidence(
+            List<RecipeComponentEvidence> destination,
+            string identity,
+            bool isOptional,
+            int depth)
         {
             if (destination == null || string.IsNullOrEmpty(identity))
             {
@@ -1070,13 +1084,23 @@ namespace OC2MenuManager
 
             for (int i = 0; i < destination.Count; i++)
             {
-                if (string.Equals(destination[i], identity, StringComparison.OrdinalIgnoreCase))
+                RecipeComponentEvidence existing = destination[i];
+                if (!string.Equals(existing.Identity, identity, StringComparison.OrdinalIgnoreCase))
                 {
-                    return;
+                    continue;
                 }
+
+                bool incomingIsStronger = (existing.IsOptional && !isOptional)
+                    || (existing.IsOptional == isOptional && depth < existing.Depth);
+                if (incomingIsStronger)
+                {
+                    destination[i] = new RecipeComponentEvidence(identity, isOptional, depth);
+                }
+
+                return;
             }
 
-            destination.Add(identity);
+            destination.Add(new RecipeComponentEvidence(identity, isOptional, depth));
         }
 
         /// <summary>Uses object identity so Unity equality overloads cannot collapse distinct metadata nodes.</summary>

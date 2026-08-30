@@ -239,8 +239,8 @@ namespace OC2MenuManager
             }
         }
 
-        private static readonly Color SettingsWindowBodyColor = new Color(0.10f, 0.10f, 0.10f, 0.96f);
-        private static readonly Color SettingsWindowHeaderColor = new Color(0.17f, 0.17f, 0.17f, 0.98f);
+        private static readonly Color SettingsWindowBodyColor = new Color(0.10f, 0.10f, 0.10f, 1f);
+        private static readonly Color SettingsWindowHeaderColor = new Color(0.17f, 0.17f, 0.17f, 1f);
 
         private sealed class OverlayRow
         {

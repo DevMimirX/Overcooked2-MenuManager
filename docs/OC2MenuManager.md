@@ -82,7 +82,7 @@ Tracked-dish selections:
 Optional generated discovery report:
 
 - `Overcooked! 2\BepInEx\config\OC2MenuManager.dish-catalog-report.txt`
-- each row includes the stable category key, English and Chinese category labels, and the inference source (`native`, `semantic`, `scene`, `structure`, or `fallback`)
+- each row includes the stable category key, English and Chinese category labels, the inference source (`native`, `semantic`, `workflow`, `scene`, `structure`, or `fallback`), the initial category key, and concise decisive evidence
 
 Older `HostUtilities-ServedDishTrackerSelections.txt` data is copied once when the new selections file does not exist. The legacy file is never deleted or overwritten.
 
@@ -116,6 +116,8 @@ You can change the hotkey in either of these ways:
 
 - click the hotkey row inside the mod window
 - edit `OC2MenuManager.hotkey.txt` directly
+
+While the settings window is open, it is fully opaque and modal for pointer input. A transparent full-screen input shield prevents clicks, drags, and scrolling from reaching the game menus underneath it, including the click used to close the window.
 
 ## Recommended First-Time Setup
 
@@ -164,7 +166,7 @@ Important behavior:
 
 DIY scenes appear once OC2DIYLevel finishes loading its frontend metadata. Menu Manager never scans the game directory, enumerates the `levels` folder, or loads DIY asset bundles itself. It accepts only OC2DIYLevel's in-memory catalog, so screenshots, text files, and other files beside the bundles are ignored. A temporary provider failure keeps the last valid catalog visible, while malformed or duplicate metadata entries are skipped and reported without hiding valid scenes. Selecting a scene lazily loads its recipes; a failed preload is retried automatically while the window is open, and the retry button forces another attempt. You no longer need to launch a DIY level once just to configure it.
 
-For DIY scenes, category buttons are inferred from the complete recipe set. Existing native names keep their normal family; custom names are matched as whole tokens across underscores, CamelCase, whitespace, Chinese text, and common transliterations. Unrecognized families can still group by repeated author prefixes or suffixes, shared nested components, or cooking/mixing/plating structure. Only recipes with neither meaningful names nor usable structure use `Other`. These groups never rewrite dish names, are recomputed only when authoritative DIY recipe metadata is loaded or refreshed, and remain attached when a metadata-only custom recipe is upgraded to its runtime definition.
+For DIY scenes, category buttons are inferred from the complete recipe set. Existing native names keep their normal family; custom names are matched as whole tokens across underscores, CamelCase, whitespace, Chinese text, and common transliterations. A conservative workflow pass can correct a semantic outlier only when its preparation facet, recipe kind, reflected cooking or mixing process, and required/base components agree more strongly with another family containing multiple anchors than with its current family. A shared pot, mixer, cup, model, or icon alone never merges families, and ambiguous evidence keeps the semantic result. Unrecognized families can still group by repeated author prefixes or suffixes, shared nested components, or cooking/mixing/plating structure. Only recipes with neither meaningful names nor usable structure use `Other`. These groups never rewrite dish names, are recomputed only when authoritative DIY recipe metadata is loaded or refreshed, and remain attached when a metadata-only custom recipe is upgraded to its runtime definition.
 
 Recipe Extension dishes are generated from the real level at round initialization, so they appear automatically in the current scene selector and in-round overlay after synchronization completes. If a recently changed extension configuration does not appear, start a new round and inspect the one-time `[Compatibility]` warning in the BepInEx log; a failed active snapshot is deliberately not replaced with a partial catalog.
 

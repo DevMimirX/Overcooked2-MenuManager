@@ -176,6 +176,26 @@ public sealed class RecipeCategoryCatalogTests
         Assert.Equal(6, RecipeCategoryCatalog.GetCategoryTierByKey(coldChocolate.Key));
     }
 
+    [Fact]
+    public void AuthoringNameSuppliesClassificationEvidenceWithoutReplacingTheRuntimeName()
+    {
+        RecipeCategoryEvidence evidence = Evidence(
+            1,
+            "OpaqueRecipe1999",
+            authoringName: "ColdChocolateVanilla");
+
+        RecipeCategoryAssignment assignment = RecipeCategoryCatalog.ClassifyDIYRecipes(new[] { evidence })[1];
+
+        Assert.Equal("OpaqueRecipe1999", evidence.InternalName);
+        AssertAssignment(
+            assignment,
+            "coldchocolate",
+            "Cold Chocolate",
+            "冷巧克力",
+            "hotchocolate",
+            RecipeCategorySource.Semantic);
+    }
+
     [Theory]
     [InlineData("Soup_Onion", "soup")]
     [InlineData("Pizza_Mushroom", "pizza")]
@@ -230,64 +250,9 @@ public sealed class RecipeCategoryCatalogTests
     }
 
     [Fact]
-    public void RwFiveProducesTheTwelveAgreedFamiliesForAllFiftyRecipes()
+    public void RwFiveWorkflowEvidenceCorrectsOutliersWithoutMergingCoherentDrinkFamilies()
     {
-        var fixture = new (int Id, string Name)[]
-        {
-            (15614, "Cake_Plain"),
-            (15618, "Cake_Chocolate"),
-            (25656, "Pancake_Chocolate"),
-            (26020, "FruitPie_Blackberry"),
-            (101593, "FruitPlatter_OrangePeachGrapes"),
-            (112822, "FruitPie_Apple"),
-            (112832, "FruitPie_Cherry"),
-            (130976, "Donut_Raspberry"),
-            (228988, "Donut_Plain"),
-            (228996, "Donut_Chocolate"),
-            (19990406, "Milk_Cake_Cherry"),
-            (19990407, "Milk_Cake_Pineapple"),
-            (19990408, "Milk_Cake_Peach"),
-            (19990420, "Donut_Strawberry_Blueberry"),
-            (19990430, "CompositePanCakeStrawBanana"),
-            (19990431, "OptionalPanCakeStraw"),
-            (19990433, "OptionalPanCakeblueberry"),
-            (19990440, "FruitPie_AppleBlackberry"),
-            (19990441, "FruitPie_AppleBlackberry"),
-            (19991000, "HotChocolate"),
-            (19991001, "HotChocolateHoney"),
-            (19991002, "HotChocolateVanilla"),
-            (19991003, "HotChocolateHoneyVanilla"),
-            (19991004, "ColdChocolate"),
-            (19991005, "ColdChocolateHoney"),
-            (19991006, "ColdChocolateHoney"),
-            (19991007, "StrawberryMilk"),
-            (19991008, "PeachCheeseIceMilk"),
-            (19991009, "OrangeJuice"),
-            (19991010, "BananaMilk"),
-            (19991011, "BlueberryIce"),
-            (19991013, "PlatterPeachOrangeStrawberry"),
-            (19991014, "PlatterGrapeOrangeBanana"),
-            (19991015, "PlatterGrapePeachPineapple"),
-            (19991016, "GrapeJuice"),
-            (19991017, "PeachJuice"),
-            (19991018, "HotAppleOrangePineappleHoney"),
-            (19991019, "HotAppleStrawberryPineappleHoney"),
-            (19991020, "HotAppleOrangePeachHoney"),
-            (19991021, "MelonIce"),
-            (19991022, "StrawberryIceMilkCheese"),
-            (19991023, "OrangeIceMilkCheese"),
-            (19991024, "HotAppleGrapeStrawberryHoney"),
-            (19991025, "HotChocolateMarshmellow"),
-            (19991026, "ColdChocolateStrawberry"),
-            (19991027, "ColdMilk"),
-            (19991028, "HotAppleHoney"),
-            (19991029, "CherryMilk"),
-            (19991030, "HotStrawberryMilk"),
-            (19991041, "PlatterStrawberryBananaPineapple")
-        };
-        List<RecipeCategoryEvidence> evidence = fixture
-            .Select(recipe => Evidence(recipe.Id, recipe.Name))
-            .ToList();
+        List<RecipeCategoryEvidence> evidence = BuildRwFiveFixture();
 
         Dictionary<int, RecipeCategoryAssignment> assignments = RecipeCategoryCatalog.ClassifyDIYRecipes(evidence);
         Dictionary<string, int> counts = assignments.Values
@@ -302,9 +267,9 @@ public sealed class RecipeCategoryCatalogTests
                 ["Pancake"] = 4,
                 ["Fruit Pie"] = 5,
                 ["Donut"] = 4,
-                ["Hot Chocolate"] = 5,
-                ["Cold Chocolate"] = 4,
-                ["Milk Drinks"] = 5,
+                ["Hot Chocolate"] = 6,
+                ["Cold Chocolate"] = 5,
+                ["Milk Drinks"] = 3,
                 ["Ice Milk"] = 3,
                 ["Fruit Juice"] = 3,
                 ["Hot Fruit Drinks"] = 5,
@@ -312,6 +277,259 @@ public sealed class RecipeCategoryCatalogTests
                 ["Fruit Platter"] = 5
             },
             counts);
+
+        AssertAssignment(
+            assignments[19991030],
+            "hotchocolate",
+            "Hot Chocolate",
+            "热可可",
+            "hotchocolate",
+            RecipeCategorySource.Workflow);
+        Assert.Equal("milkdrink", assignments[19991030].InitialCategoryKey);
+        Assert.Contains("facet=hot", assignments[19991030].InferenceDetail, StringComparison.Ordinal);
+
+        AssertAssignment(
+            assignments[19991027],
+            "coldchocolate",
+            "Cold Chocolate",
+            "冷巧克力",
+            "hotchocolate",
+            RecipeCategorySource.Workflow);
+        Assert.Equal("milkdrink", assignments[19991027].InitialCategoryKey);
+        Assert.Contains("facet=cold", assignments[19991027].InferenceDetail, StringComparison.Ordinal);
+
+        Assert.All(
+            new[] { 19991018, 19991019, 19991020, 19991024, 19991028 },
+            id => Assert.Equal("hotfruitdrink", assignments[id].Key));
+        Assert.All(
+            new[] { 19991007, 19991010, 19991029 },
+            id => Assert.Equal("milkdrink", assignments[id].Key));
+        Assert.All(
+            new[] { 19991008, 19991022, 19991023 },
+            id => Assert.Equal("icemilk", assignments[id].Key));
+        Assert.All(
+            new[] { 19991011, 19991021 },
+            id => Assert.Equal("fruitice", assignments[id].Key));
+
+        evidence.Reverse();
+        Dictionary<int, RecipeCategoryAssignment> reversed = RecipeCategoryCatalog.ClassifyDIYRecipes(evidence);
+        foreach (int id in assignments.Keys)
+        {
+            Assert.True(RecipeCategoryCatalog.AreEquivalent(assignments[id], reversed[id]));
+        }
+    }
+
+    [Fact]
+    public void WorkflowReconciliationKeepsSemanticCategoryWhenBaseEvidenceIsMissing()
+    {
+        var evidence = new List<RecipeCategoryEvidence>
+        {
+            Evidence(1, "HotChocolate", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Cocoa" }),
+            Evidence(2, "HotChocolateHoney", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Cocoa", "Honey" }),
+            Evidence(3, "BananaMilk", DIYRecipeKind.Mixed, mixingIdentity: "SharedMixer", required: new[] { "Milk", "Banana" }),
+            Evidence(4, "CherryMilk", DIYRecipeKind.Mixed, mixingIdentity: "SharedMixer", required: new[] { "Milk", "Cherry" }),
+            Evidence(5, "HotStrawberryMilk", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk", "Strawberry" })
+        };
+
+        RecipeCategoryAssignment assignment = RecipeCategoryCatalog.ClassifyDIYRecipes(evidence)[5];
+
+        Assert.Equal("milkdrink", assignment.Key);
+        Assert.Equal(RecipeCategorySource.Semantic, assignment.Source);
+    }
+
+    [Fact]
+    public void WorkflowReconciliationPreservesSemanticCategoryWhenTargetsTie()
+    {
+        var evidence = new List<RecipeCategoryEvidence>
+        {
+            Evidence(1, "HotChocolate", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk" }),
+            Evidence(2, "HotChocolateHoney", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk" }),
+            Evidence(3, "HotAppleHoney", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk" }),
+            Evidence(4, "HotApplePeachHoney", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk" }),
+            Evidence(5, "BananaMilk", DIYRecipeKind.Mixed, mixingIdentity: "SharedMixer", required: new[] { "Milk", "Banana" }),
+            Evidence(6, "CherryMilk", DIYRecipeKind.Mixed, mixingIdentity: "SharedMixer", required: new[] { "Milk", "Cherry" }),
+            Evidence(7, "HotMilk", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk" })
+        };
+
+        RecipeCategoryAssignment assignment = RecipeCategoryCatalog.ClassifyDIYRecipes(evidence)[7];
+
+        Assert.Equal("milkdrink", assignment.Key);
+        Assert.Equal(RecipeCategorySource.Semantic, assignment.Source);
+    }
+
+    [Fact]
+    public void RequiredBaseComponentsOutrankOptionalFlavorComponents()
+    {
+        var evidence = new List<RecipeCategoryEvidence>
+        {
+            Evidence(1, "HotChocolate", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk" }),
+            Evidence(2, "HotChocolateVanilla", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk" }),
+            Evidence(3, "HotAppleHoney", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Honey" }),
+            Evidence(4, "HotPeachHoney", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Honey" }),
+            Evidence(5, "BananaMilk", DIYRecipeKind.Mixed, mixingIdentity: "SharedMixer", required: new[] { "Milk", "Banana" }),
+            Evidence(6, "CherryMilk", DIYRecipeKind.Mixed, mixingIdentity: "SharedMixer", required: new[] { "Milk", "Cherry" }),
+            Evidence(
+                7,
+                "HotMilkHoney",
+                DIYRecipeKind.Cooked,
+                cookingIdentity: "SharedPot",
+                required: new[] { "Milk" },
+                optional: new[] { "Honey" })
+        };
+
+        RecipeCategoryAssignment assignment = RecipeCategoryCatalog.ClassifyDIYRecipes(evidence)[7];
+
+        Assert.Equal("hotchocolate", assignment.Key);
+        Assert.Equal(RecipeCategorySource.Workflow, assignment.Source);
+    }
+
+    [Fact]
+    public void WorkflowReconciliationRequiresTargetComponentsToBeatCurrentFamily()
+    {
+        var evidence = new List<RecipeCategoryEvidence>
+        {
+            Evidence(1, "HotChocolate", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk", "Chocolate" }),
+            Evidence(2, "HotChocolateVanilla", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk", "Chocolate", "Vanilla" }),
+            Evidence(3, "AlmondMilk", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk", "Almond" }),
+            Evidence(4, "CreamMilk", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk", "Cream" }),
+            Evidence(5, "HotAlmondCreamMilk", DIYRecipeKind.Cooked, cookingIdentity: "SharedPot", required: new[] { "Milk", "Almond", "Cream" })
+        };
+
+        RecipeCategoryAssignment assignment = RecipeCategoryCatalog.ClassifyDIYRecipes(evidence)[5];
+
+        Assert.Equal("milkdrink", assignment.Key);
+        Assert.Equal(RecipeCategorySource.Semantic, assignment.Source);
+    }
+
+    [Fact]
+    public void WorkflowReconciliationDoesNotTreatSharedPresentationAsAProcess()
+    {
+        var evidence = new List<RecipeCategoryEvidence>
+        {
+            Evidence(1, "HotChocolate", DIYRecipeKind.Cooked, required: new[] { "Milk", "Chocolate" }),
+            Evidence(2, "HotChocolateVanilla", DIYRecipeKind.Cooked, required: new[] { "Milk", "Chocolate", "Vanilla" }),
+            Evidence(3, "BananaMilk", DIYRecipeKind.Cooked, required: new[] { "Milk", "Banana" }),
+            Evidence(4, "CherryMilk", DIYRecipeKind.Cooked, required: new[] { "Milk", "Cherry" }),
+            Evidence(5, "HotMilkChocolate", DIYRecipeKind.Cooked, required: new[] { "Milk", "Chocolate" })
+        };
+        foreach (RecipeCategoryEvidence recipe in evidence)
+        {
+            recipe.ModelIdentity = "SharedCup";
+            recipe.IconIdentity = "SharedDrinkIcon";
+        }
+
+        RecipeCategoryAssignment assignment = RecipeCategoryCatalog.ClassifyDIYRecipes(evidence)[5];
+
+        Assert.Equal("milkdrink", assignment.Key);
+        Assert.Equal(RecipeCategorySource.Semantic, assignment.Source);
+    }
+
+    [Fact]
+    public void WorkflowTargetRequiresStrictProcessMajority()
+    {
+        var evidence = new List<RecipeCategoryEvidence>
+        {
+            Evidence(1, "HotChocolate", DIYRecipeKind.Cooked, cookingIdentity: "PotA", required: new[] { "Milk" }),
+            Evidence(2, "HotChocolateHoney", DIYRecipeKind.Cooked, cookingIdentity: "PotA", required: new[] { "Milk" }),
+            Evidence(3, "HotChocolateVanilla", DIYRecipeKind.Cooked, cookingIdentity: "PotB", required: new[] { "Milk" }),
+            Evidence(4, "HotChocolateMarshmellow", DIYRecipeKind.Cooked, cookingIdentity: "PotB", required: new[] { "Milk" }),
+            Evidence(5, "BananaMilk", DIYRecipeKind.Mixed, mixingIdentity: "Mixer", required: new[] { "Milk", "Banana" }),
+            Evidence(6, "CherryMilk", DIYRecipeKind.Mixed, mixingIdentity: "Mixer", required: new[] { "Milk", "Cherry" }),
+            Evidence(7, "HotMilk", DIYRecipeKind.Cooked, cookingIdentity: "PotA", required: new[] { "Milk" })
+        };
+
+        RecipeCategoryAssignment assignment = RecipeCategoryCatalog.ClassifyDIYRecipes(evidence)[7];
+
+        Assert.Equal("milkdrink", assignment.Key);
+        Assert.Equal(RecipeCategorySource.Semantic, assignment.Source);
+    }
+
+    [Fact]
+    public void MalformedComponentEvidenceCannotDestabilizeSemanticClassification()
+    {
+        RecipeCategoryEvidence evidence = Evidence(1, "ColdMilk", DIYRecipeKind.Mixed, mixingIdentity: "Mixer");
+        evidence.Components.Add(null!);
+        evidence.Components.Add(new RecipeComponentEvidence(string.Empty, false, -10));
+
+        RecipeCategoryAssignment assignment = RecipeCategoryCatalog.ClassifyDIYRecipes(new[] { evidence })[1];
+
+        Assert.Equal("milkdrink", assignment.Key);
+        Assert.Equal(RecipeCategorySource.Semantic, assignment.Source);
+    }
+
+    [Fact]
+    public void WorkflowSourceNameIsAuditable()
+    {
+        Assert.Equal("workflow", RecipeCategoryCatalog.GetSourceName(RecipeCategorySource.Workflow));
+    }
+
+    private static List<RecipeCategoryEvidence> BuildRwFiveFixture()
+    {
+        const string pot = "rw-shared-pot";
+        const string mixer = "rw-shared-mixer";
+        var evidence = new List<RecipeCategoryEvidence>
+        {
+            Evidence(15614, "Cake_Plain"),
+            Evidence(15618, "Cake_Chocolate"),
+            Evidence(25656, "Pancake_Chocolate"),
+            Evidence(26020, "FruitPie_Blackberry"),
+            Evidence(101593, "FruitPlatter_OrangePeachGrapes"),
+            Evidence(112822, "FruitPie_Apple"),
+            Evidence(112832, "FruitPie_Cherry"),
+            Evidence(130976, "Donut_Raspberry"),
+            Evidence(228988, "Donut_Plain"),
+            Evidence(228996, "Donut_Chocolate"),
+            Evidence(19990406, "Milk_Cake_Cherry"),
+            Evidence(19990407, "Milk_Cake_Pineapple"),
+            Evidence(19990408, "Milk_Cake_Peach"),
+            Evidence(19990420, "Donut_Strawberry_Blueberry"),
+            Evidence(19990430, "CompositePanCakeStrawBanana"),
+            Evidence(19990431, "OptionalPanCakeStraw"),
+            Evidence(19990433, "OptionalPanCakeblueberry"),
+            Evidence(19990440, "FruitPie_AppleBlackberry"),
+            Evidence(19990441, "FruitPie_AppleBlackberry"),
+
+            Evidence(19991000, "HotChocolate", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Milk", "Chocolate" }),
+            Evidence(19991001, "HotChocolateHoney", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Milk", "Chocolate", "Honey" }),
+            Evidence(19991002, "HotChocolateVanilla", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Milk", "Chocolate", "Vanilla" }),
+            Evidence(19991003, "HotChocolateHoneyVanilla", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Milk", "Chocolate", "Honey", "Vanilla" }),
+            Evidence(19991025, "HotChocolateMarshmellow", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Milk", "Chocolate", "Marshmellow" }),
+            Evidence(19991030, "HotStrawberryMilk", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Milk", "Strawberry", "Honey" }),
+
+            Evidence(19991004, "ColdChocolate", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "Chocolate", "IceCube" }),
+            Evidence(19991005, "ColdChocolateHoney", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "Chocolate", "IceCube", "Honey" }),
+            Evidence(19991006, "ColdChocolateHoney", DIYRecipeKind.Mixed, mixingIdentity: mixer, authoringName: "ColdChocolateVanilla", required: new[] { "Milk", "Chocolate", "IceCube", "Vanilla" }),
+            Evidence(19991026, "ColdChocolateStrawberry", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "Chocolate", "IceCube", "Strawberry" }),
+            Evidence(19991027, "ColdMilk", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "IceCube", "Vanilla", "Honey" }),
+
+            Evidence(19991007, "StrawberryMilk", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "Strawberry" }),
+            Evidence(19991010, "BananaMilk", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "Banana" }),
+            Evidence(19991029, "CherryMilk", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "Cherry" }),
+
+            Evidence(19991008, "PeachCheeseIceMilk", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "IceCube", "Cheese", "Peach" }),
+            Evidence(19991022, "StrawberryIceMilkCheese", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "IceCube", "Cheese", "Strawberry" }),
+            Evidence(19991023, "OrangeIceMilkCheese", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Milk", "IceCube", "Cheese", "Orange" }),
+
+            Evidence(19991009, "OrangeJuice", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Orange" }),
+            Evidence(19991016, "GrapeJuice", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Grape" }),
+            Evidence(19991017, "PeachJuice", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Peach" }),
+
+            Evidence(19991011, "BlueberryIce", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Blueberry", "IceCube" }),
+            Evidence(19991021, "MelonIce", DIYRecipeKind.Mixed, mixingIdentity: mixer, required: new[] { "Melon", "IceCube" }),
+
+            Evidence(19991018, "HotAppleOrangePineappleHoney", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Apple", "Orange", "Pineapple", "Honey" }),
+            Evidence(19991019, "HotAppleStrawberryPineappleHoney", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Apple", "Strawberry", "Pineapple", "Honey" }),
+            Evidence(19991020, "HotAppleOrangePeachHoney", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Apple", "Orange", "Peach", "Honey" }),
+            Evidence(19991024, "HotAppleGrapeStrawberryHoney", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Apple", "Grape", "Strawberry", "Honey" }),
+            Evidence(19991028, "HotAppleHoney", DIYRecipeKind.Cooked, cookingIdentity: pot, required: new[] { "Apple", "Honey" }),
+
+            Evidence(19991013, "PlatterPeachOrangeStrawberry", DIYRecipeKind.Composite, required: new[] { "Peach", "Orange", "Strawberry" }),
+            Evidence(19991014, "PlatterGrapeOrangeBanana", DIYRecipeKind.Composite, required: new[] { "Grape", "Orange", "Banana" }),
+            Evidence(19991015, "PlatterGrapePeachPineapple", DIYRecipeKind.Composite, required: new[] { "Grape", "Peach", "Pineapple" }),
+            Evidence(19991041, "PlatterStrawberryBananaPineapple", DIYRecipeKind.Composite, required: new[] { "Strawberry", "Banana", "Pineapple" })
+        };
+
+        return evidence;
     }
 
     private static RecipeCategoryEvidence Evidence(
@@ -319,22 +537,32 @@ public sealed class RecipeCategoryCatalogTests
         string name,
         DIYRecipeKind kind = DIYRecipeKind.Unknown,
         string? cookingIdentity = null,
+        string? mixingIdentity = null,
+        string? authoringName = null,
         string[]? required = null,
         string[]? optional = null)
     {
         var evidence = new RecipeCategoryEvidence(id, name)
         {
             Kind = kind,
-            CookingIdentity = cookingIdentity ?? string.Empty
+            CookingIdentity = cookingIdentity ?? string.Empty,
+            MixingIdentity = mixingIdentity ?? string.Empty,
+            AuthoringName = authoringName ?? string.Empty
         };
         if (required is not null)
         {
-            evidence.RequiredComponentNames.AddRange(required);
+            foreach (string identity in required)
+            {
+                evidence.Components.Add(new RecipeComponentEvidence(identity, false, 0));
+            }
         }
 
         if (optional is not null)
         {
-            evidence.OptionalComponentNames.AddRange(optional);
+            foreach (string identity in optional)
+            {
+                evidence.Components.Add(new RecipeComponentEvidence(identity, true, 0));
+            }
         }
 
         return evidence;

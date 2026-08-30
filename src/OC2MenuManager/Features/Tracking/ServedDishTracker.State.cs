@@ -224,6 +224,7 @@ namespace OC2MenuManager
         private static ConfigEntry<int> overlaySceneMaxTextLength;
         private static ConfigEntry<int> overlayDishMaxTextLength;
         private static DebugOverlayHost overlayHost;
+        private static SettingsInputBlocker settingsInputBlocker;
         private static string selectionFilePath;
         private static int nextSceneRefreshFrame;
         private static int nextDIYSceneRefreshFrame;
@@ -334,6 +335,7 @@ namespace OC2MenuManager
         private static bool lastMenuTicketTintEnabled = true;
         private static bool preparedSourceBootstrapComplete = true;
         private static bool settingsWindowVisible;
+        private static bool settingsInputBlockerUnavailable;
         private static bool sceneDropdownExpanded;
         private static bool sceneSearchFocusRequested;
         private static SceneDropdownScrollRequest sceneDropdownScrollRequest;
