@@ -533,6 +533,11 @@ namespace OC2MenuManager.Infrastructure
 
     internal static class DynamicPhasePolicy
     {
+        internal static int NormalizePhaseIndex(int phaseIndex)
+        {
+            return Math.Max(0, phaseIndex);
+        }
+
         internal static bool ShouldReset(int previousPhaseIndex, int nextPhaseIndex)
         {
             return previousPhaseIndex != nextPhaseIndex;

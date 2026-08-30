@@ -1058,7 +1058,7 @@ namespace OC2MenuManager
                 run = new RunInfo();
                 run.SceneName = scene.SceneName;
                 run.TeamId = teamId;
-                run.CurrentPhaseIndex = 0;
+                run.CurrentPhaseIndex = currentDynamicPhaseIndex;
                 run.ReconstructionComplete = ReconstructionReadyTeams.Contains(teamId);
                 RunsByTeam[teamId] = run;
                 InitializeRunCounts(run, scene);

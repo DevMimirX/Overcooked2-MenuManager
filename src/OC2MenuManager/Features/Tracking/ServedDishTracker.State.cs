@@ -303,6 +303,7 @@ namespace OC2MenuManager
         private static DLCManager cachedDlcManager;
         private static int nextDlcManagerLookupFrame;
         private static WorldMapFlowController cachedWorldMapFlowController;
+        private static int currentDynamicPhaseIndex;
         private static string currentOnMenuCountsSceneName = string.Empty;
         private static bool currentOnMenuCountsDirty = true;
         private static int nextTrackedSceneRefreshPollFrame;

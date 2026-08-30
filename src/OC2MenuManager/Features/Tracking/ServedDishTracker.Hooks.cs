@@ -66,6 +66,7 @@ namespace OC2MenuManager
         {
             ClearTicketWidgetState();
             RunsByTeam.Clear();
+            currentDynamicPhaseIndex = 0;
             ReconstructionReadyTeams.Clear();
             AuthoritativeOrderControllersByTeam.Clear();
             OptionalRecipeAdapters.InvalidateManyRecipeEntries();

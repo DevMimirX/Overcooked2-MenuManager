@@ -1,6 +1,7 @@
 // Builds the history overlay and next-order probabilities from authoritative
-// round state. Probability and sorted-row results are cached per team and are
-// rebuilt only after the runtime emits an explicit state invalidation.
+// round state. The latest dynamic phase is retained independently of team runs
+// so controllers created after a map switch inherit the correct phase. Cached
+// probability and sorted-row results rebuild only after explicit invalidation.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -24,10 +25,8 @@ namespace OC2MenuManager
     {
         private static void ResetProbabilityState(int phaseIndex)
         {
-            if (RunsByTeam.Count == 0)
-            {
-                return;
-            }
+            int nextPhase = DynamicPhasePolicy.NormalizePhaseIndex(phaseIndex);
+            currentDynamicPhaseIndex = nextPhase;
 
             foreach (RunInfo run in RunsByTeam.Values)
             {
@@ -36,7 +35,6 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                int nextPhase = Math.Max(0, phaseIndex);
                 if (!DynamicPhasePolicy.ShouldReset(run.CurrentPhaseIndex, nextPhase))
                 {
                     continue;

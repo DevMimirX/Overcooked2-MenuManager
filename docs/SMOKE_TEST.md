@@ -37,7 +37,10 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 2. Repeat with two identical recipe-ID tickets and in couch versus across both team bars. Verify all compatible real tickets tint, prepared accounting remains kitchen-wide, and guess-ticket tint and opacity do not change.
 3. Move the prepared dish between a cooker, carrier, and plate. Verify the source transfer neither duplicates nor briefly loses the physical prepared count, and removing or serving it clears every compatibility tint.
 4. Use the same ingredients with a different cooking-step ID, raw progress, burnt progress, and an incorrect mixing state. Verify none receives prepared tint; then use the correct cooking step and completed state and verify it does.
-5. Exercise exact `WildcardOrderNode` direction and a valid cooked-container fallback. Verify only matches accepted by the audited base-game direction qualify, and container unwrapping never crosses cooking-step IDs or completion states.
+5. In DIY level `s_rw_5`, track Strawberry Milk `[19991007]` and Cherry Milk `[19991029]`. Complete each recipe in `utensil_mixer_01` while the bowl's cooking state remains raw; verify the completed mixed composition records exactly one prepared dish and every compatible live ticket receives the prepared tint.
+6. Move each RW5 dish from the mixer bowl through a carrier and plate. Verify its prepared count neither duplicates nor disappears during transfer, and serving or removing it clears the tint.
+7. Repeat with a mixed recipe completed in a blender and cooked recipes completed in pots and pans. Verify raw, burnt, wrong-step, and incompletely mixed dishes remain untinted, then verify correctly completed dishes tint in native levels and with Recipe Extension enabled.
+8. Exercise exact `WildcardOrderNode` direction and a valid cooked-container fallback. Verify only matches accepted by the audited base-game direction qualify, and container unwrapping never crosses cooking-step IDs or completion states.
 
 ## Compatibility data
 
@@ -49,8 +52,8 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 ## Optional DIY integration
 
 1. Run the standalone profile without OC2DIYLevel and open/refresh the scene selector; verify no error is logged.
-2. Install the audited OC2DIYLevel binary separately and restart. Before launching a DIY level, verify its frontend metadata reports 46 scenes and the selector's DIY count is 46.
-3. Search `s_rw_` and verify the five results are exactly `s_rw_1` through `s_rw_5`; repeat with one Chinese and one English metadata name, then select each result with one click.
+2. Install the audited OC2DIYLevel binary separately and restart. Before launching a DIY level, verify every provider-reported scene appears once and the selector's DIY count matches the provider snapshot.
+3. With the current `rw_v0.5` pack, search `s_rw_` and verify the six results are exactly `s_rw_1` through `s_rw_6`; repeat with one Chinese and one English metadata name, then select each result with one click.
 4. Keep `.png`, `.txt`, and other sidecar files beside the DIY bundles; verify they never appear as scenes in the selector and no Menu Manager directory enumeration appears in an I/O trace.
 5. Before launching `s_rw_5`, select it and verify all 50 configured dishes are available in exactly these groups: Cake 5, Pancake 4, Fruit Pie 5, Donut 4, Hot Chocolate 6, Cold Chocolate 5, Milk Drinks 3, Ice Milk 3, Fruit Juice 3, Hot Fruit Drinks 5, Fruit Ice 2, and Fruit Platter 5. `HotStrawberryMilk` must be in Hot Chocolate, `ColdMilk` must be in Cold Chocolate, and no recipe should be in `Other`.
 6. Switch between English and Chinese, verify group membership does not change, then toggle each category button off and on and confirm it affects exactly that stable group.
@@ -60,7 +63,9 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 10. In a disposable provider stub/profile, exercise malformed recipe evidence, a partial malformed catalog, a duplicate scene ID, and a temporary read failure. Verify valid scenes remain, failures are summarized once, and the last successful snapshot survives only the temporary/untrustworthy reads.
 11. Remove a valid DIY scene from authoritative metadata and refresh; verify the removed scene does not leak back from the hydrated scene cache. An authoritative empty catalog must also replace the prior snapshot.
 12. Inspect `OC2MenuManager.dish-catalog-report.txt` and verify each DIY row includes its category key, bilingual labels, initial category key, decisive evidence, and one of the six documented inference sources. The two workflow-corrected RW5 rows must report `workflow` and their original `milkdrink` key.
-13. Remove OC2DIYLevel again and verify Menu Manager still loads normally.
+13. Launch dynamic DIY level `s_rw_6` and cross every map switch. Verify orders added in each phase enter history, current-phase probabilities and prepared matching use that phase's recipe set, and previously served history remains intact.
+14. Repeat after delaying the first tracked order until after a map switch, and after any order-controller reconstruction available in the test setup. Verify the new tracker run inherits the latest announced phase instead of reverting to phase zero.
+15. Remove OC2DIYLevel again and verify Menu Manager still loads normally.
 
 ## Scene selector usability
 

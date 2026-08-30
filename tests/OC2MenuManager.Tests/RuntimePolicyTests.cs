@@ -527,8 +527,11 @@ public sealed class RuntimePolicyTests
     }
 
     [Fact]
-    public void DynamicPhaseChangesResetOnlyWhenThePhaseActuallyChanges()
+    public void DynamicPhaseIndicesAreNormalizedAndResetOnlyWhenThePhaseChanges()
     {
+        Assert.Equal(0, DynamicPhasePolicy.NormalizePhaseIndex(-1));
+        Assert.Equal(0, DynamicPhasePolicy.NormalizePhaseIndex(0));
+        Assert.Equal(3, DynamicPhasePolicy.NormalizePhaseIndex(3));
         Assert.False(DynamicPhasePolicy.ShouldReset(2, 2));
         Assert.True(DynamicPhasePolicy.ShouldReset(1, 2));
         Assert.True(DynamicPhasePolicy.ShouldReset(2, 0));

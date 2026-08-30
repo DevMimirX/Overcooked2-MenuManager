@@ -1,6 +1,7 @@
 // Tracks completed dishes through event-registered container sources. Each
 // physical source owns one canonical count plus every base-game-compatible ID
-// used for tinting; cooking-wrapper fallback never discards step or progress.
+// used for tinting. Assembled composition is authoritative for dual-purpose
+// utensils; cooking-wrapper fallback never discards step or progress.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -472,14 +473,8 @@ namespace OC2MenuManager
             try
             {
                 AssembledDefinitionNode composition = source.Provider.GetOrderComposition();
-                bool isCookedSource = source.CookingHandler != null;
-                if (isCookedSource && !IsPreparedCookingSourceCooked(source, composition))
-                {
-                    ClearPreparedSourceMatch(source);
-                    return;
-                }
-
-                int matchedRecipeId = MatchPreparedRecipe(scene, composition, isCookedSource, source);
+                bool allowCookedFallback = source.CookingHandler != null;
+                int matchedRecipeId = MatchPreparedRecipe(scene, composition, allowCookedFallback, source);
                 SetPreparedSourceMatch(
                     source,
                     matchedRecipeId,
@@ -501,23 +496,6 @@ namespace OC2MenuManager
                 0,
                 PreparedMatchedRecipeIdsBuffer,
                 PreparedMatchedRecipeIdsSetBuffer);
-        }
-
-        private static bool IsPreparedCookingSourceCooked(PreparedSourceState source, AssembledDefinitionNode composition)
-        {
-            if (source == null)
-            {
-                return false;
-            }
-
-            ClientCookingHandler cookingHandler = source.CookingHandler;
-            if (cookingHandler != null)
-            {
-                return cookingHandler.GetCookedOrderState() == CookedCompositeOrderNode.CookingProgress.Cooked;
-            }
-
-            CookedCompositeAssembledNode cookedNode = composition as CookedCompositeAssembledNode;
-            return cookedNode != null && cookedNode.m_progress == CookedCompositeOrderNode.CookingProgress.Cooked;
         }
 
         private static int MatchPreparedRecipe(
