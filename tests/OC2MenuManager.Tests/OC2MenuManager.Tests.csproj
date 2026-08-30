@@ -17,6 +17,7 @@
   <ItemGroup>
     <Compile Include="..\..\src\OC2MenuManager\Infrastructure\RuntimePolicies.cs" Link="Source\RuntimePolicies.cs" />
     <Compile Include="..\..\src\OC2MenuManager\Infrastructure\UserDataMigration.cs" Link="Source\UserDataMigration.cs" />
+    <Compile Include="..\..\src\OC2MenuManager\Features\Tracking\RecipeCategoryCatalog.cs" Link="Source\RecipeCategoryCatalog.cs" />
     <Compile Include="..\..\src\OC2MenuManager\Features\Tracking\SceneSelectionPolicies.cs" Link="Source\SceneSelectionPolicies.cs" />
   </ItemGroup>
 </Project>

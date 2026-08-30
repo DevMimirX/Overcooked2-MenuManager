@@ -1,3 +1,5 @@
+// Supplies the static bilingual dish-name data used by DishNameCatalog. Recipe
+// category definitions are intentionally owned by RecipeCategoryCatalog.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -9,36 +11,6 @@ namespace OC2MenuManager
 {
     internal static partial class DishNameCatalog
     {
-        private static readonly string[] OrderedCategoryKeys = new string[]
-        {
-            "pizza",
-            "cake",
-            "moonpie",
-            "fruitpie",
-            "roast",
-            "fried",
-            "pancake",
-            "dessert",
-            "sushi",
-            "steamed",
-            "soup",
-            "hotpot",
-            "breakfast",
-            "burger",
-            "burrito",
-            "kebob",
-            "donut",
-            "salad",
-            "pasta",
-            "smoothie",
-            "hotdog",
-            "smores",
-            "fruitplatter",
-            "sashimi",
-            "hotchocolate",
-            "float"
-        };
-
         private static Dictionary<string, string> BuildChineseMap(bool shortName)
         {
             Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.Ordinal);

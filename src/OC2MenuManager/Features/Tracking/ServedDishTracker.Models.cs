@@ -42,7 +42,7 @@ namespace OC2MenuManager
             public string InternalName;
             public string EnglishName;
             public string ChineseName;
-            public string CategoryName;
+            public RecipeCategoryAssignment Category;
             public int CategoryTier;
             public OrderDefinitionNode Definition;
             public AssembledDefinitionNode SimplifiedDefinition;
@@ -71,6 +71,7 @@ namespace OC2MenuManager
             public readonly List<int> AllRecipeIds = new List<int>();
             public readonly List<RecipeInfo> OrderedRecipes = new List<RecipeInfo>();
             public readonly Dictionary<int, RecipeInfo> RecipesById = new Dictionary<int, RecipeInfo>();
+            public readonly Dictionary<int, RecipeCategoryAssignment> DIYCategoriesByRecipeId = new Dictionary<int, RecipeCategoryAssignment>();
             public readonly List<int> ManyRecipesOrderedEntryIds = new List<int>();
             public readonly HashSet<int> DIYRecipeIds = new HashSet<int>();
             public readonly HashSet<int> RuntimeRecipeIds = new HashSet<int>();
@@ -302,7 +303,9 @@ namespace OC2MenuManager
 
         private sealed class CategorySelectionGroup
         {
-            public string CategoryName;
+            public string CategoryKey;
+            public string EnglishName;
+            public string ChineseName;
             public int CategoryTier;
             public readonly List<int> RecipeIds = new List<int>();
         }

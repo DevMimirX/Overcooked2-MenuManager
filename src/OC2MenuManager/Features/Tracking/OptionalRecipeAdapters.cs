@@ -5,6 +5,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using OC2MenuManager.Infrastructure;
 
@@ -50,14 +51,16 @@ namespace OC2MenuManager
     }
 
     /// <summary>
-    /// Carries a DIY recipe's stable identity and an optional hydrated base-game
-    /// definition; custom DIY recipes intentionally remain metadata-only pre-round.
+    /// Carries a DIY recipe's stable identity, optional hydrated base-game
+    /// definition, and bounded provider-neutral category evidence. Custom DIY
+    /// recipes intentionally remain metadata-only pre-round.
     /// </summary>
     internal sealed class DIYRecipeDescriptor
     {
         public int Id;
         public string InternalName;
         public OrderDefinitionNode Definition;
+        public RecipeCategoryEvidence CategoryEvidence;
     }
 
     /// <summary>
@@ -74,6 +77,9 @@ namespace OC2MenuManager
         private const string DIYRecipeHelperTypeName = "OC2DIYLevel.RecipeHelper";
         private const string ManyRecipesPluginTypeName = "OC2ManyRecipes.ManyRecipesPlugin";
         private const string ManyRecipesSettingsTypeName = "OC2ManyRecipes.ManyRecipesSettings";
+        private const int DIYEvidenceMaximumDepth = 4;
+        private const int DIYEvidenceMaximumObjects = 64;
+        private const int DIYEvidenceMaximumComponentsPerKind = 32;
 
         private static readonly List<RecipeList.Entry> ManyRecipeEntriesCache = new List<RecipeList.Entry>();
         private static readonly List<object> ManyRecipePatchIdentityBuffer = new List<object>();
@@ -354,6 +360,8 @@ namespace OC2MenuManager
                 descriptor.Id = entry.m_order.m_uID;
                 descriptor.InternalName = entry.m_order.name;
                 descriptor.Definition = entry.m_order;
+                descriptor.CategoryEvidence = new RecipeCategoryEvidence(descriptor.Id, descriptor.InternalName);
+                descriptor.CategoryEvidence.Kind = InferDIYRecipeKind(entry.m_order.GetType().Name);
                 destination.Add(descriptor);
             }
 
@@ -443,7 +451,7 @@ namespace OC2MenuManager
                 return true;
             }
 
-            diyManagerType = AccessTools.TypeByName(DIYManagerTypeName);
+            diyManagerType = FindLoadedOptionalType(DIYManagerTypeName);
             if (diyManagerType == null)
             {
                 error = "DIY Level is not installed or has not loaded yet.";
@@ -452,7 +460,7 @@ namespace OC2MenuManager
 
             diyIsInitializedProperty = AccessTools.Property(diyManagerType, "IsInitialized");
             diyLevelSetInfosField = AccessTools.Field(diyManagerType, "levelSetInfos");
-            Type recipeHelperType = AccessTools.TypeByName(DIYRecipeHelperTypeName);
+            Type recipeHelperType = FindLoadedOptionalType(DIYRecipeHelperTypeName);
             diyGetRecipeMethod = FindDIYGetRecipeMethod(recipeHelperType);
             ParameterInfo[] getRecipeParameters = diyGetRecipeMethod != null ? diyGetRecipeMethod.GetParameters() : null;
             diyGetRecipeParameterCount = getRecipeParameters != null ? getRecipeParameters.Length : 0;
@@ -513,13 +521,13 @@ namespace OC2MenuManager
                 return ManyRecipesSnapshotState.Ready;
             }
 
-            manyRecipesPluginType = AccessTools.TypeByName(ManyRecipesPluginTypeName);
+            manyRecipesPluginType = FindLoadedOptionalType(ManyRecipesPluginTypeName);
             if (manyRecipesPluginType == null)
             {
                 return ManyRecipesSnapshotPolicy.Classify(false, false, false, false, false);
             }
 
-            manyRecipesSettingsType = AccessTools.TypeByName(ManyRecipesSettingsTypeName);
+            manyRecipesSettingsType = FindLoadedOptionalType(ManyRecipesSettingsTypeName);
             manyRecipePatchesField = AccessTools.Field(manyRecipesPluginType, "recipePatches");
             manyRecipesEnabledField = manyRecipesSettingsType != null
                 ? AccessTools.Field(manyRecipesSettingsType, "enabled")
@@ -540,6 +548,26 @@ namespace OC2MenuManager
 
             manyContractResolved = true;
             return ManyRecipesSnapshotState.Ready;
+        }
+
+        /// <summary>
+        /// Resolves an optional provider type only from assemblies already loaded
+        /// into the current domain. Unlike Harmony's global type lookup, an absent
+        /// provider is an expected no-op and does not emit a warning on every retry.
+        /// </summary>
+        private static Type FindLoadedOptionalType(string fullName)
+        {
+            Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
+            for (int i = 0; i < assemblies.Length; i++)
+            {
+                Type candidate = assemblies[i].GetType(fullName, false, false);
+                if (candidate != null)
+                {
+                    return candidate;
+                }
+            }
+
+            return null;
         }
 
         private static ManyRecipesSnapshotState CollectManyRecipeEntries(List<RecipeList.Entry> destination)
@@ -801,7 +829,270 @@ namespace OC2MenuManager
             descriptor.Id = (int)idValue;
             descriptor.InternalName = recipeName;
             descriptor.Definition = null;
+            descriptor.CategoryEvidence = BuildCustomDIYCategoryEvidence(recipeSource, descriptor.Id, descriptor.InternalName);
             return true;
+        }
+
+        private static RecipeCategoryEvidence BuildCustomDIYCategoryEvidence(object recipeSource, int recipeId, string recipeName)
+        {
+            RecipeCategoryEvidence evidence = new RecipeCategoryEvidence(recipeId, recipeName);
+            evidence.Kind = ReadDIYRecipeKind(GetMemberValue(recipeSource, "type"));
+            evidence.CookingIdentity = GetFirstDIYIdentity(recipeSource, "cookingStepSO", "cookingStepIconSO");
+            evidence.MixingIdentity = GetFirstDIYIdentity(recipeSource, "mixingIconSO");
+            evidence.PlatingIdentity = GetFirstDIYIdentity(recipeSource, "platingStepSO");
+            evidence.ModelIdentity = GetFirstDIYIdentity(recipeSource, "modelSO", "model");
+            evidence.IconIdentity = GetFirstDIYIdentity(recipeSource, "iconSO", "icon");
+
+            int requiredObjectCount = 0;
+            HashSet<object> requiredVisited = new HashSet<object>(ReferenceIdentityComparer.Instance);
+            AppendDIYComponentEvidence(
+                recipeSource,
+                "compositionSOs",
+                evidence.RequiredComponentNames,
+                requiredVisited,
+                ref requiredObjectCount,
+                0);
+
+            int optionalObjectCount = 0;
+            HashSet<object> optionalVisited = new HashSet<object>(ReferenceIdentityComparer.Instance);
+            AppendDIYComponentEvidence(
+                recipeSource,
+                "optionalSOs",
+                evidence.OptionalComponentNames,
+                optionalVisited,
+                ref optionalObjectCount,
+                0);
+            return evidence;
+        }
+
+        private static DIYRecipeKind ReadDIYRecipeKind(object value)
+        {
+            if (value == null)
+            {
+                return DIYRecipeKind.Unknown;
+            }
+
+            Type valueType = value.GetType();
+            if (valueType.IsEnum)
+            {
+                string enumName = Enum.GetName(valueType, value);
+                DIYRecipeKind namedKind = InferDIYRecipeKind(enumName);
+                if (namedKind != DIYRecipeKind.Unknown)
+                {
+                    return namedKind;
+                }
+            }
+
+            int numericValue;
+            try
+            {
+                numericValue = Convert.ToInt32(value);
+            }
+            catch
+            {
+                return DIYRecipeKind.Unknown;
+            }
+
+            switch (numericValue)
+            {
+                case 1:
+                    return DIYRecipeKind.Composite;
+                case 2:
+                    return DIYRecipeKind.Cooked;
+                case 3:
+                    return DIYRecipeKind.Mixed;
+                default:
+                    return DIYRecipeKind.Unknown;
+            }
+        }
+
+        private static DIYRecipeKind InferDIYRecipeKind(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName))
+            {
+                return DIYRecipeKind.Unknown;
+            }
+
+            if (typeName.IndexOf("Mixed", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return DIYRecipeKind.Mixed;
+            }
+
+            if (typeName.IndexOf("Cooked", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return DIYRecipeKind.Cooked;
+            }
+
+            return typeName.IndexOf("Composite", StringComparison.OrdinalIgnoreCase) >= 0
+                ? DIYRecipeKind.Composite
+                : DIYRecipeKind.Unknown;
+        }
+
+        private static void AppendDIYComponentEvidence(
+            object owner,
+            string memberName,
+            List<string> destination,
+            HashSet<object> visited,
+            ref int objectCount,
+            int depth)
+        {
+            if (owner == null
+                || destination == null
+                || visited == null
+                || depth > DIYEvidenceMaximumDepth
+                || objectCount >= DIYEvidenceMaximumObjects
+                || destination.Count >= DIYEvidenceMaximumComponentsPerKind)
+            {
+                return;
+            }
+
+            IList components = GetMemberValue(owner, memberName) as IList;
+            if (components == null)
+            {
+                return;
+            }
+
+            int componentCount;
+            try
+            {
+                componentCount = Math.Min(components.Count, DIYEvidenceMaximumObjects - objectCount);
+            }
+            catch
+            {
+                return;
+            }
+
+            for (int i = 0; i < componentCount && destination.Count < DIYEvidenceMaximumComponentsPerKind; i++)
+            {
+                object component;
+                try
+                {
+                    component = components[i];
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (component == null || !visited.Add(component))
+                {
+                    continue;
+                }
+
+                objectCount++;
+                AddDistinctDIYIdentity(destination, GetDIYIdentity(component));
+                if (depth >= DIYEvidenceMaximumDepth || objectCount >= DIYEvidenceMaximumObjects)
+                {
+                    continue;
+                }
+
+                AppendDIYComponentEvidence(
+                    component,
+                    "compositionSOs",
+                    destination,
+                    visited,
+                    ref objectCount,
+                    depth + 1);
+                AppendDIYComponentEvidence(
+                    component,
+                    "optionalSOs",
+                    destination,
+                    visited,
+                    ref objectCount,
+                    depth + 1);
+            }
+        }
+
+        private static string GetFirstDIYIdentity(object owner, params string[] memberNames)
+        {
+            if (owner == null || memberNames == null)
+            {
+                return string.Empty;
+            }
+
+            for (int i = 0; i < memberNames.Length; i++)
+            {
+                string identity = GetDIYIdentity(GetMemberValue(owner, memberNames[i]));
+                if (!string.IsNullOrEmpty(identity))
+                {
+                    return identity;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string GetDIYIdentity(object source)
+        {
+            if (source == null)
+            {
+                return string.Empty;
+            }
+
+            string directValue = source as string;
+            if (!string.IsNullOrEmpty(directValue))
+            {
+                return BoundDIYIdentity(directValue);
+            }
+
+            string[] identityMembers = new string[]
+            {
+                "recipeName",
+                "prefabName",
+                "name",
+                "assetPath",
+                "bundleName"
+            };
+            for (int i = 0; i < identityMembers.Length; i++)
+            {
+                string identity = GetStringMember(source, identityMembers[i]);
+                if (!string.IsNullOrEmpty(identity))
+                {
+                    return BoundDIYIdentity(identity);
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string BoundDIYIdentity(string value)
+        {
+            string identity = (value ?? string.Empty).Trim();
+            return identity.Length <= 160 ? identity : identity.Substring(0, 160);
+        }
+
+        private static void AddDistinctDIYIdentity(List<string> destination, string identity)
+        {
+            if (destination == null || string.IsNullOrEmpty(identity))
+            {
+                return;
+            }
+
+            for (int i = 0; i < destination.Count; i++)
+            {
+                if (string.Equals(destination[i], identity, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            destination.Add(identity);
+        }
+
+        /// <summary>Uses object identity so Unity equality overloads cannot collapse distinct metadata nodes.</summary>
+        private sealed class ReferenceIdentityComparer : IEqualityComparer<object>
+        {
+            internal static readonly ReferenceIdentityComparer Instance = new ReferenceIdentityComparer();
+
+            bool IEqualityComparer<object>.Equals(object left, object right)
+            {
+                return ReferenceEquals(left, right);
+            }
+
+            int IEqualityComparer<object>.GetHashCode(object value)
+            {
+                return value == null ? 0 : RuntimeHelpers.GetHashCode(value);
+            }
         }
 
         private static bool TryBuildDIYRecipeEntry(object recipeSource, bool useScore2, out RecipeList.Entry entry, out string error)

@@ -104,6 +104,7 @@ namespace OC2MenuManager
         private static readonly List<SceneInfo> FilteredSelectableScenesBuffer = new List<SceneInfo>();
         private static readonly List<DIYLevelDescriptor> DIYLevelDescriptorsBuffer = new List<DIYLevelDescriptor>();
         private static readonly List<DIYRecipeDescriptor> DIYRecipeDescriptorsBuffer = new List<DIYRecipeDescriptor>();
+        private static readonly List<RecipeCategoryEvidence> DIYRecipeEvidenceBuffer = new List<RecipeCategoryEvidence>();
         private static readonly List<RecipeList.Entry> RuntimeRecipeEntriesBuffer = new List<RecipeList.Entry>();
         private static readonly List<RecipeList.Entry> RuntimePhaseRecipeEntriesBuffer = new List<RecipeList.Entry>();
         private static readonly List<int> RuntimeOrderedRecipeIdsBuffer = new List<int>();

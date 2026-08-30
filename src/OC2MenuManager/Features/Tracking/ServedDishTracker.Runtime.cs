@@ -1,6 +1,7 @@
 // Coordinates tracker invalidation, prepared-source maintenance, ticket
 // synchronization, and round-state discovery. Expensive work is scheduled from
 // events; the per-frame path only executes maintenance whose deadline is due.
+// Category-tier overrides are resolved through the canonical category catalog.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -25,7 +26,7 @@ namespace OC2MenuManager
         private static void BindCategoryTierConfigEntries()
         {
             CategoryTierEntriesByKey.Clear();
-            string[] categoryKeys = DishNameCatalog.GetOrderedCategoryKeys();
+            string[] categoryKeys = RecipeCategoryCatalog.GetOrderedCategoryKeys();
             for (int i = 0; i < categoryKeys.Length; i++)
             {
                 string categoryKey = categoryKeys[i];
@@ -35,13 +36,13 @@ namespace OC2MenuManager
                 }
 
                 string configKey = GetCategoryTierConfigKey(categoryKey);
-                int defaultTier = DishNameCatalog.GetDefaultCategoryTierByKey(categoryKey);
+                int defaultTier = RecipeCategoryCatalog.GetDefaultCategoryTierByKey(categoryKey);
                 ConfigEntry<int> entry = _MODEntry.SettingsConfig.Bind<int>(
                     TierSection,
                     configKey,
                     defaultTier,
                     new ConfigDescription(
-                        DishNameCatalog.GetCategoryNameByKey(categoryKey) + "的排序层级。数字越小越靠前。",
+                        RecipeCategoryCatalog.GetCategoryNameByKey(categoryKey) + "的排序层级。数字越小越靠前。",
                         new AcceptableValueRange<int>(MinCategoryTierValue, MaxCategoryTierValue)));
                 CategoryTierEntriesByKey[categoryKey] = entry;
             }
@@ -49,7 +50,7 @@ namespace OC2MenuManager
 
         private static string GetCategoryTierConfigKey(string categoryKey)
         {
-            return "层级-" + DishNameCatalog.GetCategoryNameByKey(categoryKey);
+            return "层级-" + RecipeCategoryCatalog.GetCategoryNameByKey(categoryKey);
         }
 
         private static void ApplyConfiguredCategoryTierOverrides()
@@ -61,7 +62,7 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                DishNameCatalog.SetCategoryTierOverride(pair.Key, pair.Value.Value);
+                RecipeCategoryCatalog.SetCategoryTierOverride(pair.Key, pair.Value.Value);
             }
 
             RefreshCachedSceneCategoryTiers();
@@ -82,7 +83,7 @@ namespace OC2MenuManager
             }
 
             entry.Value = clampedTier;
-            DishNameCatalog.SetCategoryTierOverride(categoryKey, clampedTier);
+            RecipeCategoryCatalog.SetCategoryTierOverride(categoryKey, clampedTier);
             RefreshCachedSceneCategoryTiers();
             InvalidateReferenceTickets();
             InvalidateOverlay();
@@ -99,14 +100,14 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                int defaultTier = DishNameCatalog.GetDefaultCategoryTierByKey(pair.Key);
+                int defaultTier = RecipeCategoryCatalog.GetDefaultCategoryTierByKey(pair.Key);
                 if (entry.Value != defaultTier)
                 {
                     entry.Value = defaultTier;
                     changed = true;
                 }
 
-                DishNameCatalog.SetCategoryTierOverride(pair.Key, defaultTier);
+                RecipeCategoryCatalog.SetCategoryTierOverride(pair.Key, defaultTier);
             }
 
             if (!changed)
@@ -158,7 +159,8 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                recipe.CategoryTier = DishNameCatalog.GetCategoryTier(recipe.InternalName);
+                recipe.CategoryTier = RecipeCategoryCatalog.GetCategoryTierByKey(
+                    recipe.Category != null ? recipe.Category.TierKey : "other");
             }
         }
 

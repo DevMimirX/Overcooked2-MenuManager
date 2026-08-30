@@ -1,3 +1,6 @@
+// Owns bilingual dish-name normalization and the auditable discovery report.
+// Recipe-family taxonomy and classification live in RecipeCategoryCatalog so
+// inferred DIY groups never alter an individual dish's authored display name.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -25,12 +28,24 @@ namespace OC2MenuManager
             }
         }
 
+        /// <summary>Captures one report row without deriving category data inside the name catalog.</summary>
+        private sealed class DiscoveredRecipeEntry
+        {
+            internal readonly string InternalName;
+            internal readonly RecipeCategoryAssignment Category;
+
+            internal DiscoveredRecipeEntry(string internalName, RecipeCategoryAssignment category)
+            {
+                InternalName = internalName ?? string.Empty;
+                Category = category;
+            }
+        }
+
         internal static readonly Dictionary<string, DishNameEntry> Entries = BuildEntries();
         internal static readonly Dictionary<string, string> FullChineseNames = BuildChineseMap(false);
         internal static readonly Dictionary<string, string> ShortChineseNames = BuildChineseMap(true);
 
-        private static readonly Dictionary<string, int> CategoryTierOverrides = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        private static readonly Dictionary<string, SortedDictionary<int, string>> DiscoveredRecipesByScene = new Dictionary<string, SortedDictionary<int, string>>(StringComparer.OrdinalIgnoreCase);
+        private static readonly Dictionary<string, SortedDictionary<int, DiscoveredRecipeEntry>> DiscoveredRecipesByScene = new Dictionary<string, SortedDictionary<int, DiscoveredRecipeEntry>>(StringComparer.OrdinalIgnoreCase);
 
         private static string discoveryReportPath;
         private static bool discoveryDirty;
@@ -96,8 +111,8 @@ namespace OC2MenuManager
                 return value;
             }
 
-            string categoryKey = GetCategoryKey(internalName);
-            string categoryName = GetCategoryName(internalName);
+            string categoryKey = RecipeCategoryCatalog.GetKnownCategoryKey(internalName);
+            string categoryName = RecipeCategoryCatalog.GetCategoryNameByKey(categoryKey);
             if (string.IsNullOrEmpty(categoryKey) || string.IsNullOrEmpty(categoryName) || string.Equals(categoryName, "其他", StringComparison.Ordinal))
             {
                 return value;
@@ -175,8 +190,21 @@ namespace OC2MenuManager
                 return value;
             }
 
-            string categoryKey = GetCategoryKey(internalName);
-            string categoryName = GetEnglishCategoryName(internalName);
+            string categoryKey = RecipeCategoryCatalog.GetKnownCategoryKey(internalName);
+            string categoryName = RecipeCategoryCatalog.GetEnglishCategoryNameByKey(categoryKey);
+            switch (categoryKey)
+            {
+                case "fruitpie":
+                    categoryName = "Pie";
+                    break;
+                case "fruitplatter":
+                    categoryName = "Platter";
+                    break;
+                case "hotchocolate":
+                    categoryName = "Hot Cocoa";
+                    break;
+            }
+
             if (string.IsNullOrEmpty(categoryKey) || string.IsNullOrEmpty(categoryName) || string.Equals(categoryName, "Other", StringComparison.Ordinal))
             {
                 return CollapseWhitespace(value);
@@ -889,233 +917,11 @@ namespace OC2MenuManager
             return drink + " " + flavor;
         }
 
-        public static string GetCategoryName(string internalName)
-        {
-            return GetCategoryNameByKey(GetCategoryKey(internalName));
-        }
-
-        public static string GetCategoryNameByKey(string categoryKey)
-        {
-            switch ((categoryKey ?? string.Empty).Trim())
-            {
-                case "pizza":
-                    return "披萨";
-                case "cake":
-                    return "蛋糕";
-                case "moonpie":
-                    return "月饼";
-                case "fruitpie":
-                    return "水果派";
-                case "roast":
-                    return "烧烤";
-                case "fried":
-                    return "炸物";
-                case "pancake":
-                    return "煎饼";
-                case "dessert":
-                    return "甜点";
-                case "sushi":
-                    return "寿司";
-                case "steamed":
-                    return "蒸菜";
-                case "soup":
-                    return "汤";
-                case "hotpot":
-                    return "火锅";
-                case "breakfast":
-                    return "早餐";
-                case "burger":
-                    return "汉堡";
-                case "burrito":
-                    return "卷饼";
-                case "kebob":
-                    return "烤串";
-                case "donut":
-                    return "甜甜圈";
-                case "salad":
-                    return "沙拉";
-                case "pasta":
-                    return "意面";
-                case "smoothie":
-                    return "奶昔";
-                case "hotdog":
-                    return "热狗";
-                case "smores":
-                    return "饼干";
-                case "fruitplatter":
-                    return "水果拼盘";
-                case "sashimi":
-                    return "刺身";
-                case "hotchocolate":
-                    return "热可可";
-                case "float":
-                    return "冰淇淋汽水";
-                default:
-                    return "其他";
-            }
-        }
-
-        public static string GetEnglishCategoryName(string internalName)
-        {
-            return GetEnglishCategoryNameByKey(GetCategoryKey(internalName));
-        }
-
-        public static string GetEnglishCategoryNameByKey(string categoryKey)
-        {
-            switch ((categoryKey ?? string.Empty).Trim())
-            {
-                case "pizza":
-                    return "Pizza";
-                case "cake":
-                    return "Cake";
-                case "moonpie":
-                    return "Mooncake";
-                case "fruitpie":
-                    return "Pie";
-                case "roast":
-                    return "Roast";
-                case "fried":
-                    return "Fry";
-                case "pancake":
-                    return "Pancake";
-                case "dessert":
-                    return "Dessert";
-                case "sushi":
-                    return "Sushi";
-                case "steamed":
-                    return "Steamed";
-                case "soup":
-                    return "Soup";
-                case "hotpot":
-                    return "Hot Pot";
-                case "breakfast":
-                    return "Breakfast";
-                case "burger":
-                    return "Burger";
-                case "burrito":
-                    return "Burrito";
-                case "kebob":
-                    return "Skewer";
-                case "donut":
-                    return "Donut";
-                case "salad":
-                    return "Salad";
-                case "pasta":
-                    return "Pasta";
-                case "smoothie":
-                    return "Smoothie";
-                case "hotdog":
-                    return "Hot Dog";
-                case "smores":
-                    return "S'more";
-                case "fruitplatter":
-                    return "Platter";
-                case "sashimi":
-                    return "Sashimi";
-                case "hotchocolate":
-                    return "Hot Cocoa";
-                case "float":
-                    return "Float";
-                default:
-                    return "Other";
-            }
-        }
-
-        public static string GetDisplayCategoryName(string internalName, bool chinese)
-        {
-            return chinese ? GetCategoryName(internalName) : GetEnglishCategoryName(internalName);
-        }
-
-        public static string GetDisplayCategoryNameByKey(string categoryKey, bool chinese)
-        {
-            return chinese ? GetCategoryNameByKey(categoryKey) : GetEnglishCategoryNameByKey(categoryKey);
-        }
-
-        public static int GetCategoryTier(string internalName)
-        {
-            return GetCategoryTierByKey(GetCategoryKey(internalName));
-        }
-
-        public static int GetCategoryTierByKey(string categoryKey)
-        {
-            string normalizedKey = (categoryKey ?? string.Empty).Trim();
-            int overrideTier;
-            if (CategoryTierOverrides.TryGetValue(normalizedKey, out overrideTier))
-            {
-                return overrideTier;
-            }
-
-            return GetDefaultCategoryTierByKey(normalizedKey);
-        }
-
-        public static int GetDefaultCategoryTierByKey(string categoryKey)
-        {
-            switch ((categoryKey ?? string.Empty).Trim())
-            {
-                case "pizza":
-                case "pancake":
-                case "moonpie":
-                case "fruitpie":
-                    return 1;
-                case "roast":
-                case "fried":
-                case "cake":
-                case "dessert":
-                    return 2;
-                case "sushi":
-                case "steamed":
-                case "soup":
-                case "hotpot":
-                case "breakfast":
-                    return 3;
-                case "burger":
-                case "burrito":
-                case "kebob":
-                case "donut":
-                    return 4;
-                case "salad":
-                case "pasta":
-                case "smoothie":
-                case "hotdog":
-                case "smores":
-                case "fruitplatter":
-                    return 5;
-                case "sashimi":
-                case "hotchocolate":
-                case "float":
-                    return 6;
-                default:
-                    return 99;
-            }
-        }
-
-        public static string[] GetOrderedCategoryKeys()
-        {
-            string[] copy = new string[OrderedCategoryKeys.Length];
-            Array.Copy(OrderedCategoryKeys, copy, OrderedCategoryKeys.Length);
-            return copy;
-        }
-
-        public static void SetCategoryTierOverride(string categoryKey, int tier)
-        {
-            string normalizedKey = (categoryKey ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(normalizedKey))
-            {
-                return;
-            }
-
-            int clampedTier = Math.Max(1, Math.Min(6, tier));
-            int defaultTier = GetDefaultCategoryTierByKey(normalizedKey);
-            if (defaultTier == 99 || clampedTier == defaultTier)
-            {
-                CategoryTierOverrides.Remove(normalizedKey);
-                return;
-            }
-
-            CategoryTierOverrides[normalizedKey] = clampedTier;
-        }
-
-        public static void RecordRecipe(string sceneName, int recipeId, string internalName)
+        public static void RecordRecipe(
+            string sceneName,
+            int recipeId,
+            string internalName,
+            RecipeCategoryAssignment category)
         {
             if (recipeId <= 0 || string.IsNullOrEmpty(internalName))
             {
@@ -1123,18 +929,48 @@ namespace OC2MenuManager
             }
 
             string safeSceneName = string.IsNullOrEmpty(sceneName) ? "(unknown)" : sceneName;
-            SortedDictionary<int, string> sceneRecipes;
+            RecipeCategoryAssignment resolvedCategory = category ?? RecipeCategoryCatalog.ResolveKnownOrFallback(internalName);
+            SortedDictionary<int, DiscoveredRecipeEntry> sceneRecipes;
             if (!DiscoveredRecipesByScene.TryGetValue(safeSceneName, out sceneRecipes))
             {
-                sceneRecipes = new SortedDictionary<int, string>();
+                sceneRecipes = new SortedDictionary<int, DiscoveredRecipeEntry>();
                 DiscoveredRecipesByScene.Add(safeSceneName, sceneRecipes);
                 discoveryDirty = true;
             }
 
-            string knownName;
-            if (!sceneRecipes.TryGetValue(recipeId, out knownName) || !string.Equals(knownName, internalName, StringComparison.Ordinal))
+            DiscoveredRecipeEntry knownRecipe;
+            if (!sceneRecipes.TryGetValue(recipeId, out knownRecipe)
+                || knownRecipe == null
+                || !string.Equals(knownRecipe.InternalName, internalName, StringComparison.Ordinal)
+                || !RecipeCategoryCatalog.AreEquivalent(knownRecipe.Category, resolvedCategory))
             {
-                sceneRecipes[recipeId] = internalName;
+                sceneRecipes[recipeId] = new DiscoveredRecipeEntry(internalName, resolvedCategory);
+                discoveryDirty = true;
+            }
+        }
+
+        public static void RemoveRecipe(string sceneName, int recipeId)
+        {
+            SortedDictionary<int, DiscoveredRecipeEntry> sceneRecipes;
+            if (string.IsNullOrEmpty(sceneName)
+                || !DiscoveredRecipesByScene.TryGetValue(sceneName, out sceneRecipes)
+                || !sceneRecipes.Remove(recipeId))
+            {
+                return;
+            }
+
+            if (sceneRecipes.Count == 0)
+            {
+                DiscoveredRecipesByScene.Remove(sceneName);
+            }
+
+            discoveryDirty = true;
+        }
+
+        public static void ClearSceneRecipes(string sceneName)
+        {
+            if (!string.IsNullOrEmpty(sceneName) && DiscoveredRecipesByScene.Remove(sceneName))
+            {
                 discoveryDirty = true;
             }
         }
@@ -1150,27 +986,40 @@ namespace OC2MenuManager
 
             StringBuilder builder = new StringBuilder();
             builder.AppendLine("# OC2MenuManager dish discovery report");
-            builder.AppendLine("# scene\tid\tinternal\tzh\tzh_short\ten\tcatalog");
+            builder.AppendLine("# scene\tid\tinternal\tzh\tzh_short\ten\tcatalog\tcategory_key\tcategory_en\tcategory_zh\tcategory_source");
 
             HashSet<string> missingCatalogNames = new HashSet<string>(StringComparer.Ordinal);
-            foreach (KeyValuePair<string, SortedDictionary<int, string>> scenePair in DiscoveredRecipesByScene.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
+            foreach (KeyValuePair<string, SortedDictionary<int, DiscoveredRecipeEntry>> scenePair in DiscoveredRecipesByScene.OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase))
             {
-                foreach (KeyValuePair<int, string> recipePair in scenePair.Value)
+                foreach (KeyValuePair<int, DiscoveredRecipeEntry> recipePair in scenePair.Value)
                 {
+                    DiscoveredRecipeEntry discoveredRecipe = recipePair.Value;
+                    if (discoveredRecipe == null)
+                    {
+                        continue;
+                    }
+
                     DishNameEntry entry;
-                    bool known = TryGetEntry(recipePair.Value, out entry);
+                    bool known = TryGetEntry(discoveredRecipe.InternalName, out entry);
                     if (!known)
                     {
-                        missingCatalogNames.Add(recipePair.Value);
+                        missingCatalogNames.Add(discoveredRecipe.InternalName);
                     }
+
+                    RecipeCategoryAssignment category = discoveredRecipe.Category
+                        ?? RecipeCategoryCatalog.ResolveKnownOrFallback(discoveredRecipe.InternalName);
 
                     builder.Append(scenePair.Key).Append('\t');
                     builder.Append(recipePair.Key).Append('\t');
-                    builder.Append(recipePair.Value).Append('\t');
-                    builder.Append(GetChineseFullName(recipePair.Value)).Append('\t');
-                    builder.Append(GetChineseShortName(recipePair.Value)).Append('\t');
-                    builder.Append(GetEnglishName(recipePair.Value)).Append('\t');
-                    builder.Append(known ? "mapped" : "fallback");
+                    builder.Append(discoveredRecipe.InternalName).Append('\t');
+                    builder.Append(GetChineseFullName(discoveredRecipe.InternalName)).Append('\t');
+                    builder.Append(GetChineseShortName(discoveredRecipe.InternalName)).Append('\t');
+                    builder.Append(GetEnglishName(discoveredRecipe.InternalName)).Append('\t');
+                    builder.Append(known ? "mapped" : "fallback").Append('\t');
+                    builder.Append(category.Key).Append('\t');
+                    builder.Append(category.EnglishName).Append('\t');
+                    builder.Append(category.ChineseName).Append('\t');
+                    builder.Append(RecipeCategoryCatalog.GetSourceName(category.Source));
                     builder.AppendLine();
                 }
             }
@@ -1233,147 +1082,6 @@ namespace OC2MenuManager
             return !string.IsNullOrEmpty(internalName) && Entries.TryGetValue(internalName, out entry);
         }
 
-        private static string GetCategoryKey(string internalName)
-        {
-            string value = NormalizeCategorySource(internalName);
-            if (string.IsNullOrEmpty(value))
-            {
-                return string.Empty;
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Sushi_Plain"))
-            {
-                return "sashimi";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Sushi_"))
-            {
-                return "sushi";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Cake_"))
-            {
-                return "cake";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "DLC13_MoonPie_") || StartsWithOrdinalIgnoreCase(value, "MoonPie_"))
-            {
-                return "moonpie";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "FruitPie_"))
-            {
-                return "fruitpie";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Pancake_") || EndsWithOrdinalIgnoreCase(value, "Pancake"))
-            {
-                return "pancake";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Steamed") || StartsWithOrdinalIgnoreCase(value, "SteamedSpecial_"))
-            {
-                return "steamed";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Salad_") || StartsWithOrdinalIgnoreCase(value, "Tomato_"))
-            {
-                return "salad";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Pasta_"))
-            {
-                return "pasta";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "HotPot_"))
-            {
-                return "hotpot";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Hotdog_"))
-            {
-                return "hotdog";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Smores_"))
-            {
-                return "smores";
-            }
-
-            if (EndsWithOrdinalIgnoreCase(value, "Smoothie"))
-            {
-                return "smoothie";
-            }
-
-            if (EndsWithOrdinalIgnoreCase(value, "Soup"))
-            {
-                return "soup";
-            }
-
-            if (EndsWithOrdinalIgnoreCase(value, "Roast"))
-            {
-                return "roast";
-            }
-
-            if (EndsWithOrdinalIgnoreCase(value, "Kebob"))
-            {
-                return "kebob";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Breakfast_"))
-            {
-                return "breakfast";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "ChristmasPudding"))
-            {
-                return "dessert";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "HotChocolate"))
-            {
-                return "hotchocolate";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "OrangeSodaFloat_") || StartsWithOrdinalIgnoreCase(value, "RootBeerFloat_"))
-            {
-                return "float";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "FruitPlatter_"))
-            {
-                return "fruitplatter";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "ChickenNuggetsAndChips_") || StartsWithOrdinalIgnoreCase(value, "Fry_"))
-            {
-                return "fried";
-            }
-
-            if (StartsWithOrdinalIgnoreCase(value, "Donut_"))
-            {
-                return "donut";
-            }
-
-            if (EndsWithOrdinalIgnoreCase(value, "Pizza"))
-            {
-                return "pizza";
-            }
-
-            if (value.IndexOf("Burger", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return "burger";
-            }
-
-            if (value.IndexOf("Burrito", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                return "burrito";
-            }
-
-            return string.Empty;
-        }
-
         private static string NormalizeCategorySource(string internalName)
         {
             if (string.IsNullOrEmpty(internalName))
@@ -1385,20 +1093,6 @@ namespace OC2MenuManager
             value = TrimKnownSuffix(value, "_New");
             value = TrimDlcPrefix(value);
             return value;
-        }
-
-        private static bool StartsWithOrdinalIgnoreCase(string value, string prefix)
-        {
-            return !string.IsNullOrEmpty(value)
-                && !string.IsNullOrEmpty(prefix)
-                && value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static bool EndsWithOrdinalIgnoreCase(string value, string suffix)
-        {
-            return !string.IsNullOrEmpty(value)
-                && !string.IsNullOrEmpty(suffix)
-                && value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string CollapseWhitespace(string value)

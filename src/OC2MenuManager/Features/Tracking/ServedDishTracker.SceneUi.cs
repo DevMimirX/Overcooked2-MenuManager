@@ -1,6 +1,7 @@
 // Discovers base-game and DIY scenes and owns scene/catalog hydration. Settings
 // refreshes reuse discovery buffers; DIY recipes are loaded lazily from the
-// optional mod's authoritative frontend metadata.
+// optional mod's authoritative frontend metadata. DIY category assignments are
+// refreshed with that metadata and remain keyed by recipe ID through hydration.
 using System;
 using System.Collections.Generic;
 using System.Collections;
@@ -250,6 +251,23 @@ namespace OC2MenuManager
             }
 
             bool changed = false;
+            DIYRecipeEvidenceBuffer.Clear();
+            for (int i = 0; i < DIYRecipeDescriptorsBuffer.Count; i++)
+            {
+                DIYRecipeDescriptor descriptor = DIYRecipeDescriptorsBuffer[i];
+                if (descriptor == null || descriptor.Id == 0)
+                {
+                    continue;
+                }
+
+                DIYRecipeEvidenceBuffer.Add(
+                    descriptor.CategoryEvidence ?? new RecipeCategoryEvidence(descriptor.Id, descriptor.InternalName));
+            }
+
+            Dictionary<int, RecipeCategoryAssignment> assignments = RecipeCategoryCatalog.ClassifyDIYRecipes(DIYRecipeEvidenceBuffer);
+            changed |= ReplaceDIYCategoryAssignments(scene, assignments);
+            changed |= RefreshSceneRecipeCategories(scene);
+
             RuntimeRecipeIdsBuffer.Clear();
             for (int i = 0; i < DIYRecipeDescriptorsBuffer.Count; i++)
             {
@@ -276,6 +294,101 @@ namespace OC2MenuManager
             }
 
             return scene.OrderedRecipes.Count > 0;
+        }
+
+        private static bool ReplaceDIYCategoryAssignments(
+            SceneInfo scene,
+            Dictionary<int, RecipeCategoryAssignment> assignments)
+        {
+            if (scene == null)
+            {
+                return false;
+            }
+
+            bool changed = assignments == null || scene.DIYCategoriesByRecipeId.Count != assignments.Count;
+            if (!changed && assignments != null)
+            {
+                foreach (KeyValuePair<int, RecipeCategoryAssignment> pair in assignments)
+                {
+                    RecipeCategoryAssignment existing;
+                    if (!scene.DIYCategoriesByRecipeId.TryGetValue(pair.Key, out existing)
+                        || !RecipeCategoryCatalog.AreEquivalent(existing, pair.Value))
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!changed)
+            {
+                return false;
+            }
+
+            scene.DIYCategoriesByRecipeId.Clear();
+            if (assignments != null)
+            {
+                foreach (KeyValuePair<int, RecipeCategoryAssignment> pair in assignments)
+                {
+                    scene.DIYCategoriesByRecipeId[pair.Key] = pair.Value;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool RefreshSceneRecipeCategories(SceneInfo scene)
+        {
+            if (scene == null)
+            {
+                return false;
+            }
+
+            bool changed = false;
+            for (int i = 0; i < scene.OrderedRecipes.Count; i++)
+            {
+                RecipeInfo recipe = scene.OrderedRecipes[i];
+                if (recipe == null)
+                {
+                    continue;
+                }
+
+                RecipeCategoryAssignment category = ResolveRecipeCategory(scene, recipe.Id, recipe.InternalName);
+                changed |= ApplyRecipeCategory(recipe, category);
+                DishNameCatalog.RecordRecipe(scene.SceneName, recipe.Id, recipe.InternalName, category);
+            }
+
+            return changed;
+        }
+
+        private static RecipeCategoryAssignment ResolveRecipeCategory(SceneInfo scene, int recipeId, string internalName)
+        {
+            RecipeCategoryAssignment category;
+            if (scene != null && scene.DIYCategoriesByRecipeId.TryGetValue(recipeId, out category) && category != null)
+            {
+                return category;
+            }
+
+            return RecipeCategoryCatalog.ResolveKnownOrFallback(internalName);
+        }
+
+        private static bool ApplyRecipeCategory(RecipeInfo recipe, RecipeCategoryAssignment category)
+        {
+            if (recipe == null)
+            {
+                return false;
+            }
+
+            RecipeCategoryAssignment resolvedCategory = category ?? RecipeCategoryCatalog.ResolveKnownOrFallback(recipe.InternalName);
+            int tier = RecipeCategoryCatalog.GetCategoryTierByKey(resolvedCategory.TierKey);
+            if (RecipeCategoryCatalog.AreEquivalent(recipe.Category, resolvedCategory) && recipe.CategoryTier == tier)
+            {
+                return false;
+            }
+
+            recipe.Category = resolvedCategory;
+            recipe.CategoryTier = tier;
+            return true;
         }
 
         private static void AddSceneFromEntry(List<SceneInfo> scenes, HashSet<string> seenScenes, SceneDirectoryData.SceneDirectoryEntry entry)
@@ -612,6 +725,7 @@ namespace OC2MenuManager
             RecipeInfo existing;
             if (scene.RecipesById.TryGetValue(recipe.m_uID, out existing) && existing != null)
             {
+                RecipeCategoryAssignment existingCategory = ResolveRecipeCategory(scene, recipe.m_uID, existing.InternalName);
                 RecipeCatalogMergeAction action = RecipeCatalogMergePolicy.Evaluate(
                     true,
                     existing.Definition != null,
@@ -620,20 +734,26 @@ namespace OC2MenuManager
                     !string.Equals(existing.InternalName, recipe.name, StringComparison.Ordinal));
                 if (action == RecipeCatalogMergeAction.None)
                 {
-                    return false;
+                    bool categoryChanged = ApplyRecipeCategory(existing, existingCategory);
+                    if (categoryChanged)
+                    {
+                        DishNameCatalog.RecordRecipe(scene.SceneName, existing.Id, existing.InternalName, existing.Category);
+                    }
+
+                    return categoryChanged;
                 }
 
-                PopulateRecipeInfo(existing, recipe.m_uID, recipe.name, recipe);
-                DishNameCatalog.RecordRecipe(scene.SceneName, recipe.m_uID, recipe.name);
+                PopulateRecipeInfo(scene, existing, recipe.m_uID, recipe.name, recipe);
+                DishNameCatalog.RecordRecipe(scene.SceneName, recipe.m_uID, recipe.name, existing.Category);
                 return true;
             }
 
             RecipeInfo info = new RecipeInfo();
-            PopulateRecipeInfo(info, recipe.m_uID, recipe.name, recipe);
+            PopulateRecipeInfo(scene, info, recipe.m_uID, recipe.name, recipe);
             scene.RecipesById.Add(info.Id, info);
             scene.OrderedRecipes.Add(info);
             scene.AllRecipeIds.Add(info.Id);
-            DishNameCatalog.RecordRecipe(scene.SceneName, recipe.m_uID, recipe.name);
+            DishNameCatalog.RecordRecipe(scene.SceneName, recipe.m_uID, recipe.name, info.Category);
             return true;
         }
 
@@ -647,6 +767,7 @@ namespace OC2MenuManager
             RecipeInfo existing;
             if (scene.RecipesById.TryGetValue(recipeId, out existing) && existing != null)
             {
+                RecipeCategoryAssignment existingCategory = ResolveRecipeCategory(scene, recipeId, existing.InternalName);
                 RecipeCatalogMergeAction action = RecipeCatalogMergePolicy.Evaluate(
                     true,
                     existing.Definition != null,
@@ -655,20 +776,26 @@ namespace OC2MenuManager
                     !string.Equals(existing.InternalName, internalName, StringComparison.Ordinal));
                 if (action == RecipeCatalogMergeAction.None)
                 {
-                    return false;
+                    bool categoryChanged = ApplyRecipeCategory(existing, existingCategory);
+                    if (categoryChanged)
+                    {
+                        DishNameCatalog.RecordRecipe(scene.SceneName, existing.Id, existing.InternalName, existing.Category);
+                    }
+
+                    return categoryChanged;
                 }
 
-                PopulateRecipeInfo(existing, recipeId, internalName, null);
-                DishNameCatalog.RecordRecipe(scene.SceneName, recipeId, internalName);
+                PopulateRecipeInfo(scene, existing, recipeId, internalName, null);
+                DishNameCatalog.RecordRecipe(scene.SceneName, recipeId, internalName, existing.Category);
                 return true;
             }
 
             RecipeInfo info = new RecipeInfo();
-            PopulateRecipeInfo(info, recipeId, internalName, null);
+            PopulateRecipeInfo(scene, info, recipeId, internalName, null);
             scene.RecipesById.Add(info.Id, info);
             scene.OrderedRecipes.Add(info);
             scene.AllRecipeIds.Add(info.Id);
-            DishNameCatalog.RecordRecipe(scene.SceneName, recipeId, internalName);
+            DishNameCatalog.RecordRecipe(scene.SceneName, recipeId, internalName, info.Category);
             return true;
         }
 
@@ -723,6 +850,8 @@ namespace OC2MenuManager
             scene.RecipesById.Remove(recipeId);
             scene.AllRecipeIds.Remove(recipeId);
             scene.OrderedRecipes.Remove(recipe);
+            scene.DIYCategoriesByRecipeId.Remove(recipeId);
+            DishNameCatalog.RemoveRecipe(scene.SceneName, recipeId);
             if (scene.PhaseRecipeIds != null)
             {
                 for (int i = 0; i < scene.PhaseRecipeIds.Length; i++)
@@ -744,30 +873,38 @@ namespace OC2MenuManager
                 return false;
             }
 
-            bool changed = scene.OrderedRecipes.Count > 0 || scene.PhaseRecipeIds != null;
+            bool changed = scene.OrderedRecipes.Count > 0
+                || scene.DIYCategoriesByRecipeId.Count > 0
+                || scene.PhaseRecipeIds != null;
             scene.AllRecipeIds.Clear();
             scene.OrderedRecipes.Clear();
             scene.RecipesById.Clear();
             scene.ManyRecipesOrderedEntryIds.Clear();
             scene.ManyRecipesState = ManyRecipesSnapshotState.Absent;
+            scene.DIYCategoriesByRecipeId.Clear();
             scene.DIYRecipeIds.Clear();
             scene.RuntimeRecipeIds.Clear();
             scene.ExtensionRecipeIds.Clear();
             scene.PhaseRecipeIds = null;
             scene.RuntimeLevelConfig = null;
             scene.LevelConfigName = null;
+            DishNameCatalog.ClearSceneRecipes(scene.SceneName);
             return changed;
         }
 
-        private static void PopulateRecipeInfo(RecipeInfo info, int recipeId, string internalName, OrderDefinitionNode definition)
+        private static void PopulateRecipeInfo(
+            SceneInfo scene,
+            RecipeInfo info,
+            int recipeId,
+            string internalName,
+            OrderDefinitionNode definition)
         {
             string resolvedName = string.IsNullOrEmpty(internalName) ? "Recipe_" + recipeId : internalName;
             info.Id = recipeId;
             info.InternalName = resolvedName;
             info.EnglishName = DishNameCatalog.GetEnglishName(resolvedName);
             info.ChineseName = DishNameCatalog.GetChineseFullName(resolvedName);
-            info.CategoryName = DishNameCatalog.GetCategoryName(resolvedName);
-            info.CategoryTier = DishNameCatalog.GetCategoryTier(resolvedName);
+            ApplyRecipeCategory(info, ResolveRecipeCategory(scene, recipeId, resolvedName));
             info.Definition = definition;
             info.SimplifiedDefinition = null;
             info.SimplifiedUnwrappedDefinition = null;

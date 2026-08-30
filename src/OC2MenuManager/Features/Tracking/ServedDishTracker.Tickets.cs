@@ -1,6 +1,7 @@
 // Hardens RecipeFlowGUI capacity/removal and owns ticket presentation state.
 // Real-ticket prepared tint consumes source compatibility, while reference
-// tickets keep independent styling and safety patches remain unconditional.
+// tickets keep independent styling, selector batches use stable category keys,
+// and safety patches remain unconditional.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -658,7 +659,8 @@ namespace OC2MenuManager
                 {
                     CategorySelectionGroup group = groups[i];
                     bool allTracked = AreAllCategoryRecipesTracked(scene, group);
-                    bool nextTracked = GUILayout.Toggle(allTracked, Ui("全部", "All ") + group.CategoryName, GUILayout.MinWidth(160f), GUILayout.ExpandWidth(true));
+                    string categoryName = UseChinese() ? group.ChineseName : group.EnglishName;
+                    bool nextTracked = GUILayout.Toggle(allTracked, Ui("全部", "All ") + categoryName, GUILayout.MinWidth(160f), GUILayout.ExpandWidth(true));
                     if (nextTracked != allTracked)
                     {
                         SetTrackedForCategory(scene, group, nextTracked);
@@ -715,7 +717,7 @@ namespace OC2MenuManager
                 return CategorySelectionGroupsBuffer;
             }
 
-            Dictionary<string, CategorySelectionGroup> groupsByName = new Dictionary<string, CategorySelectionGroup>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, CategorySelectionGroup> groupsByKey = new Dictionary<string, CategorySelectionGroup>(StringComparer.OrdinalIgnoreCase);
             for (int i = 0; i < scene.OrderedRecipes.Count; i++)
             {
                 RecipeInfo recipe = scene.OrderedRecipes[i];
@@ -724,18 +726,18 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                string categoryName = DishNameCatalog.GetDisplayCategoryName(recipe.InternalName, chinese);
-                if (string.IsNullOrEmpty(categoryName))
-                {
-                    categoryName = Ui("其他", "Other");
-                }
+                RecipeCategoryAssignment category = recipe.Category
+                    ?? RecipeCategoryCatalog.ResolveKnownOrFallback(recipe.InternalName);
+                string categoryKey = string.IsNullOrEmpty(category.Key) ? "other" : category.Key;
                 CategorySelectionGroup group;
-                if (!groupsByName.TryGetValue(categoryName, out group))
+                if (!groupsByKey.TryGetValue(categoryKey, out group))
                 {
                     group = new CategorySelectionGroup();
-                    group.CategoryName = categoryName;
+                    group.CategoryKey = categoryKey;
+                    group.EnglishName = string.IsNullOrEmpty(category.EnglishName) ? "Other" : category.EnglishName;
+                    group.ChineseName = string.IsNullOrEmpty(category.ChineseName) ? "其他" : category.ChineseName;
                     group.CategoryTier = recipe.CategoryTier;
-                    groupsByName.Add(categoryName, group);
+                    groupsByKey.Add(categoryKey, group);
                     CategorySelectionGroupsBuffer.Add(group);
                 }
                 else
@@ -754,7 +756,12 @@ namespace OC2MenuManager
                     return tierCompare;
                 }
 
-                return string.Compare(a.CategoryName, b.CategoryName, StringComparison.OrdinalIgnoreCase);
+                string leftName = chinese ? a.ChineseName : a.EnglishName;
+                string rightName = chinese ? b.ChineseName : b.EnglishName;
+                int labelCompare = string.Compare(leftName, rightName, StringComparison.OrdinalIgnoreCase);
+                return labelCompare != 0
+                    ? labelCompare
+                    : string.Compare(a.CategoryKey, b.CategoryKey, StringComparison.Ordinal);
             });
             return CategorySelectionGroupsBuffer;
         }

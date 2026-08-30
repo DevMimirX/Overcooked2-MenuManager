@@ -474,7 +474,7 @@ namespace OC2MenuManager
             }
             GUILayout.EndHorizontal();
 
-            string[] categoryKeys = DishNameCatalog.GetOrderedCategoryKeys();
+            string[] categoryKeys = RecipeCategoryCatalog.GetOrderedCategoryKeys();
             float cellWidth = GetTierSettingsCellWidth();
             for (int i = 0; i < categoryKeys.Length;)
             {
@@ -515,8 +515,8 @@ namespace OC2MenuManager
                 return;
             }
 
-            int defaultTier = DishNameCatalog.GetDefaultCategoryTierByKey(categoryKey);
-            string displayName = DishNameCatalog.GetDisplayCategoryNameByKey(categoryKey, UseChinese());
+            int defaultTier = RecipeCategoryCatalog.GetDefaultCategoryTierByKey(categoryKey);
+            string displayName = RecipeCategoryCatalog.GetDisplayCategoryNameByKey(categoryKey, UseChinese());
             GUILayout.Label(displayName, GUILayout.ExpandWidth(true));
             GUILayout.BeginHorizontal();
             if (GUILayout.Button(Ui("层级 ", "Tier ") + entry.Value, GUILayout.ExpandWidth(true)))

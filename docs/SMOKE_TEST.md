@@ -51,12 +51,15 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 2. Install the audited OC2DIYLevel binary separately and restart. Before launching a DIY level, verify its frontend metadata reports 46 scenes and the selector's DIY count is 46.
 3. Search `s_rw_` and verify the five results are exactly `s_rw_1` through `s_rw_5`; repeat with one Chinese and one English metadata name, then select each result with one click.
 4. Keep `.png`, `.txt`, and other sidecar files beside the DIY bundles; verify they never appear as scenes in the selector and no Menu Manager directory enumeration appears in an I/O trace.
-5. Before launching `s_rw_5`, select it and verify all 50 configured dishes are available, including both original and custom recipes.
-6. Save a tracked subset, restart without launching the level, and verify the subset persists.
-7. Launch the level and verify custom placeholder names are upgraded to their runtime definitions without duplicate dish IDs; prepared matching and guess tickets should work afterward.
-8. In a disposable provider stub/profile, exercise a partial malformed catalog, a duplicate scene ID, and a temporary read failure. Verify valid scenes remain, failures are summarized once, and the last successful snapshot survives only the temporary/untrustworthy reads.
-9. Remove a valid DIY scene from authoritative metadata and refresh; verify the removed scene does not leak back from the hydrated scene cache. An authoritative empty catalog must also replace the prior snapshot.
-10. Remove OC2DIYLevel again and verify Menu Manager still loads normally.
+5. Before launching `s_rw_5`, select it and verify all 50 configured dishes are available in exactly these groups: Cake 5, Pancake 4, Fruit Pie 5, Donut 4, Hot Chocolate 5, Cold Chocolate 4, Milk Drinks 5, Ice Milk 3, Fruit Juice 3, Hot Fruit Drinks 5, Fruit Ice 2, and Fruit Platter 5. No recipe should be in `Other`.
+6. Switch between English and Chinese, verify group membership does not change, then toggle each category button off and on and confirm it affects exactly that stable group.
+7. Save a tracked subset, restart without launching the level, and verify the ID-based subset persists without any category data in the selections file.
+8. Launch the level and verify custom placeholder names are upgraded to their runtime definitions without duplicate dish IDs or category changes; prepared matching and guess tickets should work afterward.
+9. In a disposable provider profile, reorder the same recipes and refresh metadata; verify keys, labels, ordering, and membership remain identical. Then remove and add recipes authoritatively and verify stale assignments disappear and the selector refreshes once.
+10. In a disposable provider stub/profile, exercise malformed recipe evidence, a partial malformed catalog, a duplicate scene ID, and a temporary read failure. Verify valid scenes remain, failures are summarized once, and the last successful snapshot survives only the temporary/untrustworthy reads.
+11. Remove a valid DIY scene from authoritative metadata and refresh; verify the removed scene does not leak back from the hydrated scene cache. An authoritative empty catalog must also replace the prior snapshot.
+12. Inspect `OC2MenuManager.dish-catalog-report.txt` and verify each DIY row includes its category key, bilingual labels, and one of the five documented inference sources.
+13. Remove OC2DIYLevel again and verify Menu Manager still loads normally.
 
 ## Scene selector usability
 
