@@ -1808,11 +1808,19 @@ namespace OC2MenuManager
 
             bool showPrepared = IsPreparedTrackingEnabled();
             List<OverlayRow> rows = BuildAndSortOverlayRows(scene, run, showPrepared);
+            HashSet<int> trackedIds;
+            bool hasExplicitSelection = TrackedIdsByScene.TryGetValue(scene.SceneName, out trackedIds);
             int candidateIndex = 0;
             for (int i = 0; i < rows.Count; i++)
             {
                 OverlayRow row = rows[i];
-                if (row == null || row.Recipe == null || !IsOverlayReferenceCandidate(row, showPrepared))
+                if (row == null
+                    || row.Recipe == null
+                    || !TrackingSelectionPolicy.IsGuessCandidate(
+                        hasExplicitSelection,
+                        trackedIds,
+                        row.Recipe.Id,
+                        IsOverlayReferenceCandidate(row, showPrepared)))
                 {
                     continue;
                 }

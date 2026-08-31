@@ -342,7 +342,7 @@ public sealed class RecipeCategoryCatalogTests
         }.SetEquals(groups.Groups[0].RecipeIds.Select(recipeId => assignments[recipeId].Key)));
         Assert.True(new HashSet<string>(StringComparer.Ordinal)
         {
-            "coldchocolate", "fruitjuice", "donut"
+            "coldchocolate", "fruitice", "milkdrink", "donut"
         }.SetEquals(groups.Groups[1].RecipeIds.Select(recipeId => assignments[recipeId].Key)));
         Assert.True(new HashSet<string>(StringComparer.Ordinal)
         {
@@ -350,7 +350,7 @@ public sealed class RecipeCategoryCatalogTests
         }.SetEquals(groups.Groups[2].RecipeIds.Select(recipeId => assignments[recipeId].Key)));
         Assert.True(new HashSet<string>(StringComparer.Ordinal)
         {
-            "fruitplatter", "milkdrink", "icemilk", "fruitice"
+            "fruitplatter", "milkdrink", "icemilk", "fruitjuice"
         }.SetEquals(groups.Groups[3].RecipeIds.Select(recipeId => assignments[recipeId].Key)));
     }
 

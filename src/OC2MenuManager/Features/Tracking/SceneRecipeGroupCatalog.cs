@@ -94,7 +94,7 @@ namespace OC2MenuManager
         private static readonly int[] RwFivePlayerTwoRecipeIds = new int[]
         {
             19991004, 19991005, 19991006, 19991026, 19991027,
-            19991009, 19991016, 19991017,
+            19991011, 19991021, 19991029,
             130976, 228988, 228996, 19990420
         };
 
@@ -108,9 +108,9 @@ namespace OC2MenuManager
         private static readonly int[] RwFivePlayerFourRecipeIds = new int[]
         {
             101593, 19991013, 19991014, 19991015, 19991041,
-            19991007, 19991010, 19991029,
+            19991007, 19991010,
             19991008, 19991022, 19991023,
-            19991011, 19991021
+            19991009, 19991016, 19991017
         };
 
         private static readonly Dictionary<string, SceneRecipeSelectionGroupSet> Definitions = BuildDefinitions();

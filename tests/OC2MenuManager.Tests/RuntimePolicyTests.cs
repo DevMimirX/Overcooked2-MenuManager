@@ -810,6 +810,63 @@ public sealed class RuntimePolicyTests
         Assert.False(TrackingSelectionPolicy.IsTracked(true, null!, existingRecipeId));
     }
 
+    [Fact]
+    public void GuessCandidatesRequireCurrentTrackedSelection()
+    {
+        const int trackedRecipeId = 42;
+        const int untrackedRecipeId = 8881401;
+        var selected = new HashSet<int> { trackedRecipeId };
+
+        Assert.True(TrackingSelectionPolicy.IsGuessCandidate(
+            true,
+            selected,
+            trackedRecipeId,
+            true));
+        Assert.False(TrackingSelectionPolicy.IsGuessCandidate(
+            true,
+            selected,
+            untrackedRecipeId,
+            true));
+        Assert.True(TrackingSelectionPolicy.IsGuessCandidate(
+            false,
+            null!,
+            untrackedRecipeId,
+            true));
+        Assert.False(TrackingSelectionPolicy.IsGuessCandidate(
+            true,
+            selected,
+            trackedRecipeId,
+            false));
+    }
+
+    [Fact]
+    public void ExplicitSelectionOnlyCollapsesWhenItCoversEveryCurrentRecipe()
+    {
+        var currentRecipeIds = new[] { 101, 202, 303 };
+        var countMatchedByStaleId = new HashSet<int> { 101, 202, 999 };
+        var completeWithStaleId = new HashSet<int> { 101, 202, 303, 999 };
+
+        Assert.False(TrackingSelectionPolicy.CoversEveryAvailableRecipe(
+            countMatchedByStaleId,
+            currentRecipeIds));
+        Assert.True(TrackingSelectionPolicy.CoversEveryAvailableRecipe(
+            completeWithStaleId,
+            currentRecipeIds));
+    }
+
+    [Fact]
+    public void StaleOnlySelectionHasNoCurrentTrackedRecipes()
+    {
+        var currentRecipeIds = new[] { 101, 202 };
+
+        Assert.False(TrackingSelectionPolicy.HasAnyAvailableRecipe(
+            new HashSet<int> { 998, 999 },
+            currentRecipeIds));
+        Assert.True(TrackingSelectionPolicy.HasAnyAvailableRecipe(
+            new HashSet<int> { 202, 999 },
+            currentRecipeIds));
+    }
+
     [Theory]
     [InlineData(false, true, false, false, false, false, false, true, (int)NoMenuIneligibility.Disabled)]
     [InlineData(true, false, false, false, false, false, false, true, (int)NoMenuIneligibility.UnsupportedLevel)]

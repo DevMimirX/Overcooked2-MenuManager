@@ -878,9 +878,7 @@ namespace OC2MenuManager
             if (changed)
             {
                 SaveSelections();
-                InvalidatePreparedCandidates(true);
-                InvalidateOverlay();
-                InvalidateTicketWidgets();
+                InvalidateTrackedSelectionConsumers();
             }
         }
 
@@ -918,9 +916,7 @@ namespace OC2MenuManager
             }
 
             SaveSelections();
-            InvalidatePreparedCandidates(true);
-            InvalidateOverlay();
-            InvalidateTicketWidgets();
+            InvalidateTrackedSelectionConsumers();
         }
 
         private static void ApplyTrackedState(string sceneName, int recipeId, bool shouldTrack, bool saveSelection)
@@ -935,7 +931,18 @@ namespace OC2MenuManager
                 SaveSelections();
             }
 
+            InvalidateTrackedSelectionConsumers();
+        }
+
+        /// <summary>
+        /// Invalidates every runtime projection of the ID-based tracked selection.
+        /// Guess tickets must participate because their GUI entries otherwise retain
+        /// the selection that was active during the preceding synchronization.
+        /// </summary>
+        private static void InvalidateTrackedSelectionConsumers()
+        {
             InvalidatePreparedCandidates(true);
+            InvalidateReferenceTickets();
             InvalidateOverlay();
             InvalidateTicketWidgets();
         }
@@ -965,7 +972,7 @@ namespace OC2MenuManager
                 SceneInfo sceneInfo;
                 if (TryGetSceneInfoByName(sceneName, out sceneInfo) && sceneInfo != null && sceneInfo.OrderedRecipes.Count > 0)
                 {
-                    if (trackedIds.Count >= sceneInfo.OrderedRecipes.Count)
+                    if (TrackingSelectionPolicy.CoversEveryAvailableRecipe(trackedIds, sceneInfo.AllRecipeIds))
                     {
                         TrackedIdsByScene.Remove(sceneName);
                     }
@@ -1037,7 +1044,7 @@ namespace OC2MenuManager
                 return true;
             }
 
-            return trackedIds.Count > 0;
+            return TrackingSelectionPolicy.HasAnyAvailableRecipe(trackedIds, scene.AllRecipeIds);
         }
 
         private static void RegisterTicketWidget(

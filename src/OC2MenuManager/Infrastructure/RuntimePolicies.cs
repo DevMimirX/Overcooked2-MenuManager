@@ -51,6 +51,55 @@ namespace OC2MenuManager.Infrastructure
         {
             return !hasExplicitSceneEntry || (selectedRecipeIds != null && selectedRecipeIds.Contains(recipeId));
         }
+
+        internal static bool IsGuessCandidate(
+            bool hasExplicitSceneEntry,
+            System.Collections.Generic.ICollection<int> selectedRecipeIds,
+            int recipeId,
+            bool otherwiseEligible)
+        {
+            return otherwiseEligible && IsTracked(hasExplicitSceneEntry, selectedRecipeIds, recipeId);
+        }
+
+        internal static bool CoversEveryAvailableRecipe(
+            System.Collections.Generic.ICollection<int> selectedRecipeIds,
+            System.Collections.Generic.IList<int> availableRecipeIds)
+        {
+            if (selectedRecipeIds == null || availableRecipeIds == null || availableRecipeIds.Count == 0)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < availableRecipeIds.Count; i++)
+            {
+                if (!selectedRecipeIds.Contains(availableRecipeIds[i]))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        internal static bool HasAnyAvailableRecipe(
+            System.Collections.Generic.ICollection<int> selectedRecipeIds,
+            System.Collections.Generic.IList<int> availableRecipeIds)
+        {
+            if (selectedRecipeIds == null || availableRecipeIds == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < availableRecipeIds.Count; i++)
+            {
+                if (selectedRecipeIds.Contains(availableRecipeIds[i]))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
     }
 
     /// <summary>

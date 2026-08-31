@@ -21,7 +21,7 @@ public sealed class SceneRecipeGroupCatalogTests
     private static readonly int[] PlayerTwo =
     {
         19991004, 19991005, 19991006, 19991026, 19991027,
-        19991009, 19991016, 19991017,
+        19991011, 19991021, 19991029,
         130976, 228988, 228996, 19990420
     };
 
@@ -35,14 +35,24 @@ public sealed class SceneRecipeGroupCatalogTests
     private static readonly int[] PlayerFour =
     {
         101593, 19991013, 19991014, 19991015, 19991041,
-        19991007, 19991010, 19991029,
+        19991007, 19991010,
         19991008, 19991022, 19991023,
-        19991011, 19991021
+        19991009, 19991016, 19991017
     };
 
     private static readonly int[] FruitPlatters =
     {
         101593, 19991013, 19991014, 19991015, 19991041
+    };
+
+    private static readonly int[] FruitJuices =
+    {
+        19991009, 19991016, 19991017
+    };
+
+    private static readonly int[] FruitIces =
+    {
+        19991011, 19991021
     };
 
     [Fact]
@@ -74,6 +84,12 @@ public sealed class SceneRecipeGroupCatalogTests
         Assert.True(unique.SetEquals(authored));
         Assert.All(FruitPlatters, recipeId => Assert.Contains(recipeId, set.Groups[2].RecipeIds));
         Assert.All(FruitPlatters, recipeId => Assert.Contains(recipeId, set.Groups[3].RecipeIds));
+        Assert.All(FruitIces, recipeId => Assert.Contains(recipeId, set.Groups[1].RecipeIds));
+        Assert.All(FruitJuices, recipeId => Assert.DoesNotContain(recipeId, set.Groups[1].RecipeIds));
+        Assert.All(FruitJuices, recipeId => Assert.Contains(recipeId, set.Groups[3].RecipeIds));
+        Assert.All(FruitIces, recipeId => Assert.DoesNotContain(recipeId, set.Groups[3].RecipeIds));
+        Assert.Contains(19991029, set.Groups[1].RecipeIds);
+        Assert.DoesNotContain(19991029, set.Groups[3].RecipeIds);
     }
 
     [Fact]
