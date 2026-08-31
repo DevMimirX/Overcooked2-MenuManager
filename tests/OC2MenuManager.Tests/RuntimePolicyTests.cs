@@ -187,7 +187,7 @@ public sealed class RuntimePolicyTests
     [InlineData(5, 5, 5, 10)]
     [InlineData(6, 6, 4, 10)]
     [InlineData(8, 8, 2, 10)]
-    [InlineData(8, 3, 5, 8)]
+    [InlineData(8, 3, 5, 13)]
     [InlineData(8, 11, 0, 11)]
     [InlineData(int.MaxValue, int.MaxValue, int.MaxValue, int.MaxValue)]
     [InlineData(-1, -1, -1, 0)]
@@ -197,20 +197,15 @@ public sealed class RuntimePolicyTests
     }
 
     [Theory]
-    [InlineData(3, 5, 10, 5)]
-    [InlineData(5, 5, 10, 5)]
-    [InlineData(6, 5, 10, 4)]
-    [InlineData(7, 5, 10, 3)]
-    [InlineData(8, 5, 10, 2)]
-    [InlineData(9, 5, 10, 1)]
-    [InlineData(10, 5, 10, 0)]
-    [InlineData(11, 5, 10, 0)]
-    [InlineData(-1, 5, 10, 5)]
-    [InlineData(5, -1, 10, 0)]
-    [InlineData(5, 5, -1, 0)]
-    public void GuessTicketsUseOnlyTheRemainingCombinedBudget(int realCount, int configuredGuesses, int combinedLimit, int expected)
+    [InlineData(3, 5, 3)]
+    [InlineData(10, 5, 5)]
+    [InlineData(10, 10, 10)]
+    [InlineData(12, 10, 10)]
+    [InlineData(-1, 5, 0)]
+    [InlineData(5, -1, 0)]
+    public void GuessTicketCountUsesEligibilityAndConfiguredLimitIndependently(int eligibleGuesses, int configuredGuesses, int expected)
     {
-        Assert.Equal(expected, TicketCapacityPolicy.CalculateAllowedReferenceTickets(realCount, configuredGuesses, combinedLimit));
+        Assert.Equal(expected, TicketCapacityPolicy.CalculateAllowedReferenceTickets(eligibleGuesses, configuredGuesses));
     }
 
     [Theory]
@@ -236,20 +231,19 @@ public sealed class RuntimePolicyTests
     }
 
     [Fact]
-    public void IncomingRealOrdersTrimGuessesWithoutTruncatingRealCapacity()
+    public void IncomingRealOrdersKeepEligibleGuessesAndReserveFullCapacity()
     {
         const int configuredGuesses = 5;
-        const int combinedLimit = 10;
         const int diyRealLimit = 8;
 
         for (var projectedRealCount = 4; projectedRealCount <= 11; projectedRealCount++)
         {
-            var guesses = TicketCapacityPolicy.CalculateAllowedReferenceTickets(projectedRealCount, configuredGuesses, combinedLimit);
+            var guesses = TicketCapacityPolicy.CalculateAllowedReferenceTickets(10, configuredGuesses);
             var capacity = TicketCapacityPolicy.CalculateTargetCapacity(diyRealLimit, projectedRealCount, guesses);
 
             Assert.True(capacity >= projectedRealCount);
-            Assert.True(projectedRealCount > combinedLimit || projectedRealCount + guesses <= combinedLimit);
-            Assert.Equal(projectedRealCount > combinedLimit ? projectedRealCount : Math.Max(diyRealLimit, projectedRealCount + guesses), capacity);
+            Assert.Equal(configuredGuesses, guesses);
+            Assert.Equal(Math.Max(diyRealLimit, projectedRealCount) + configuredGuesses, capacity);
         }
     }
 
@@ -257,16 +251,15 @@ public sealed class RuntimePolicyTests
     [InlineData(false, 7, 8)]
     [InlineData(false, 8, 8)]
     [InlineData(false, 11, 11)]
-    [InlineData(true, 7, 10)]
-    [InlineData(true, 8, 10)]
-    [InlineData(true, 11, 11)]
+    [InlineData(true, 7, 13)]
+    [InlineData(true, 8, 13)]
+    [InlineData(true, 11, 16)]
     public void IncomingRealOrdersAlwaysReserveCapacityEvenWhenTrackingIsDisabled(bool trackerEnabled, int projectedRealCount, int expectedCapacity)
     {
         const int vanillaLimit = 5;
         const int diyRawLimit = 8;
         const int recipeExtensionReportedLimit = 6;
         const int configuredGuesses = 5;
-        const int combinedLimit = 10;
 
         var effectiveRealLimit = TicketCapacityPolicy.CalculateEffectiveRealLimit(
             vanillaLimit,
@@ -274,13 +267,75 @@ public sealed class RuntimePolicyTests
             recipeExtensionReportedLimit,
             projectedRealCount);
         var guesses = TicketCapacityPolicy.CalculateAllowedReferenceTickets(
-            projectedRealCount,
-            trackerEnabled ? configuredGuesses : 0,
-            combinedLimit);
+            configuredGuesses,
+            trackerEnabled ? configuredGuesses : 0);
         var capacity = TicketCapacityPolicy.CalculateTargetCapacity(effectiveRealLimit, projectedRealCount, guesses);
 
         Assert.Equal(expectedCapacity, capacity);
         Assert.True(capacity >= projectedRealCount);
+    }
+
+    [Theory]
+    [InlineData(10, 1, 10, 10)]
+    [InlineData(15, 2, 10, 5)]
+    [InlineData(18, 2, 10, 8)]
+    [InlineData(17, 2, 10, 7)]
+    [InlineData(27, 3, 10, 7)]
+    public void TicketRowsPartitionOrderedTicketsWithoutExceedingTen(
+        int ticketCount,
+        int expectedRows,
+        int firstRowCount,
+        int lastRowCount)
+    {
+        Assert.Equal(expectedRows, TicketRowLayoutPolicy.CalculateRowCount(ticketCount, 10));
+        Assert.Equal(firstRowCount, TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, 0, 10));
+        Assert.Equal(lastRowCount, TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, expectedRows - 1, 10));
+
+        for (var index = 0; index < ticketCount; index++)
+        {
+            Assert.Equal(index / 10, TicketRowLayoutPolicy.CalculateRowIndex(index, 10));
+        }
+    }
+
+    [Theory]
+    [InlineData(5, 5, 10, 5)]
+    [InlineData(8, 10, 10, 2)]
+    [InlineData(12, 5, 10, 0)]
+    [InlineData(-1, 5, 10, 5)]
+    [InlineData(5, -1, 10, 0)]
+    [InlineData(5, 5, 0, 0)]
+    public void NativeFallbackUsesOnlyUnusedFirstRowPlaces(
+        int activeRealTickets,
+        int requestedGuesses,
+        int rowCapacity,
+        int expected)
+    {
+        Assert.Equal(
+            expected,
+            TicketRowLayoutPolicy.CalculateFallbackReferenceTickets(activeRealTickets, requestedGuesses, rowCapacity));
+    }
+
+    [Theory]
+    [InlineData(960d, 1400d, 0.6857142857142857d)]
+    [InlineData(1200d, 1400d, 0.8571428571428571d)]
+    [InlineData(1600d, 1400d, 1d)]
+    [InlineData(2400d, 1400d, 1d)]
+    public void TicketRowsFitFourByThreeThroughUltrawideHudWidths(
+        double availableWidth,
+        double naturalWidth,
+        double expectedScale)
+    {
+        Assert.Equal(expectedScale, TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth), 12);
+    }
+
+    [Fact]
+    public void TicketRowNaturalWidthIncludesOnlyResolvedItemsAndPositiveSpacing()
+    {
+        var widths = new[] { 100d, 120d, double.NaN, 80d };
+
+        Assert.Equal(320d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, 0, 3, 50d));
+        Assert.Equal(200d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, 2, 2, 120d));
+        Assert.Equal(0d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, -1, 2, 10d));
     }
 
     [Theory]

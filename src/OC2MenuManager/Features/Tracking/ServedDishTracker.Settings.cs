@@ -468,7 +468,7 @@ namespace OC2MenuManager
                     }
                 }
             }, Ui("只控制左侧悬浮窗；不会关闭历史记录、已备跟踪、菜单颜色或猜单。", "Controls only the left floating overlay; history, prepared tracking, ticket colors, and guess orders continue."));
-            DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, MaxReferenceTicketDisplayCount, Ui("猜单数量上限。实际数量会自动降到 10 减去当前真实订单数；真实订单永远优先。0 关闭。", "Maximum extra guess orders. The active count automatically drops to 10 minus the current real-order count; real orders always take priority. Set to 0 to disable."));
+            DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, MaxReferenceTicketDisplayCount, Ui("猜单数量上限。真实订单优先；每行最多 10 张，超出的猜单显示在下一行。0 关闭。", "Maximum extra guess orders. Real orders stay first; each row holds up to 10 tickets and excess guesses wrap below. Set to 0 to disable."));
             DrawToggleRow(Ui("启用已备跟踪", "Enable Prepared Tracking"), preparedTrackingEnabled != null && preparedTrackingEnabled.Value, delegate(bool value)
             {
                 if (preparedTrackingEnabled != null)

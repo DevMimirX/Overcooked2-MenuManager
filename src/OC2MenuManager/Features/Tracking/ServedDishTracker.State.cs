@@ -80,9 +80,9 @@ namespace OC2MenuManager
         private const int TicketWidgetRetryIntervalFrames = 90;
         private const int MaxTicketWidgetReconciliationAttempts = 8;
         private const int BaseMenuTicketCapacity = 5;
-        private const int MaxCombinedActiveTicketCount = 10;
-        private const int MaxReferenceTicketDisplayCount = 5;
-        private const int DefaultReferenceTicketDisplayCount = 3;
+        private const int MaxTicketsPerRow = 10;
+        private const int MaxReferenceTicketDisplayCount = 10;
+        private const int DefaultReferenceTicketDisplayCount = 5;
         private const int ReferenceTicketOrderBase = 1000000;
         private const float ReferenceTicketSyntheticTimeLimit = 999999f;
         private const int HotkeyFilePollIntervalFrames = 7200;
@@ -301,7 +301,10 @@ namespace OC2MenuManager
         private static readonly FieldInfo RecipeFlowMaxOrdersAllowedField = typeof(RecipeFlowGUI).GetField("m_maxOrdersAllowed", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeFlowOccupiedTablesField = typeof(RecipeFlowGUI).GetField("m_occupiedTables", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeFlowWidgetsField = typeof(RecipeFlowGUI).GetField("m_widgets", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo RecipeFlowOrderedWidgetsField = typeof(RecipeFlowGUI).GetField("m_ordererWidgets", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeFlowNextIndexField = typeof(RecipeFlowGUI).GetField("m_nextIndex", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo RecipeFlowDistanceBetweenOrdersField = typeof(RecipeFlowGUI).GetField("m_distanceBetweenOrders", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo RecipeFlowDistanceFromEndOfScreenField = typeof(RecipeFlowGUI).GetField("m_distanceFromEndOfScreen", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly MethodInfo RecipeFlowGetMaxOrderNumberMethod = AccessTools.Method(typeof(RecipeFlowGUI), "GetMaxOrderNumber");
         private static readonly FieldInfo ClientPlatePlateField = typeof(ClientPlate).GetField("m_plate", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo FrontendCoopGameSessionPrefabsField = AccessTools.Field(typeof(T17FrontendFlow), "m_CoopGameSessionPrefabs");
@@ -343,6 +346,9 @@ namespace OC2MenuManager
         private static bool ticketAdmissionFailureWarningLogged;
         private static bool ticketWidgetReconciliationContractWarningLogged;
         private static bool ticketWidgetReconciliationRetryWarningLogged;
+        private static bool ticketRowLayoutContractWarningLogged;
+        private static bool ticketRowLayoutFailureWarningLogged;
+        private static int nextTicketRowLayoutRetryFrame;
         private static bool referenceTicketAddFailureLogged;
         private static bool referenceTicketRemovalFailureLogged;
         private static bool trackingHookFailureWarningLogged;

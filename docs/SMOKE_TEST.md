@@ -9,8 +9,16 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 3. Press `F6` and verify the settings window opens.
 4. Place the window over frontend buttons and click, drag, scroll, and close it repeatedly. Verify the fully opaque panel remains interactive while no underlying button highlights, activates, starts a level, or receives the closing click; clicks outside the panel must also remain blocked until it closes.
 5. With a clean configuration, verify history tracking is available but `Show Floating Overlay` is off and the left panel stays hidden in a standard scene. Turn it on and verify dish selection, history overlay, prepared counts, ticket tinting, and guess tickets.
-6. Set five guess tickets and keep five real tickets active. Verify successful delivery removes exactly one real ticket and rotates guesses; expiration plays the failure/reset behavior but keeps the same real ticket and does not change served history. Confirm the active total stays at ten and no negative-table or capacity warning repeats.
+6. Set ten guess tickets and keep five real tickets active. Verify the first row contains five real plus five guesses and the second row contains five guesses. Confirm successful delivery removes exactly one real ticket and rotates guesses; expiration plays the failure/reset behavior but keeps the same real ticket and does not change served history. No negative-table, capacity, or row-layout warning should repeat.
 7. Exercise the carnival menu toggles and built-in No Menu mode, then return to the frontend without an exception.
+
+## Wrapped ticket rows
+
+1. Verify `5 real + 5 guesses` remains one row of ten, `5 real + 10 guesses` becomes rows of ten and five, `8 real + 10 guesses` becomes rows of ten and eight, and `12 real + 5 guesses` becomes rows of ten and seven. In a disposable modded profile, exceed twenty total tickets and confirm every additional row remains capped at ten.
+2. Repeat at 4:3, 16:10, 16:9, and ultrawide resolutions. Verify every over-wide row scales uniformly without clipping, rows do not overlap, and the native first-row placement is unchanged whenever all tickets fit there.
+3. Add, serve, expire, and rotate tickets while multiple rows are active. Verify removal animations remain in the assigned row, real tickets always precede guesses, and ticket timers, table accounting, candidate order, probabilities, prepared suppression, and served history do not change.
+4. Change the guess count, disable tracking, activate No Menu, and change scenes. Verify widgets return to the native flow and no empty row container or transformed ticket survives cleanup.
+5. In couch versus, verify each team's rows lay out independently. Temporarily break the reflected row-layout contract in a disposable build and verify guesses are limited to unused first-row places, the native UI remains usable, retries can recover, and only one compatibility warning is logged per round.
 
 ## Floating overlay quick controls
 
@@ -19,7 +27,7 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 3. Turn the overlay back on and confirm the current view rebuilds on the next update without resetting any state.
 4. Change the toggle, finish the round, change scenes, and restart the game. Verify the saved value persists. Remove only the `显示悬浮窗` key from a disposable configuration and verify it defaults to off again.
 5. Verify disabled history tracking, active No Menu, Horde, out-of-round state, and a missing or empty current-scene catalog suppress the panel even when `Show Floating Overlay` is on.
-6. Move `Max Guess Count` through `0-5`; verify `0` removes guesses, each other value remains effective, and overlay visibility never changes the guess count.
+6. Move `Max Guess Count` through `0-10`; verify `0` removes guesses, each other value remains effective, the clean default is `5`, and overlay visibility never changes the guess count.
 
 ## Live ticket tint controls
 
@@ -27,7 +35,7 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 2. In a standard round with several tracked and untracked real orders plus guess tickets, turn `Ticket Colors` off. Verify only real widgets restore their original tint, opacity, interaction, and raycast state on the next repaint. Active guesses must retain exactly the same configured guess color and opacity, and history, probabilities, prepared counts, selections, and guesses must remain unchanged.
 3. Turn `Ticket Colors` back on and verify all existing tracked real tickets recolor on the next repaint without waiting for a new order. Guess tickets must remain visually unchanged and untracked real tickets must remain at their original color.
 4. Disable `Enable Menu Tracking`, allow more real orders to appear, then re-enable it. Verify every existing real ticket is discovered through its active-order UI token and recolored immediately.
-5. Repeat the activation test in couch versus with both teams using the same recipe ID, and with Recipe Extension six-ticket mode plus enough guesses to fill the ten-ticket bar. Verify each team remains correctly registered and no ticket collection is reordered or modified by reconciliation.
+5. Repeat the activation test in couch versus with both teams using the same recipe ID, and with Recipe Extension six-ticket mode plus ten guesses. Verify each team remains correctly registered, lays out independently, and no authoritative ticket collection is reordered or modified by reconciliation.
 6. Repeat several off/on cycles with translucent colors. Verify no CanvasGroup leak, opacity drift, stuck interaction/raycast setting, repeated warning, or steady-state ticket scan appears.
 7. Confirm out-of-round, No Menu, Horde, disabled tracking, temporarily unavailable controllers, and an intentionally broken reflection contract leave base-game visuals safe; transient controller availability retries at the bounded interval and a missing contract logs once.
 
@@ -90,10 +98,10 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 
 1. Start once with Recipe Extension installed but disabled; verify standard Menu Manager behavior and no generated recipes in the current catalog.
 2. Enable Recipe Extension 1.1, start a supported level, and verify its generated recipes appear after round initialization.
-3. Enable the extension's six-order option and Menu Manager's five-guess maximum. Keep six real tickets active, then serve and expire many consecutive orders; verify only four guesses remain active, the total stays at ten, every served ticket is destroyed, and expired tickets remain with reset timers.
+3. Enable the extension's six-order option and Menu Manager's ten-guess maximum. Keep six real tickets active, then serve and expire many consecutive orders; verify four guesses complete the first row and six guesses appear below it, every served ticket is destroyed, and expired tickets remain with reset timers.
 4. Verify the 153-entry pool produces finite percentages, no duplicate selector rows, correct prepared matches, and no repeated compatibility warnings.
 5. Test `5_6_Dynamic_Lvl_03` and `1_6_Dynamic_Lvl_01` across every phase; verify generated dishes follow Recipe Extension's phase-specific exclusions.
-6. Run DIY level `s_rw_5` with Recipe Extension enabled and the five-guess maximum. Fill all eight real slots and verify guesses reduce to two before the incoming real tickets are created.
+6. Run DIY level `s_rw_5` with Recipe Extension enabled and the ten-guess maximum. Fill all eight real slots and verify two guesses complete the first row while the remaining eight continue below it; incoming real tickets must not evict valid guesses.
 7. Serve and expire early, middle, and late `s_rw_5` orders. Verify successful score/history updates occur once and remove the matching ticket; expiration leaves score/history and the active ticket unchanged while resetting its timer. Confirm no invalid table release or unintended stuck order remains.
 8. Run another DIY level with Recipe Extension enabled and verify both catalogs coexist without duplicate IDs or exceptions.
 9. Disable Recipe Extension for the next round and verify generated-only selector entries are removed from the active scene catalog.

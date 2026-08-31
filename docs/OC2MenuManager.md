@@ -14,7 +14,7 @@ Main features:
 - menu history overlay on the left side of the screen
 - prepared-dish tracking
 - color tinting for the real order tickets at the top
-- extra top-row guess orders for off-menu candidates
+- up to ten guess orders for off-menu candidates, wrapping below the real orders when needed
 - carnival-stage menu helpers
 - built-in no-menu toggle
 
@@ -40,7 +40,7 @@ Compatibility target: Steam build `20236421`. Maintainers can verify the referen
   - A scene with no saved subset tracks newly generated IDs automatically. Once you save an explicit subset, later IDs remain unchecked until you select them; disabling the extension removes generated-only rows for that round without deleting those saved IDs.
   - Provider entry order and duplicate entries are preserved for probability balancing. If an enabled provider snapshot is incomplete or its runtime frequency shape does not match, probability displays `—`, guesses are suppressed, and No Menu disables safely for that round.
   - Its two special dynamic-level phase filters are preserved.
-  - Real orders always keep their slots; active real and guess tickets are capped at ten whenever the level itself stays within that limit.
+  - Real orders always keep their slots. Real tickets stay first, guesses fill the first row to ten cards, and additional tickets wrap into fitted rows below it.
   - A successfully served real ticket always completes removal even if another mod previously assigned it an invalid UI table index. Expiration follows the base game: the same ticket remains active and its timer resets.
   - On Carnival, non-fixed Good Menu and Good Cake rules use the full generated pool while applying their special restrictions only to the original Carnival recipes. The fixed/TAS sequence remains base-recipe-only.
 
@@ -126,7 +126,7 @@ While the settings window is open, it is fully opaque and modal for pointer inpu
 3. Select the dishes you want to track.
 4. Turn on `Enable Menu Tracking`.
 5. Turn on `Show Floating Overlay` if you want the left-side panel; it is off by default.
-6. Adjust `Max Guess Count` if you want extra guess orders on the top row.
+6. Adjust `Max Guess Count` if you want extra guess orders after the real orders.
 7. If you want prepared-dish recognition, turn on `Enable Prepared Tracking`.
 8. If you want the real top order cards tinted, turn on `Ticket Colors`.
 9. Adjust the advanced `Overlay` position and font settings until the panel fits your screen.
@@ -239,25 +239,26 @@ This row appears immediately below `Show Floating Overlay` and is shown only onc
 
 Range:
 
-- `0` to `5`
+- `0` to `10`
 
 Default:
 
-- `3`
+- `5`
 
 Meaning:
 
-- `0` disables top-row guess orders
-- `1-5` sets the maximum number of extra guess orders after the real orders
+- `0` disables guess orders
+- `1-10` sets the maximum number of extra guess orders after the real orders
 
 Important notes:
 
 - these are reference orders only
 - they are not real game orders
 - real orders stay first; guess orders are appended after them
-- the active guess count is `max(0, min(configured maximum, 10 - active real orders))`
-- five active real orders allow five guesses, six allow four, and eight allow two
-- a level that creates more than ten real orders still shows every real order and uses zero guesses
+- each row contains at most ten tickets
+- guesses use unused places in the first row, then continue on the next row
+- more than ten real orders wrap across rows and never remove otherwise-valid guesses
+- over-wide rows scale uniformly to stay within the available HUD width
 
 #### Display Language
 
@@ -449,7 +450,7 @@ Within similar rows, it further sorts by:
 
 ## How Guess Orders Work
 
-Guess orders are the extra reference tickets shown on the real top order bar.
+Guess orders are extra reference tickets shown after the real order tickets.
 
 They reuse the game’s ticket UI, but they are not real orders.
 
@@ -460,17 +461,18 @@ A dish can become a guess order only if all of the following are true:
 - the dish is not covered by any compatible prepared source
 - the dish still has positive next-order probability
 
-The top guess-order list is built from the same sorted source as the `[ - ] Unprepared` rows in the left overlay.
+The guess-order list is built from the same sorted source as the `[ - ] Unprepared` rows in the left overlay.
 That means:
 
 - the order matches the left overlay’s off-menu candidate order
-- the top row is effectively a visual subset of those `[ - ]` rows
+- the displayed guess tickets are a visual subset of those `[ - ]` rows
 
 Current behavior:
 
 - real orders stay at the front
 - guess orders appear after them
-- excess guesses disappear before a newly arriving real order is added
+- each row contains at most ten tickets; overflow continues below
+- incoming real orders keep all their capacity without evicting valid guesses
 - when a guess becomes invalid, it disappears
 - when a new candidate becomes eligible, it can fill the freed guess slot
 

@@ -41,9 +41,9 @@ Run from PowerShell:
 
 The script restores the .NET Framework reference assemblies, builds the plugin, runs unit tests, validates the assembly dependency allowlist, and creates:
 
-- `artifacts/Overcooked2-MenuManager-v1.1.9.zip`
-- `artifacts/Overcooked2-MenuManager-v1.1.9-symbols.zip`
-- `artifacts/Overcooked2-MenuManager-v1.1.9-SHA256SUMS.txt`
+- `artifacts/Overcooked2-MenuManager-v1.1.10.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.10-symbols.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.10-SHA256SUMS.txt`
 
 All entries under `third_party/refs` are marked non-copy-local and are excluded from packages. To audit the target game build without committing its full DLL, run:
 
@@ -55,4 +55,4 @@ See [the reference provenance note](third_party/README.md) and [the runtime smok
 
 ## Releases
 
-Pushes and pull requests run CI without publishing a release. A tag must exactly match `PluginMetadata.Version`—currently `v1.1.9`—before the release workflow will publish the two validated zip files and their SHA256 checksum manifest.
+Pushes and pull requests run CI without publishing a release. A tag must exactly match `PluginMetadata.Version`—currently `v1.1.10`—before the release workflow will publish the two validated zip files and their SHA256 checksum manifest.

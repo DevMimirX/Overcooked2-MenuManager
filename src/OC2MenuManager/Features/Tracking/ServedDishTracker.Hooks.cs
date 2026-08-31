@@ -90,6 +90,9 @@ namespace OC2MenuManager
             referenceTicketAddFailureLogged = false;
             referenceTicketRemovalFailureLogged = false;
             trackingHookFailureWarningLogged = false;
+            ticketRowLayoutContractWarningLogged = false;
+            ticketRowLayoutFailureWarningLogged = false;
+            nextTicketRowLayoutRetryFrame = 0;
             ClearOnMenuCounts();
             ClearPreparedState();
             ClearReferenceTickets();

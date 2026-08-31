@@ -657,17 +657,11 @@ namespace OC2MenuManager.Infrastructure
 
     internal static class TicketCapacityPolicy
     {
-        internal static int CalculateAllowedReferenceTickets(int activeRealTickets, int configuredReferenceTickets, int maxCombinedTickets)
+        internal static int CalculateAllowedReferenceTickets(int eligibleReferenceTickets, int configuredReferenceTickets)
         {
-            int safeRealCount = Math.Max(0, activeRealTickets);
+            int safeEligibleCount = Math.Max(0, eligibleReferenceTickets);
             int safeReferenceCount = Math.Max(0, configuredReferenceTickets);
-            int safeCombinedLimit = Math.Max(0, maxCombinedTickets);
-            if (safeRealCount >= safeCombinedLimit)
-            {
-                return 0;
-            }
-
-            return Math.Min(safeReferenceCount, safeCombinedLimit - safeRealCount);
+            return Math.Min(safeEligibleCount, safeReferenceCount);
         }
 
         internal static int CalculateEffectiveRealLimit(int baseLimit, int rawConfiguredLimit, int reportedLimit, int observedRealTickets)
@@ -684,14 +678,111 @@ namespace OC2MenuManager.Infrastructure
             int safeRealLimit = Math.Max(0, effectiveRealLimit);
             int safeRealCount = Math.Max(0, activeRealTickets);
             int safeReferenceCount = Math.Max(0, requestedReferenceTickets);
-            long activeTicketCapacity = (long)safeRealCount + safeReferenceCount;
-            long targetCapacity = Math.Max((long)safeRealLimit, activeTicketCapacity);
+            long targetCapacity = (long)Math.Max(safeRealLimit, safeRealCount) + safeReferenceCount;
             return targetCapacity >= int.MaxValue ? int.MaxValue : (int)targetCapacity;
         }
 
         internal static bool IsValidTableIndex(int tableIndex, int tableCount)
         {
             return tableIndex >= 0 && tableIndex < Math.Max(0, tableCount);
+        }
+    }
+
+    /// <summary>
+    /// Partitions the ordered real-then-reference ticket sequence into bounded
+    /// rows and calculates a uniform, non-enlarging scale for each row. Runtime
+    /// presentation consumes this policy without moving eligibility or order
+    /// decisions into Unity-facing code.
+    /// </summary>
+    internal static class TicketRowLayoutPolicy
+    {
+        internal static int CalculateRowCount(int ticketCount, int maximumTicketsPerRow)
+        {
+            int safeCount = Math.Max(0, ticketCount);
+            int safeRowCapacity = Math.Max(0, maximumTicketsPerRow);
+            if (safeCount == 0 || safeRowCapacity == 0)
+            {
+                return 0;
+            }
+
+            return 1 + ((safeCount - 1) / safeRowCapacity);
+        }
+
+        internal static int CalculateRowIndex(int ticketIndex, int maximumTicketsPerRow)
+        {
+            return ticketIndex < 0 || maximumTicketsPerRow <= 0
+                ? -1
+                : ticketIndex / maximumTicketsPerRow;
+        }
+
+        internal static int CalculateRowItemCount(int ticketCount, int rowIndex, int maximumTicketsPerRow)
+        {
+            int rowCount = CalculateRowCount(ticketCount, maximumTicketsPerRow);
+            if (rowIndex < 0 || rowIndex >= rowCount)
+            {
+                return 0;
+            }
+
+            long rowStart = (long)rowIndex * maximumTicketsPerRow;
+            long remaining = Math.Max(0, ticketCount) - rowStart;
+            return (int)Math.Min(maximumTicketsPerRow, Math.Max(0L, remaining));
+        }
+
+        internal static int CalculateFallbackReferenceTickets(
+            int activeRealTickets,
+            int requestedReferenceTickets,
+            int maximumTicketsPerRow)
+        {
+            int availableFirstRowSlots = Math.Max(0, maximumTicketsPerRow - Math.Max(0, activeRealTickets));
+            return Math.Min(Math.Max(0, requestedReferenceTickets), availableFirstRowSlots);
+        }
+
+        internal static double CalculateNaturalWidth(
+            IList<double> itemWidths,
+            int startIndex,
+            int itemCount,
+            double spacing)
+        {
+            if (itemWidths == null || startIndex < 0 || itemCount <= 0 || startIndex >= itemWidths.Count)
+            {
+                return 0d;
+            }
+
+            int endIndex = itemCount >= itemWidths.Count - startIndex
+                ? itemWidths.Count
+                : startIndex + itemCount;
+            double width = 0d;
+            for (int i = startIndex; i < endIndex; i++)
+            {
+                double itemWidth = itemWidths[i];
+                if (!double.IsNaN(itemWidth) && !double.IsInfinity(itemWidth) && itemWidth > 0d)
+                {
+                    width += itemWidth;
+                }
+            }
+
+            int resolvedItemCount = endIndex - startIndex;
+            if (resolvedItemCount > 1 && !double.IsNaN(spacing) && !double.IsInfinity(spacing) && spacing > 0d)
+            {
+                width += spacing * (resolvedItemCount - 1);
+            }
+
+            return width;
+        }
+
+        internal static double CalculateFitScale(double availableWidth, double naturalWidth)
+        {
+            if (double.IsNaN(availableWidth)
+                || double.IsInfinity(availableWidth)
+                || double.IsNaN(naturalWidth)
+                || double.IsInfinity(naturalWidth)
+                || availableWidth <= 0d
+                || naturalWidth <= 0d)
+            {
+                return 1d;
+            }
+
+            return Math.Min(1d, availableWidth / naturalWidth);
         }
     }
 

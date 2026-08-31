@@ -312,6 +312,8 @@ namespace OC2MenuManager
 
         private static void ClearTicketWidgetState()
         {
+            ClearTicketRowLayouts();
+
             foreach (TicketWidgetState state in TicketWidgetsByInstanceId.Values)
             {
                 try
@@ -871,9 +873,22 @@ namespace OC2MenuManager
                     displayLimit);
                 int activeRealTickets = GetActiveRealTicketCount(flow);
                 int allowedReferenceCount = TicketCapacityPolicy.CalculateAllowedReferenceTickets(
-                    activeRealTickets,
                     desiredCandidates.Count,
-                    MaxCombinedActiveTicketCount);
+                    displayLimit);
+                if (!HasTicketRowLayoutContract())
+                {
+                    int fallbackReferenceCount = TicketRowLayoutPolicy.CalculateFallbackReferenceTickets(
+                        activeRealTickets,
+                        allowedReferenceCount,
+                        MaxTicketsPerRow);
+                    if (fallbackReferenceCount < allowedReferenceCount && !ticketRowLayoutContractWarningLogged)
+                    {
+                        ticketRowLayoutContractWarningLogged = true;
+                        _MODEntry.LogWarning(
+                            "[ServedDishTracker] Wrapped ticket layout is unavailable; guesses are limited to unused places in the native first row.");
+                    }
+                    allowedReferenceCount = fallbackReferenceCount;
+                }
                 EnsureReferenceTicketCapacity(flow, activeRealTickets, allowedReferenceCount);
                 SyncReferenceTicketsForFlow(flow, context.TeamId, desiredCandidates, allowedReferenceCount, true);
             }
@@ -1099,23 +1114,9 @@ namespace OC2MenuManager
 
             // DIY and Recipe Extension can disagree about the real-order limit even when
             // history tracking is disabled, so every non-reference ticket reserves a slot.
-            bool trackerActive = enabled != null && enabled.Value && !NoMenuMode.IsActiveForRound;
             int activeReferenceTickets = GetActiveReferenceTicketCount(flow);
             int activeRealTickets = GetActiveRealTicketCount(flow);
             int projectedRealTickets = activeRealTickets < int.MaxValue ? activeRealTickets + 1 : int.MaxValue;
-            int configuredReferenceLimit = trackerActive ? GetReferenceTicketDisplayLimit() : 0;
-            int allowedReferenceCount = TicketCapacityPolicy.CalculateAllowedReferenceTickets(
-                projectedRealTickets,
-                configuredReferenceLimit,
-                MaxCombinedActiveTicketCount);
-            if (activeReferenceTickets > allowedReferenceCount)
-            {
-                // Free synthetic slots before the game's AddElement chooses a table for the
-                // incoming real order. Real-order creation itself remains untouched.
-                TrimReferenceTicketsForFlow(flow, allowedReferenceCount);
-                activeReferenceTickets = GetActiveReferenceTicketCount(flow);
-            }
-
             EnsureReferenceTicketCapacity(flow, projectedRealTickets, activeReferenceTickets);
             if (!HasFreeTicketTable(flow))
             {
@@ -1128,49 +1129,6 @@ namespace OC2MenuManager
                     EnsureTicketStorageCapacity(flow, currentCapacity + 1);
                 }
             }
-        }
-
-        private static void TrimReferenceTicketsForFlow(RecipeFlowGUI flow, int allowedReferenceCount)
-        {
-            if (flow == null)
-            {
-                return;
-            }
-
-            int flowInstanceId = flow.GetInstanceID();
-            ReferenceTicketStatesForFlowBuffer.Clear();
-            for (int i = 0; i < ReferenceTicketStates.Count; i++)
-            {
-                ReferenceTicketState state = ReferenceTicketStates[i];
-                if (state == null || state.FlowInstanceId != flowInstanceId)
-                {
-                    continue;
-                }
-
-                try
-                {
-                    if (flow.GetData(state.Token) != null)
-                    {
-                        ReferenceTicketStatesForFlowBuffer.Add(state);
-                    }
-                }
-                catch
-                {
-                }
-            }
-
-            ReferenceTicketStatesForFlowBuffer.Sort(CompareReferenceTicketStates);
-            int safeAllowedCount = Math.Max(0, allowedReferenceCount);
-            for (int i = ReferenceTicketStatesForFlowBuffer.Count - 1; i >= safeAllowedCount; i--)
-            {
-                int stateIndex = ReferenceTicketStates.IndexOf(ReferenceTicketStatesForFlowBuffer[i]);
-                if (stateIndex >= 0)
-                {
-                    RemoveReferenceTicketAt(stateIndex);
-                }
-            }
-
-            ReferenceTicketStatesForFlowBuffer.Clear();
         }
 
         private static void SyncReferenceTicketsForFlow(
