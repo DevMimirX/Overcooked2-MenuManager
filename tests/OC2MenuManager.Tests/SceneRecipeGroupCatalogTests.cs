@@ -96,8 +96,8 @@ public sealed class SceneRecipeGroupCatalogTests
     public void ResolutionIsDeterministicAndDeduplicatesProviderIds()
     {
         int[] authored = GetAuthoredRecipeIds();
-        int[] reorderedWithDuplicates = authored
-            .Reverse()
+        int[] reorderedWithDuplicates = Enumerable
+            .Reverse(authored)
             .Concat(authored.Take(4))
             .ToArray();
 
