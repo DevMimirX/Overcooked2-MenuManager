@@ -69,6 +69,15 @@ namespace OC2MenuManager
                 "最大猜单数量",
                 migratedReferenceTicketCountValue ?? DefaultReferenceTicketDisplayCount,
                 new ConfigDescription("猜单数量上限。0 关闭，最多 10 个，默认 5 个。真实订单优先；每行最多 10 张，超出的猜单会显示在下一行。", new AcceptableValueRange<int>(0, MaxReferenceTicketDisplayCount)));
+            lowerTicketRowScalePercent = _MODEntry.SettingsConfig.Bind<int>(
+                TrackerSection,
+                "下排票据大小百分比",
+                TicketRowLayoutPolicy.DefaultLowerRowScalePercent,
+                new ConfigDescription(
+                    "第一排之后各排票据相对于自动适配大小的百分比。默认 70%；100% 保留原自动适配大小。",
+                    new AcceptableValueRange<int>(
+                        TicketRowLayoutPolicy.MinimumLowerRowScalePercent,
+                        TicketRowLayoutPolicy.MaximumLowerRowScalePercent)));
             menuReferenceTicketTintColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "猜单颜色",

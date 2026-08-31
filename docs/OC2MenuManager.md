@@ -14,7 +14,7 @@ Main features:
 - menu history overlay on the left side of the screen
 - prepared-dish tracking
 - color tinting for the real order tickets at the top
-- up to ten guess orders for off-menu candidates, wrapping below the real orders when needed
+- up to ten guess orders for off-menu candidates, wrapping into compact adjustable rows below the real orders when needed
 - carnival-stage menu helpers
 - built-in no-menu toggle
 
@@ -259,6 +259,24 @@ Important notes:
 - guesses use unused places in the first row, then continue on the next row
 - more than ten real orders wrap across rows and never remove otherwise-valid guesses
 - over-wide rows scale uniformly to stay within the available HUD width
+
+#### Lower Row Ticket Size (%)
+
+This row appears immediately below `Max Guess Count`.
+
+Range and default:
+
+- `50%` to `100%`
+- default `70%`
+
+Meaning:
+
+- applies to every ticket row after the first, including overflow real orders
+- scales the row after its normal width fitting, so it can never cause horizontal clipping
+- `100%` preserves the previous automatically fitted lower-row size
+- the first row keeps its native fitted size and position
+- lower rows automatically move upward by the measured unused ticket-header extension
+- the preceding row draws above that extension, while timer bars, recipe contents, and animations remain visible
 
 #### Display Language
 
@@ -522,7 +540,7 @@ Why:
 - failed prepared-source reads or matches fail closed and receive three bounded retries at 15-frame intervals; distinct diagnostics are logged once per round and capped at eight
 - scene/controller discovery is cached, and recovery scans are delayed and split across frames
 - the scene search model is rebuilt only when its query or source catalog changes, and the expanded list draws only visible rows
-- ticket layout is left to the game; Menu Manager only reorders membership when the real/guess set changes
+- the game remains authoritative for ticket creation, timers, and removal; Menu Manager reparents only active presentation widgets when real/guess tickets require ordering, wrapping, compact lower-row scaling, or width fitting
 - each team's next-order probabilities and sorted overlay rows are rebuilt once after an order/phase/rule change, then shared by the overlay, prepared matching, and guess tickets
 - Recipe Extension's ordered generated-entry list is reflected once after round synchronization, then reused; large-pool expansion and remote reconstruction also reuse working buffers instead of allocating temporary collections on every refresh
 - when history tracking is disabled and no tracker state needs cleanup, the frame update exits after hotkey/discovery housekeeping

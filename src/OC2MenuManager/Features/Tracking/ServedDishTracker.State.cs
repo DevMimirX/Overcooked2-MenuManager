@@ -220,6 +220,7 @@ namespace OC2MenuManager
         private static ConfigEntry<Color> menuTicketOnMenuTintColor;
         private static ConfigEntry<Color> menuTicketPreparedTintColor;
         private static ConfigEntry<int> menuReferenceTicketCount;
+        private static ConfigEntry<int> lowerTicketRowScalePercent;
         private static ConfigEntry<Color> menuReferenceTicketTintColor;
         private static ConfigEntry<bool> overlayBoldFont;
         private static ConfigEntry<int> overlayMaxDisplayDishes;

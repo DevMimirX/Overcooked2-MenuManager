@@ -328,6 +328,53 @@ public sealed class RuntimePolicyTests
         Assert.Equal(expectedScale, TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth), 12);
     }
 
+    [Theory]
+    [InlineData(960d, 1400d, 0.48d)]
+    [InlineData(1200d, 1400d, 0.6d)]
+    [InlineData(1600d, 1400d, 0.7d)]
+    [InlineData(2400d, 1400d, 0.7d)]
+    public void DefaultLowerRowScaleComposesWithEveryTargetHudWidth(
+        double availableWidth,
+        double naturalWidth,
+        double expectedScale)
+    {
+        var fitScale = TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth);
+
+        Assert.Equal(
+            expectedScale,
+            TicketRowLayoutPolicy.CalculateRowScale(
+                fitScale,
+                1,
+                TicketRowLayoutPolicy.DefaultLowerRowScalePercent),
+            12);
+    }
+
+    [Theory]
+    [InlineData(5, 5, 1, 10)]
+    [InlineData(5, 10, 2, 5)]
+    [InlineData(8, 10, 2, 8)]
+    [InlineData(12, 5, 2, 7)]
+    [InlineData(12, 0, 2, 2)]
+    [InlineData(24, 10, 4, 4)]
+    public void MixedAndRealOnlyTicketCountsRemainBoundedToTenPerRow(
+        int realTicketCount,
+        int guessTicketCount,
+        int expectedRowCount,
+        int expectedLastRowCount)
+    {
+        var ticketCount = realTicketCount + guessTicketCount;
+        var rowCount = TicketRowLayoutPolicy.CalculateRowCount(ticketCount, 10);
+
+        Assert.Equal(expectedRowCount, rowCount);
+        Assert.Equal(
+            expectedLastRowCount,
+            TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, rowCount - 1, 10));
+        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
+        {
+            Assert.InRange(TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, rowIndex, 10), 1, 10);
+        }
+    }
+
     [Fact]
     public void TicketRowNaturalWidthIncludesOnlyResolvedItemsAndPositiveSpacing()
     {
@@ -336,6 +383,72 @@ public sealed class RuntimePolicyTests
         Assert.Equal(320d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, 0, 3, 50d));
         Assert.Equal(200d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, 2, 2, 120d));
         Assert.Equal(0d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, -1, 2, 10d));
+    }
+
+    [Theory]
+    [InlineData(0.8d, 0, 50, 0.8d)]
+    [InlineData(1d, 1, 50, 0.5d)]
+    [InlineData(1d, 1, 70, 0.7d)]
+    [InlineData(1d, 1, 75, 0.75d)]
+    [InlineData(1d, 1, 100, 1d)]
+    [InlineData(0.8d, 2, 75, 0.6d)]
+    [InlineData(1d, 1, 20, 0.5d)]
+    [InlineData(1d, 1, 150, 1d)]
+    [InlineData(double.NaN, 1, 75, 0.75d)]
+    public void TicketRowsApplyConfiguredScaleOnlyAfterTheFirstRow(
+        double fitScale,
+        int rowIndex,
+        int configuredPercent,
+        double expectedScale)
+    {
+        Assert.Equal(
+            expectedScale,
+            TicketRowLayoutPolicy.CalculateRowScale(fitScale, rowIndex, configuredPercent),
+            12);
+    }
+
+    [Theory]
+    [InlineData(220d, 50d, 170d)]
+    [InlineData(220d, 0d, 220d)]
+    [InlineData(220d, -50d, 220d)]
+    [InlineData(220d, double.NaN, 220d)]
+    [InlineData(220d, double.PositiveInfinity, 220d)]
+    [InlineData(220d, 220d, 220d)]
+    [InlineData(double.NaN, 50d, 0d)]
+    public void TicketRowVisibleBodyExcludesOnlyAValidHeaderExtension(
+        double fullHeight,
+        double headerExtensionHeight,
+        double expectedHeight)
+    {
+        Assert.Equal(
+            expectedHeight,
+            TicketRowLayoutPolicy.CalculateVisibleBodyHeight(fullHeight, headerExtensionHeight),
+            12);
+    }
+
+    [Fact]
+    public void CompactTicketRowOffsetsRemainDeterministicAcrossMultipleRows()
+    {
+        var heights = new[] { 220d, 220d, 220d };
+        var headers = new[] { 50d, 50d, 50d };
+        var firstAdvance = TicketRowLayoutPolicy.CalculateRowAdvance(heights, headers, 0, 1, 1d, 5d);
+        var secondAdvance = TicketRowLayoutPolicy.CalculateRowAdvance(heights, headers, 1, 1, 0.75d, 5d);
+
+        Assert.Equal(175d, firstAdvance, 12);
+        Assert.Equal(132.5d, secondAdvance, 12);
+        Assert.Equal(307.5d, firstAdvance + secondAdvance, 12);
+    }
+
+    [Fact]
+    public void MissingHeaderEvidenceKeepsTheRowsNormalHeight()
+    {
+        var heights = new[] { 220d, 200d, 210d };
+        var headers = new[] { 50d, 40d };
+
+        Assert.Equal(
+            162.5d,
+            TicketRowLayoutPolicy.CalculateRowAdvance(heights, headers, 0, 3, 0.75d, 5d),
+            12);
     }
 
     [Theory]

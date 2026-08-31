@@ -15,19 +15,22 @@ Use a disposable or backed-up BepInEx profile and fully close the game before ch
 ## Wrapped ticket rows
 
 1. Verify `5 real + 5 guesses` remains one row of ten, `5 real + 10 guesses` becomes rows of ten and five, `8 real + 10 guesses` becomes rows of ten and eight, and `12 real + 5 guesses` becomes rows of ten and seven. In a disposable modded profile, exceed twenty total tickets and confirm every additional row remains capped at ten.
-2. Repeat at 4:3, 16:10, 16:9, and ultrawide resolutions. Verify every over-wide row scales uniformly without clipping, rows do not overlap, and the native first-row placement is unchanged whenever all tickets fit there.
-3. Add, serve, expire, and rotate tickets while multiple rows are active. Verify removal animations remain in the assigned row, real tickets always precede guesses, and ticket timers, table accounting, candidate order, probabilities, prepared suppression, and served history do not change.
-4. Change the guess count, disable tracking, activate No Menu, and change scenes. Verify widgets return to the native flow and no empty row container or transformed ticket survives cleanup.
-5. In couch versus, verify each team's rows lay out independently. Temporarily break the reflected row-layout contract in a disposable build and verify guesses are limited to unused first-row places, the native UI remains usable, retries can recover, and only one compatibility warning is logged per round.
+2. Repeat at 4:3, 16:10, 16:9, and ultrawide resolutions. Verify every over-wide row scales uniformly without clipping and the native first-row scale and placement remain unchanged.
+3. Move `Lower Row Ticket Size (%)` through `50`, `70`, `75`, and `100`. Verify all rows below the first update immediately, `70` is the clean default, and `100` restores the previous automatically fitted lower-row size.
+4. Verify each lower row moves upward only by the measured blank header extension. The preceding row must draw above that extension while every timer bar, ingredient, process icon, and card body remains unobscured.
+5. Add, serve, expire, and rotate tickets while multiple rows are active. Verify removal animations remain in the assigned row, real tickets always precede guesses, and ticket timers, table accounting, candidate order, probabilities, prepared suppression, and served history do not change.
+6. With at most ten fitting real tickets left, set the guess count to zero and verify widgets return to the native flow. Then disable tracking, activate No Menu, and change scenes; verify no empty row container or transformed ticket survives cleanup. Separately keep more than ten real tickets with zero guesses and verify their required overflow rows remain active while tracking is enabled.
+7. In couch versus, verify each team's rows lay out independently. Temporarily break the reflected row-layout contract in a disposable build and verify guesses are limited to unused first-row places, the native UI remains usable, retries can recover, and only one compatibility warning is logged per round.
 
 ## Floating overlay quick controls
 
-1. Confirm `Show Floating Overlay` appears directly below `Enable Menu Tracking`, `Max Guess Count` appears immediately below it exactly once, and the advanced position, size, font, alignment, and color controls remain in `Overlay`.
+1. Confirm `Show Floating Overlay` appears directly below `Enable Menu Tracking`, followed exactly once by `Max Guess Count` and `Lower Row Ticket Size (%)`, and the advanced position, size, font, alignment, and color controls remain in `Overlay`.
 2. In a standard round, serve and prepare dishes with the overlay on. Turn it off and confirm the panel disappears on the next repaint while served/on-menu/prepared counts, probabilities, selected dishes, ticket colors, and guess orders continue unchanged.
 3. Turn the overlay back on and confirm the current view rebuilds on the next update without resetting any state.
 4. Change the toggle, finish the round, change scenes, and restart the game. Verify the saved value persists. Remove only the `显示悬浮窗` key from a disposable configuration and verify it defaults to off again.
 5. Verify disabled history tracking, active No Menu, Horde, out-of-round state, and a missing or empty current-scene catalog suppress the panel even when `Show Floating Overlay` is on.
 6. Move `Max Guess Count` through `0-10`; verify `0` removes guesses, each other value remains effective, the clean default is `5`, and overlay visibility never changes the guess count.
+7. Change `Lower Row Ticket Size (%)`, finish the round, change scenes, and restart the game. Verify the value persists and affects presentation only; ticket eligibility, selections, colors, and counts must remain unchanged.
 
 ## Live ticket tint controls
 

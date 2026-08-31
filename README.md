@@ -1,6 +1,6 @@
 # Overcooked2-MenuManager
 
-`OC2MenuManager` is a standalone BepInEx plugin for Overcooked! 2. It provides scene-specific dish tracking, an independently toggleable menu-history overlay, prepared-dish tracking, order-ticket tinting and guesses, carnival menu helpers, and a built-in no-menu mode. The floating overlay defaults to hidden so it cannot unexpectedly cover gameplay.
+`OC2MenuManager` is a standalone BepInEx plugin for Overcooked! 2. It provides scene-specific dish tracking, an independently toggleable menu-history overlay, prepared-dish tracking, order-ticket tinting and guesses, compact adjustable overflow ticket rows, carnival menu helpers, and a built-in no-menu mode. The floating overlay defaults to hidden so it cannot unexpectedly cover gameplay.
 
 The runtime package contains one plugin DLL. It does not require HostUtilities, OC2Mods.Shared, ConfigurationManager, OC2NoMenu, OC2DIYLevel, or Recipe Extension. The last two are optional integrations.
 
@@ -41,9 +41,9 @@ Run from PowerShell:
 
 The script restores the .NET Framework reference assemblies, builds the plugin, runs unit tests, validates the assembly dependency allowlist, and creates:
 
-- `artifacts/Overcooked2-MenuManager-v1.1.10.zip`
-- `artifacts/Overcooked2-MenuManager-v1.1.10-symbols.zip`
-- `artifacts/Overcooked2-MenuManager-v1.1.10-SHA256SUMS.txt`
+- `artifacts/Overcooked2-MenuManager-v1.1.11.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.11-symbols.zip`
+- `artifacts/Overcooked2-MenuManager-v1.1.11-SHA256SUMS.txt`
 
 All entries under `third_party/refs` are marked non-copy-local and are excluded from packages. To audit the target game build without committing its full DLL, run:
 
@@ -55,4 +55,4 @@ See [the reference provenance note](third_party/README.md) and [the runtime smok
 
 ## Releases
 
-Pushes and pull requests run CI without publishing a release. A tag must exactly match `PluginMetadata.Version`—currently `v1.1.10`—before the release workflow will publish the two validated zip files and their SHA256 checksum manifest.
+Pushes and pull requests run CI without publishing a release. A tag must exactly match `PluginMetadata.Version`—currently `v1.1.11`—before the release workflow will publish the two validated zip files and their SHA256 checksum manifest.

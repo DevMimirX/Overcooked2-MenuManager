@@ -690,12 +690,17 @@ namespace OC2MenuManager.Infrastructure
 
     /// <summary>
     /// Partitions the ordered real-then-reference ticket sequence into bounded
-    /// rows and calculates a uniform, non-enlarging scale for each row. Runtime
-    /// presentation consumes this policy without moving eligibility or order
-    /// decisions into Unity-facing code.
+    /// rows, calculates each row's uniform non-enlarging scale, and advances rows
+    /// using only safely measured visible body heights. Runtime presentation
+    /// consumes this policy without moving eligibility or order decisions into
+    /// Unity-facing code.
     /// </summary>
     internal static class TicketRowLayoutPolicy
     {
+        internal const int MinimumLowerRowScalePercent = 50;
+        internal const int MaximumLowerRowScalePercent = 100;
+        internal const int DefaultLowerRowScalePercent = 70;
+
         internal static int CalculateRowCount(int ticketCount, int maximumTicketsPerRow)
         {
             int safeCount = Math.Max(0, ticketCount);
@@ -783,6 +788,80 @@ namespace OC2MenuManager.Infrastructure
             }
 
             return Math.Min(1d, availableWidth / naturalWidth);
+        }
+
+        internal static double CalculateRowScale(double fitScale, int rowIndex, int configuredLowerRowScalePercent)
+        {
+            double safeFitScale = double.IsNaN(fitScale)
+                || double.IsInfinity(fitScale)
+                || fitScale <= 0d
+                    ? 1d
+                    : Math.Min(1d, fitScale);
+            if (rowIndex <= 0)
+            {
+                return safeFitScale;
+            }
+
+            int safeScalePercent = Math.Min(
+                MaximumLowerRowScalePercent,
+                Math.Max(MinimumLowerRowScalePercent, configuredLowerRowScalePercent));
+            return safeFitScale * safeScalePercent / 100d;
+        }
+
+        internal static double CalculateVisibleBodyHeight(double fullHeight, double headerExtensionHeight)
+        {
+            if (double.IsNaN(fullHeight)
+                || double.IsInfinity(fullHeight)
+                || fullHeight <= 0d)
+            {
+                return 0d;
+            }
+
+            if (double.IsNaN(headerExtensionHeight)
+                || double.IsInfinity(headerExtensionHeight)
+                || headerExtensionHeight <= 0d
+                || headerExtensionHeight >= fullHeight)
+            {
+                return fullHeight;
+            }
+
+            return fullHeight - headerExtensionHeight;
+        }
+
+        internal static double CalculateRowAdvance(
+            IList<double> itemHeights,
+            IList<double> headerExtensionHeights,
+            int startIndex,
+            int itemCount,
+            double scale,
+            double spacing)
+        {
+            if (itemHeights == null || startIndex < 0 || itemCount <= 0 || startIndex >= itemHeights.Count)
+            {
+                return 0d;
+            }
+
+            int endIndex = itemCount >= itemHeights.Count - startIndex
+                ? itemHeights.Count
+                : startIndex + itemCount;
+            double visibleBodyHeight = 0d;
+            for (int i = startIndex; i < endIndex; i++)
+            {
+                double headerExtensionHeight = headerExtensionHeights != null && i < headerExtensionHeights.Count
+                    ? headerExtensionHeights[i]
+                    : 0d;
+                visibleBodyHeight = Math.Max(
+                    visibleBodyHeight,
+                    CalculateVisibleBodyHeight(itemHeights[i], headerExtensionHeight));
+            }
+
+            double safeScale = double.IsNaN(scale) || double.IsInfinity(scale) || scale <= 0d
+                ? 1d
+                : scale;
+            double safeSpacing = double.IsNaN(spacing) || double.IsInfinity(spacing) || spacing <= 0d
+                ? 0d
+                : spacing;
+            return (visibleBodyHeight * safeScale) + safeSpacing;
         }
     }
 

@@ -1,7 +1,8 @@
 // Owns the client-only row presentation for real and synthetic order tickets.
 // The base RecipeFlowGUI remains authoritative for widget creation, timers,
-// tables, and removal; this module only reparents and positions its live widgets
-// after the native layout pass when wrapping or width fitting is required.
+// tables, and removal; this module only reparents, scales, layers, and positions
+// live widgets after the native layout pass. Lower rows overlap only the measured
+// native header extension and never alter ticket content or gameplay state.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -20,7 +21,8 @@ namespace OC2MenuManager
         private static readonly List<RecipeFlowGUI.RecipeWidgetData> TicketRowWidgetsBuffer = new List<RecipeFlowGUI.RecipeWidgetData>();
         private static readonly HashSet<int> TicketRowWidgetIdsBuffer = new HashSet<int>();
         private static readonly List<double> TicketRowWidthsBuffer = new List<double>();
-        private static readonly List<float> TicketRowHeightsBuffer = new List<float>();
+        private static readonly List<double> TicketRowHeightsBuffer = new List<double>();
+        private static readonly List<double> TicketRowHeaderExtensionHeightsBuffer = new List<double>();
 
         /// <summary>
         /// Owns reusable row containers for one base-game recipe flow. Widgets
@@ -109,7 +111,6 @@ namespace OC2MenuManager
 
             TicketRowWidgetsBuffer.Clear();
             TicketRowWidgetIdsBuffer.Clear();
-            bool hasReferenceTicket = false;
             for (int pass = 0; pass < 2; pass++)
             {
                 bool selectReferences = pass == 1;
@@ -131,14 +132,13 @@ namespace OC2MenuManager
                     if (TicketRowWidgetIdsBuffer.Add(widgetId))
                     {
                         TicketRowWidgetsBuffer.Add(widgetData);
-                        hasReferenceTicket |= isReference;
                     }
                 }
             }
 
             int ticketCount = TicketRowWidgetsBuffer.Count;
             int rowCount = TicketRowLayoutPolicy.CalculateRowCount(ticketCount, MaxTicketsPerRow);
-            if (!hasReferenceTicket || rowCount == 0)
+            if (rowCount == 0)
             {
                 RestoreTicketRowLayout(flow);
                 return;
@@ -150,6 +150,7 @@ namespace OC2MenuManager
 
             TicketRowWidthsBuffer.Clear();
             TicketRowHeightsBuffer.Clear();
+            TicketRowHeaderExtensionHeightsBuffer.Clear();
             for (int i = 0; i < ticketCount; i++)
             {
                 RecipeWidgetUIController widget = TicketRowWidgetsBuffer[i].m_widget;
@@ -157,6 +158,7 @@ namespace OC2MenuManager
                 float height = ResolveTicketHeight(widget);
                 TicketRowWidthsBuffer.Add(width);
                 TicketRowHeightsBuffer.Add(height);
+                TicketRowHeaderExtensionHeightsBuffer.Add(ResolveTicketHeaderExtensionHeight(widget));
             }
 
             if (rowCount == 1)
@@ -186,12 +188,17 @@ namespace OC2MenuManager
                     startIndex,
                     itemCount,
                     spacing);
-                float scale = (float)TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth);
+                double fitScale = TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth);
+                float scale = (float)TicketRowLayoutPolicy.CalculateRowScale(
+                    fitScale,
+                    rowIndex,
+                    lowerTicketRowScalePercent != null
+                        ? lowerTicketRowScalePercent.Value
+                        : TicketRowLayoutPolicy.DefaultLowerRowScalePercent);
                 RectTransform rowContainer = state.RowContainers[rowIndex];
                 ConfigureTicketRowContainer(rowContainer, rowIndex, verticalOffset, scale);
 
                 float horizontalOffset = scale > 0f ? edgeInset / scale : edgeInset;
-                float rowHeight = 1f;
                 for (int itemIndex = 0; itemIndex < itemCount; itemIndex++)
                 {
                     int widgetIndex = startIndex + itemIndex;
@@ -221,11 +228,15 @@ namespace OC2MenuManager
                     }
 
                     horizontalOffset += (float)TicketRowWidthsBuffer[widgetIndex] + spacing;
-                    rowHeight = Mathf.Max(rowHeight, TicketRowHeightsBuffer[widgetIndex]);
                 }
 
-                rowContainer.SetAsLastSibling();
-                verticalOffset += (rowHeight * scale) + spacing;
+                verticalOffset += (float)TicketRowLayoutPolicy.CalculateRowAdvance(
+                    TicketRowHeightsBuffer,
+                    TicketRowHeaderExtensionHeightsBuffer,
+                    startIndex,
+                    itemCount,
+                    scale,
+                    spacing);
             }
 
             for (int i = rowCount; i < state.RowContainers.Count; i++)
@@ -233,6 +244,15 @@ namespace OC2MenuManager
                 if (state.RowContainers[i] != null)
                 {
                     state.RowContainers[i].gameObject.SetActive(false);
+                }
+            }
+
+            for (int i = rowCount - 1; i >= 0; i--)
+            {
+                RectTransform rowContainer = state.RowContainers[i];
+                if (rowContainer != null)
+                {
+                    rowContainer.SetAsLastSibling();
                 }
             }
         }
@@ -350,6 +370,20 @@ namespace OC2MenuManager
             }
 
             return IsFinitePositive(height) ? height : 1f;
+        }
+
+        private static float ResolveTicketHeaderExtensionHeight(RecipeWidgetUIController widget)
+        {
+            TopRecipeWidgetTile.TopDisplayConfiguration configuration = widget != null && RecipeWidgetTopDisplayConfigField != null
+                ? RecipeWidgetTopDisplayConfigField.GetValue(widget) as TopRecipeWidgetTile.TopDisplayConfiguration
+                : null;
+            if (configuration == null)
+            {
+                return 0f;
+            }
+
+            float height = configuration.m_BackgroundStitchSize.y;
+            return IsFinitePositive(height) ? height : 0f;
         }
 
         private static float ReadNonNegativeLayoutFloat(object value)

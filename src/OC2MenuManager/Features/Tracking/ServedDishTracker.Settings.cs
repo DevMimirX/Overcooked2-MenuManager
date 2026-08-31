@@ -11,6 +11,7 @@ using System.Text;
 using BepInEx;
 using BepInEx.Configuration;
 using HarmonyLib;
+using OC2MenuManager.Infrastructure;
 using OrderController;
 using Team17.Online;
 using Team17.Online.Multiplayer.Messaging;
@@ -469,6 +470,14 @@ namespace OC2MenuManager
                 }
             }, Ui("只控制左侧悬浮窗；不会关闭历史记录、已备跟踪、菜单颜色或猜单。", "Controls only the left floating overlay; history, prepared tracking, ticket colors, and guess orders continue."));
             DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, MaxReferenceTicketDisplayCount, Ui("猜单数量上限。真实订单优先；每行最多 10 张，超出的猜单显示在下一行。0 关闭。", "Maximum extra guess orders. Real orders stay first; each row holds up to 10 tickets and excess guesses wrap below. Set to 0 to disable."));
+            DrawIntSliderRow(
+                Ui("下排票据大小 (%)", "Lower Row Ticket Size (%)"),
+                lowerTicketRowScalePercent,
+                TicketRowLayoutPolicy.MinimumLowerRowScalePercent,
+                TicketRowLayoutPolicy.MaximumLowerRowScalePercent,
+                Ui(
+                    "控制第一排之后所有票据的大小。默认 70%；100% 保留原自动适配大小。下排会自动上移，让上一排遮住无用的顶部留白。",
+                    "Controls every ticket row after the first. The default is 70%; 100% preserves the previous auto-fitted size. Lower rows move up automatically so the preceding row covers the unused header space."));
             DrawToggleRow(Ui("启用已备跟踪", "Enable Prepared Tracking"), preparedTrackingEnabled != null && preparedTrackingEnabled.Value, delegate(bool value)
             {
                 if (preparedTrackingEnabled != null)
