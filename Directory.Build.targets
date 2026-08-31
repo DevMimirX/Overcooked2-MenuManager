@@ -1,0 +1,24 @@
+<Project>
+  <Target Name="ValidateLegacyTargetingPack"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(LegacyGamePluginProject)' == 'true'">
+    <Error Condition="!Exists('$(Net35ReferenceAssembliesDir)\mscorlib.dll')"
+           Text=".NET Framework 3.5 reference assemblies were not found under $(Net35ReferenceAssembliesDir). Run dotnet restore before building or install the .NET Framework 3.5 targeting pack." />
+  </Target>
+
+  <Target Name="ValidateStandaloneGameReferences"
+          BeforeTargets="ResolveReferences"
+          Condition="'$(LegacyGamePluginProject)' == 'true'">
+    <Error Condition="!Exists('$(GameRefsRoot)')" Text="Compile-time reference directory was not found: $(GameRefsRoot)" />
+    <Error Condition="!Exists('$(GameRefsRoot)\0Harmony20.dll')" Text="Missing compile-time reference: 0Harmony20.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\Assembly-CSharp-nstrip.dll')" Text="Missing compile-time reference: Assembly-CSharp-nstrip.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\BepInEx.dll')" Text="Missing compile-time reference: BepInEx.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\UnityEngine.dll')" Text="Missing compile-time reference: UnityEngine.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\UnityEngine.AnimationModule.dll')" Text="Missing compile-time reference: UnityEngine.AnimationModule.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\UnityEngine.CoreModule.dll')" Text="Missing compile-time reference: UnityEngine.CoreModule.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\UnityEngine.IMGUIModule.dll')" Text="Missing compile-time reference: UnityEngine.IMGUIModule.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\UnityEngine.TextRenderingModule.dll')" Text="Missing compile-time reference: UnityEngine.TextRenderingModule.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\UnityEngine.UI.dll')" Text="Missing compile-time reference: UnityEngine.UI.dll" />
+    <Error Condition="!Exists('$(GameRefsRoot)\UnityEngine.UIModule.dll')" Text="Missing compile-time reference: UnityEngine.UIModule.dll" />
+  </Target>
+</Project>

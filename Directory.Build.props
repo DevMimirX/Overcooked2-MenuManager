@@ -1,0 +1,18 @@
+<Project>
+  <PropertyGroup>
+    <RepositoryRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)'))</RepositoryRoot>
+    <GameRefsRoot Condition="'$(GameRefsRoot)' == ''">$(RepositoryRoot)third_party\refs</GameRefsRoot>
+    <Net35ReferenceAssembliesDir Condition="'$(Net35ReferenceAssembliesDir)' == ''">$([System.IO.Path]::Combine('$(ProgramFiles(x86))', 'Reference Assemblies', 'Microsoft', 'Framework', '.NETFramework', 'v3.5'))</Net35ReferenceAssembliesDir>
+    <Deterministic>true</Deterministic>
+    <ContinuousIntegrationBuild Condition="'$(CI)' != ''">true</ContinuousIntegrationBuild>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(UsingMicrosoftNETSdk)' == 'true'">
+    <LangVersion>latestmajor</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <TreatWarningsAsErrors Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

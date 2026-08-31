@@ -1,0 +1,89 @@
+<Project>
+  <PropertyGroup>
+    <LegacyGamePluginProject>true</LegacyGamePluginProject>
+    <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
+    <LangVersion>latest</LangVersion>
+    <FileAlignment>512</FileAlignment>
+    <WarningLevel>4</WarningLevel>
+    <ErrorReport>prompt</ErrorReport>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateSerializationAssemblies>Off</GenerateSerializationAssemblies>
+    <RestoreProjectStyle Condition="'$(RestoreProjectStyle)' == ''">PackageReference</RestoreProjectStyle>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFrameworkVersion)' == 'v3.5'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net35"
+                      PrivateAssets="all"
+                      GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(TargetFrameworkVersion)' == 'v3.5' and Exists('$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net35)\build\.NETFramework\v3.5\mscorlib.dll')">
+    <Net35ReferenceAssembliesPackageRoot>$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net35)\build\</Net35ReferenceAssembliesPackageRoot>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFrameworkVersion)' == 'v3.5' and !Exists('$(Net35ReferenceAssembliesDir)\mscorlib.dll') and Exists('$(Net35ReferenceAssembliesPackageRoot)\.NETFramework\v3.5\mscorlib.dll')">
+    <Net35ReferenceAssembliesDir>$(Net35ReferenceAssembliesPackageRoot)\.NETFramework\v3.5</Net35ReferenceAssembliesDir>
+    <TargetFrameworkRootPath>$(Net35ReferenceAssembliesPackageRoot)</TargetFrameworkRootPath>
+    <BypassFrameworkInstallChecks>true</BypassFrameworkInstallChecks>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="0Harmony20">
+      <HintPath>$(GameRefsRoot)\0Harmony20.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="Assembly-CSharp-nstrip">
+      <HintPath>$(GameRefsRoot)\Assembly-CSharp-nstrip.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="BepInEx">
+      <HintPath>$(GameRefsRoot)\BepInEx.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="UnityEngine">
+      <HintPath>$(GameRefsRoot)\UnityEngine.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.AnimationModule">
+      <HintPath>$(GameRefsRoot)\UnityEngine.AnimationModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameRefsRoot)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(GameRefsRoot)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(GameRefsRoot)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UI">
+      <HintPath>$(GameRefsRoot)\UnityEngine.UI.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+    <Reference Include="UnityEngine.UIModule">
+      <HintPath>$(GameRefsRoot)\UnityEngine.UIModule.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

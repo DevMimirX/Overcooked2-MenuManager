@@ -1,0 +1,37 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Validate release version
+        shell: pwsh
+        run: ./tools/Assert-VersionTag.ps1 -Tag '${{ github.ref_name }}'
+
+      - name: Build, test, verify, and package
+        shell: pwsh
+        run: ./tools/Build.ps1 -Configuration Release -Package
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.zip
+            artifacts/*-SHA256SUMS.txt
+          fail_on_unmatched_files: true
