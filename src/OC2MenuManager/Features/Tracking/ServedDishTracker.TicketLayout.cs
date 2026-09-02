@@ -1,14 +1,18 @@
 // Owns the client-only row presentation for real and synthetic order tickets.
 // The base RecipeFlowGUI remains authoritative for widget creation, timers,
 // tables, and removal; this module only reparents, scales, layers, and positions
-// live widgets after the native layout pass. Lower rows overlap only the measured
-// native header extension and never alter ticket content or gameplay state.
+// live widgets after the native layout pass. Rows greedily consume the largest
+// ordered prefix that fits at their configured native-size percentage. Lower
+// rows mask the decorative stitched header outside the top recipe tile and use
+// the measured visible body height without altering ticket content or gameplay
+// state.
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using HarmonyLib;
 using OC2MenuManager.Infrastructure;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace OC2MenuManager
 {
@@ -23,16 +27,35 @@ namespace OC2MenuManager
         private static readonly List<double> TicketRowWidthsBuffer = new List<double>();
         private static readonly List<double> TicketRowHeightsBuffer = new List<double>();
         private static readonly List<double> TicketRowHeaderExtensionHeightsBuffer = new List<double>();
+        private static readonly List<int> TicketRowStartIndicesBuffer = new List<int>();
+        private static readonly List<int> TicketRowItemCountsBuffer = new List<int>();
+        private static readonly List<double> TicketRowScalesBuffer = new List<double>();
+        private static readonly List<int> TicketHeaderCropIdsBuffer = new List<int>();
 
         /// <summary>
-        /// Owns reusable row containers for one base-game recipe flow. Widgets
-        /// remain owned by RecipeFlowGUI and are restored before containers are
-        /// destroyed, so gameplay state never depends on this presentation state.
+        /// Records one reversible mask applied to a base-game top recipe tile.
+        /// Existing masks retain their original enabled state; masks introduced
+        /// by this module are disabled and destroyed during native restoration.
+        /// </summary>
+        private sealed class TicketHeaderCropState
+        {
+            internal TopRecipeWidgetTile Tile;
+            internal RectMask2D Mask;
+            internal bool OwnedByTracker;
+            internal bool OriginalEnabled;
+        }
+
+        /// <summary>
+        /// Owns reusable row containers and reversible decorative-header masks
+        /// for one base-game recipe flow. Widgets remain owned by RecipeFlowGUI
+        /// and are restored before presentation components are destroyed, so
+        /// gameplay state never depends on this presentation state.
         /// </summary>
         private sealed class TicketFlowRowLayoutState
         {
             internal RecipeFlowGUI Flow;
             internal readonly List<RectTransform> RowContainers = new List<RectTransform>();
+            internal readonly Dictionary<int, TicketHeaderCropState> HeaderCropsByWidgetId = new Dictionary<int, TicketHeaderCropState>();
         }
 
         [HarmonyPatch(typeof(RecipeFlowGUI), "LayoutWidgets")]
@@ -137,8 +160,7 @@ namespace OC2MenuManager
             }
 
             int ticketCount = TicketRowWidgetsBuffer.Count;
-            int rowCount = TicketRowLayoutPolicy.CalculateRowCount(ticketCount, MaxTicketsPerRow);
-            if (rowCount == 0)
+            if (ticketCount == 0)
             {
                 RestoreTicketRowLayout(flow);
                 return;
@@ -161,40 +183,70 @@ namespace OC2MenuManager
                 TicketRowHeaderExtensionHeightsBuffer.Add(ResolveTicketHeaderExtensionHeight(widget));
             }
 
-            if (rowCount == 1)
+            TicketRowStartIndicesBuffer.Clear();
+            TicketRowItemCountsBuffer.Clear();
+            TicketRowScalesBuffer.Clear();
+            int nextStartIndex = 0;
+            int rowIndex = 0;
+            while (nextStartIndex < ticketCount)
             {
+                int configuredScalePercent;
+                if (rowIndex == 0)
+                {
+                    configuredScalePercent = firstTicketRowScalePercent != null
+                        ? firstTicketRowScalePercent.Value
+                        : TicketRowLayoutPolicy.DefaultFirstRowScalePercent;
+                }
+                else
+                {
+                    configuredScalePercent = lowerTicketRowScalePercent != null
+                        ? lowerTicketRowScalePercent.Value
+                        : TicketRowLayoutPolicy.DefaultLowerRowScalePercent;
+                }
+
+                double configuredScale = TicketRowLayoutPolicy.CalculateConfiguredScale(configuredScalePercent);
+                int itemCount = TicketRowLayoutPolicy.CalculateFittingItemCount(
+                    TicketRowWidthsBuffer,
+                    nextStartIndex,
+                    availableWidth,
+                    spacing,
+                    configuredScale);
+                if (itemCount <= 0)
+                {
+                    itemCount = 1;
+                }
+
                 double naturalWidth = TicketRowLayoutPolicy.CalculateNaturalWidth(
                     TicketRowWidthsBuffer,
-                    0,
-                    ticketCount,
+                    nextStartIndex,
+                    itemCount,
                     spacing);
-                if (TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth) >= 1d)
-                {
-                    RestoreTicketRowLayout(flow);
-                    return;
-                }
+                TicketRowStartIndicesBuffer.Add(nextStartIndex);
+                TicketRowItemCountsBuffer.Add(itemCount);
+                TicketRowScalesBuffer.Add(TicketRowLayoutPolicy.CalculateAppliedRowScale(
+                    availableWidth,
+                    naturalWidth,
+                    configuredScalePercent));
+                nextStartIndex += itemCount;
+                rowIndex++;
+            }
+
+            int rowCount = TicketRowItemCountsBuffer.Count;
+            if (rowCount == 1 && TicketRowScalesBuffer[0] >= 1d)
+            {
+                RestoreTicketRowLayout(flow);
+                return;
             }
 
             TicketFlowRowLayoutState state = GetOrCreateTicketRowLayout(flow);
             EnsureTicketRowContainers(state, rowCount);
 
             float verticalOffset = 0f;
-            for (int rowIndex = 0; rowIndex < rowCount; rowIndex++)
+            for (rowIndex = 0; rowIndex < rowCount; rowIndex++)
             {
-                int startIndex = rowIndex * MaxTicketsPerRow;
-                int itemCount = TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, rowIndex, MaxTicketsPerRow);
-                double naturalWidth = TicketRowLayoutPolicy.CalculateNaturalWidth(
-                    TicketRowWidthsBuffer,
-                    startIndex,
-                    itemCount,
-                    spacing);
-                double fitScale = TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth);
-                float scale = (float)TicketRowLayoutPolicy.CalculateRowScale(
-                    fitScale,
-                    rowIndex,
-                    lowerTicketRowScalePercent != null
-                        ? lowerTicketRowScalePercent.Value
-                        : TicketRowLayoutPolicy.DefaultLowerRowScalePercent);
+                int startIndex = TicketRowStartIndicesBuffer[rowIndex];
+                int itemCount = TicketRowItemCountsBuffer[rowIndex];
+                float scale = (float)TicketRowScalesBuffer[rowIndex];
                 RectTransform rowContainer = state.RowContainers[rowIndex];
                 ConfigureTicketRowContainer(rowContainer, rowIndex, verticalOffset, scale);
 
@@ -219,6 +271,7 @@ namespace OC2MenuManager
                         widgetTransform.SetParent(rowContainer, false);
                     }
                     widgetTransform.SetSiblingIndex(itemIndex);
+                    SetTicketHeaderCropped(state, widget, rowIndex > 0);
 
                     RectTransformExtension extension = widget.GetComponent<RectTransformExtension>();
                     if (extension != null)
@@ -238,6 +291,8 @@ namespace OC2MenuManager
                     scale,
                     spacing);
             }
+
+            PruneTicketHeaderCrops(state);
 
             for (int i = rowCount; i < state.RowContainers.Count; i++)
             {
@@ -374,16 +429,158 @@ namespace OC2MenuManager
 
         private static float ResolveTicketHeaderExtensionHeight(RecipeWidgetUIController widget)
         {
-            TopRecipeWidgetTile.TopDisplayConfiguration configuration = widget != null && RecipeWidgetTopDisplayConfigField != null
-                ? RecipeWidgetTopDisplayConfigField.GetValue(widget) as TopRecipeWidgetTile.TopDisplayConfiguration
+            TopRecipeWidgetTile topTile = ResolveTopRecipeWidgetTile(widget);
+            Image backgroundTop = topTile != null && RecipeWidgetBackgroundTopField != null
+                ? RecipeWidgetBackgroundTopField.GetValue(topTile) as Image
                 : null;
-            if (configuration == null)
+            if (backgroundTop == null)
             {
                 return 0f;
             }
 
-            float height = configuration.m_BackgroundStitchSize.y;
+            RectTransform backgroundTransform = backgroundTop.rectTransform;
+            float height = 0f;
+            if (backgroundTransform != null)
+            {
+                Bounds headerBounds = RectTransformUtility.CalculateRelativeRectTransformBounds(
+                    widget.transform,
+                    backgroundTransform);
+                height = Mathf.Abs(headerBounds.size.y);
+            }
+            if (!IsFinitePositive(height))
+            {
+                TopRecipeWidgetTile.TopDisplayConfiguration configuration = widget != null && RecipeWidgetTopDisplayConfigField != null
+                    ? RecipeWidgetTopDisplayConfigField.GetValue(widget) as TopRecipeWidgetTile.TopDisplayConfiguration
+                    : null;
+                height = configuration != null ? Mathf.Abs(configuration.m_BackgroundStitchSize.y) : 0f;
+            }
+
             return IsFinitePositive(height) ? height : 0f;
+        }
+
+        private static TopRecipeWidgetTile ResolveTopRecipeWidgetTile(RecipeWidgetUIController widget)
+        {
+            if (widget == null)
+            {
+                return null;
+            }
+
+            TopRecipeWidgetTile topTile = RecipeWidgetTopTileField != null
+                ? RecipeWidgetTopTileField.GetValue(widget) as TopRecipeWidgetTile
+                : null;
+            return topTile != null
+                ? topTile
+                : widget.GetComponentInChildren<TopRecipeWidgetTile>();
+        }
+
+        private static void SetTicketHeaderCropped(
+            TicketFlowRowLayoutState state,
+            RecipeWidgetUIController widget,
+            bool cropped)
+        {
+            if (state == null || widget == null)
+            {
+                return;
+            }
+
+            int widgetId = widget.GetInstanceID();
+            TopRecipeWidgetTile topTile = ResolveTopRecipeWidgetTile(widget);
+            TicketHeaderCropState cropState;
+            if (state.HeaderCropsByWidgetId.TryGetValue(widgetId, out cropState)
+                && (cropState == null
+                    || cropState.Mask == null
+                    || (topTile != null && cropState.Tile != topTile)))
+            {
+                RestoreTicketHeaderCrop(cropState);
+                state.HeaderCropsByWidgetId.Remove(widgetId);
+                cropState = null;
+            }
+
+            if (cropState == null && cropped)
+            {
+                if (topTile == null)
+                {
+                    return;
+                }
+
+                RectMask2D mask = topTile.GetComponent<RectMask2D>();
+                bool ownedByTracker = mask == null;
+                bool originalEnabled = mask != null && mask.enabled;
+                if (mask == null)
+                {
+                    mask = topTile.gameObject.AddComponent<RectMask2D>();
+                }
+
+                if (mask == null)
+                {
+                    return;
+                }
+
+                cropState = new TicketHeaderCropState
+                {
+                    Tile = topTile,
+                    Mask = mask,
+                    OwnedByTracker = ownedByTracker,
+                    OriginalEnabled = originalEnabled
+                };
+                state.HeaderCropsByWidgetId[widgetId] = cropState;
+            }
+
+            if (cropState != null && cropState.Mask != null)
+            {
+                cropState.Mask.enabled = cropped || cropState.OriginalEnabled;
+            }
+        }
+
+        private static void PruneTicketHeaderCrops(TicketFlowRowLayoutState state)
+        {
+            if (state == null || state.HeaderCropsByWidgetId.Count == 0)
+            {
+                return;
+            }
+
+            TicketHeaderCropIdsBuffer.Clear();
+            foreach (KeyValuePair<int, TicketHeaderCropState> pair in state.HeaderCropsByWidgetId)
+            {
+                if (!TicketRowWidgetIdsBuffer.Contains(pair.Key))
+                {
+                    TicketHeaderCropIdsBuffer.Add(pair.Key);
+                }
+            }
+
+            for (int i = 0; i < TicketHeaderCropIdsBuffer.Count; i++)
+            {
+                int widgetId = TicketHeaderCropIdsBuffer[i];
+                TicketHeaderCropState cropState;
+                if (state.HeaderCropsByWidgetId.TryGetValue(widgetId, out cropState))
+                {
+                    RestoreTicketHeaderCrop(cropState);
+                    state.HeaderCropsByWidgetId.Remove(widgetId);
+                }
+            }
+
+            TicketHeaderCropIdsBuffer.Clear();
+        }
+
+        private static void RestoreTicketHeaderCrop(TicketHeaderCropState cropState)
+        {
+            if (cropState == null)
+            {
+                return;
+            }
+
+            if (cropState.Mask != null && cropState.OwnedByTracker)
+            {
+                cropState.Mask.enabled = false;
+                UnityEngine.Object.Destroy(cropState.Mask);
+            }
+            else if (cropState.Mask != null)
+            {
+                cropState.Mask.enabled = cropState.OriginalEnabled;
+            }
+
+            cropState.Tile = null;
+            cropState.Mask = null;
         }
 
         private static float ReadNonNegativeLayoutFloat(object value)
@@ -418,6 +615,15 @@ namespace OC2MenuManager
         private static void RestoreTicketRowLayoutState(TicketFlowRowLayoutState state)
         {
             RecipeFlowGUI flow = state != null ? state.Flow : null;
+            if (state != null)
+            {
+                foreach (TicketHeaderCropState cropState in state.HeaderCropsByWidgetId.Values)
+                {
+                    RestoreTicketHeaderCrop(cropState);
+                }
+                state.HeaderCropsByWidgetId.Clear();
+            }
+
             for (int i = 0; state != null && i < state.RowContainers.Count; i++)
             {
                 RectTransform rowContainer = state.RowContainers[i];

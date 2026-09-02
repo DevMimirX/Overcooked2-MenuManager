@@ -1406,7 +1406,7 @@ namespace OC2MenuManager
 
         private static int GetReferenceTicketDisplayLimit()
         {
-            return Mathf.Clamp(menuReferenceTicketCount != null ? menuReferenceTicketCount.Value : DefaultReferenceTicketDisplayCount, 0, MaxReferenceTicketDisplayCount);
+            return Mathf.Clamp(menuReferenceTicketCount != null ? menuReferenceTicketCount.Value : DefaultReferenceTicketDisplayCount, 0, TicketCapacityPolicy.MaximumReferenceTickets);
         }
 
         private static Color GetReferenceTicketTintColor()

@@ -80,8 +80,6 @@ namespace OC2MenuManager
         private const int TicketWidgetRetryIntervalFrames = 90;
         private const int MaxTicketWidgetReconciliationAttempts = 8;
         private const int BaseMenuTicketCapacity = 5;
-        private const int MaxTicketsPerRow = 10;
-        private const int MaxReferenceTicketDisplayCount = 10;
         private const int DefaultReferenceTicketDisplayCount = 5;
         private const int ReferenceTicketOrderBase = 1000000;
         private const float ReferenceTicketSyntheticTimeLimit = 999999f;
@@ -183,12 +181,16 @@ namespace OC2MenuManager
         private static readonly ConfigDefinition LegacyLanguageDefinition = new ConfigDefinition("03-已送菜品追踪", "显示语言");
         private static readonly ConfigDefinition LegacySelectedSceneStateDefinition = new ConfigDefinition("99-内部", "已选关卡内部状态");
         private static readonly ConfigDefinition LegacySettingsWindowHotkeyDefinition = new ConfigDefinition("00-菜单管理", SettingsWindowHotkeyKey);
+        // Serialized legacy names retain their original wording only long enough
+        // to migrate existing settings; they are never bound as active UI entries.
         private static readonly ConfigDefinition LegacyMenuTicketOnMenuColorDefinition = new ConfigDefinition(TrackerSection, "菜单票据在单颜色");
         private static readonly ConfigDefinition LegacyMenuTicketPreparedColorDefinition = new ConfigDefinition(TrackerSection, "菜单票据已备颜色");
         private static readonly ConfigDefinition LegacyGuessCountDefinition = new ConfigDefinition(TrackerSection, "菜单票据猜单数量");
         private static readonly ConfigDefinition LegacyGuessColorDefinition = new ConfigDefinition(TrackerSection, "菜单票据猜单颜色");
         private static readonly ConfigDefinition LegacyReferenceTicketCountDefinition = new ConfigDefinition(TrackerSection, "菜单票据未备参考数量");
         private static readonly ConfigDefinition LegacyReferenceTicketColorDefinition = new ConfigDefinition(TrackerSection, "菜单票据未备参考颜色");
+        private static readonly ConfigDefinition LegacyFirstTicketRowScaleDefinition = new ConfigDefinition(TrackerSection, "首排票据大小百分比");
+        private static readonly ConfigDefinition LegacyLowerTicketRowScaleDefinition = new ConfigDefinition(TrackerSection, "下排票据大小百分比");
         private static readonly ConfigDefinition[] LegacyConfigDefinitions = new ConfigDefinition[]
         {
             new ConfigDefinition("03-已送菜品追踪", "启用已送菜品追踪"),
@@ -220,6 +222,7 @@ namespace OC2MenuManager
         private static ConfigEntry<Color> menuTicketOnMenuTintColor;
         private static ConfigEntry<Color> menuTicketPreparedTintColor;
         private static ConfigEntry<int> menuReferenceTicketCount;
+        private static ConfigEntry<int> firstTicketRowScalePercent;
         private static ConfigEntry<int> lowerTicketRowScalePercent;
         private static ConfigEntry<Color> menuReferenceTicketTintColor;
         private static ConfigEntry<bool> overlayBoldFont;
@@ -277,6 +280,8 @@ namespace OC2MenuManager
         private static Color? migratedMenuTicketPreparedTintColorValue;
         private static int? migratedReferenceTicketCountValue;
         private static Color? migratedReferenceTicketTintColorValue;
+        private static int? migratedFirstTicketRowScalePercentValue;
+        private static int? migratedLowerTicketRowScalePercentValue;
         private static readonly FieldInfo ActiveOrdersField = typeof(ClientOrderControllerBase).GetField("m_activeOrders", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo ServerRoundDataField = typeof(ServerOrderControllerBase).GetField("m_roundData", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo ServerRoundInstanceDataField = typeof(ServerOrderControllerBase).GetField("m_roundInstanceData", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -313,6 +318,8 @@ namespace OC2MenuManager
         private static readonly FieldInfo RecipeWidgetRecipeTreeField = typeof(RecipeWidgetUIController).GetField("m_recipeTree", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeWidgetDisplayConfigField = typeof(RecipeWidgetUIController).GetField("m_displayConfig", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo RecipeWidgetTopDisplayConfigField = typeof(RecipeWidgetUIController).GetField("m_topDisplayConfig", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo RecipeWidgetTopTileField = typeof(RecipeWidgetUIController).GetField("m_topWidgetTile", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo RecipeWidgetBackgroundTopField = typeof(RecipeWidgetTile).GetField("m_backgroundTop", BindingFlags.Instance | BindingFlags.NonPublic);
         private static ClientFlowControllerBase cachedClientFlowController;
         private static int nextClientFlowLookupFrame;
         private static ClientKitchenFlowControllerBase cachedKitchenFlowController;

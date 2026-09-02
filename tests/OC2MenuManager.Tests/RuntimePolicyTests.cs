@@ -200,12 +200,20 @@ public sealed class RuntimePolicyTests
     [InlineData(3, 5, 3)]
     [InlineData(10, 5, 5)]
     [InlineData(10, 10, 10)]
-    [InlineData(12, 10, 10)]
+    [InlineData(15, 15, 15)]
+    [InlineData(20, 20, 15)]
+    [InlineData(int.MaxValue, int.MaxValue, 15)]
     [InlineData(-1, 5, 0)]
     [InlineData(5, -1, 0)]
-    public void GuessTicketCountUsesEligibilityAndConfiguredLimitIndependently(int eligibleGuesses, int configuredGuesses, int expected)
+    public void GuessTicketCountUsesEligibilityAndTheConfiguredBoundedLimit(int eligibleGuesses, int configuredGuesses, int expected)
     {
         Assert.Equal(expected, TicketCapacityPolicy.CalculateAllowedReferenceTickets(eligibleGuesses, configuredGuesses));
+    }
+
+    [Fact]
+    public void GuessTicketMaximumIsFifteen()
+    {
+        Assert.Equal(15, TicketCapacityPolicy.MaximumReferenceTickets);
     }
 
     [Theory]
@@ -275,26 +283,142 @@ public sealed class RuntimePolicyTests
         Assert.True(capacity >= projectedRealCount);
     }
 
-    [Theory]
-    [InlineData(10, 1, 10, 10)]
-    [InlineData(15, 2, 10, 5)]
-    [InlineData(18, 2, 10, 8)]
-    [InlineData(17, 2, 10, 7)]
-    [InlineData(27, 3, 10, 7)]
-    public void TicketRowsPartitionOrderedTicketsWithoutExceedingTen(
-        int ticketCount,
-        int expectedRows,
-        int firstRowCount,
-        int lastRowCount)
+    [Fact]
+    public void TicketRowScaleDefaultsMatchTheIndependentSettings()
     {
-        Assert.Equal(expectedRows, TicketRowLayoutPolicy.CalculateRowCount(ticketCount, 10));
-        Assert.Equal(firstRowCount, TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, 0, 10));
-        Assert.Equal(lastRowCount, TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, expectedRows - 1, 10));
+        Assert.Equal(50, TicketRowLayoutPolicy.MinimumTicketRowScalePercent);
+        Assert.Equal(100, TicketRowLayoutPolicy.MaximumTicketRowScalePercent);
+        Assert.Equal(90, TicketRowLayoutPolicy.DefaultFirstRowScalePercent);
+        Assert.Equal(70, TicketRowLayoutPolicy.DefaultLowerRowScalePercent);
+    }
 
-        for (var index = 0; index < ticketCount; index++)
+    [Theory]
+    [InlineData(20, 0.5d)]
+    [InlineData(50, 0.5d)]
+    [InlineData(70, 0.7d)]
+    [InlineData(85, 0.85d)]
+    [InlineData(90, 0.9d)]
+    [InlineData(100, 1d)]
+    [InlineData(150, 1d)]
+    public void TicketRowScaleIsADirectClampedNativePercentage(int configuredPercent, double expectedScale)
+    {
+        Assert.Equal(expectedScale, TicketRowLayoutPolicy.CalculateConfiguredScale(configuredPercent), 12);
+    }
+
+    [Theory]
+    [InlineData(int.MinValue, 50)]
+    [InlineData(49, 50)]
+    [InlineData(50, 50)]
+    [InlineData(90, 90)]
+    [InlineData(100, 100)]
+    [InlineData(101, 100)]
+    [InlineData(int.MaxValue, 100)]
+    public void MigratedTicketRowScaleDefaultsAreSafeToBind(int migratedPercent, int expectedPercent)
+    {
+        Assert.Equal(expectedPercent, TicketRowLayoutPolicy.NormalizeScalePercent(migratedPercent));
+    }
+
+    [Theory]
+    [InlineData(100, 100, "4,4,4,1")]
+    [InlineData(90, 70, "5,6,2")]
+    [InlineData(50, 50, "9,4")]
+    [InlineData(100, 50, "4,9")]
+    public void TicketRowsGreedilyUseIndependentFirstAndLowerScales(
+        int firstRowPercent,
+        int lowerRowPercent,
+        string expectedCounts)
+    {
+        var widths = new double[13];
+        for (var i = 0; i < widths.Length; i++)
         {
-            Assert.Equal(index / 10, TicketRowLayoutPolicy.CalculateRowIndex(index, 10));
+            widths[i] = 100d;
         }
+
+        List<int> counts = CalculateGreedyTicketRowCounts(
+            widths,
+            500d,
+            10d,
+            firstRowPercent,
+            lowerRowPercent);
+
+        Assert.Equal(expectedCounts, string.Join(",", counts));
+    }
+
+    [Theory]
+    [InlineData(500d, 10d, 100, 4)]
+    [InlineData(500d, 10d, 85, 5)]
+    [InlineData(500d, 10d, 90, 5)]
+    [InlineData(500d, 10d, 70, 6)]
+    [InlineData(500d, 10d, 50, 9)]
+    [InlineData(600d, 10d, 50, 11)]
+    [InlineData(430d, 10d, 100, 4)]
+    [InlineData(429.999d, 10d, 100, 3)]
+    public void TicketRowCapacityTracksScaleWidthAndExactFitBoundaries(
+        double availableWidth,
+        double spacing,
+        int configuredPercent,
+        int expectedCount)
+    {
+        var widths = new double[12];
+        for (var i = 0; i < widths.Length; i++)
+        {
+            widths[i] = 100d;
+        }
+
+        Assert.Equal(
+            expectedCount,
+            TicketRowLayoutPolicy.CalculateFittingItemCount(
+                widths,
+                0,
+                availableWidth,
+                spacing,
+                TicketRowLayoutPolicy.CalculateConfiguredScale(configuredPercent)));
+    }
+
+    [Fact]
+    public void TicketRowsKeepTheLargestOrderedPrefixRatherThanRebalancing()
+    {
+        var widths = new[] { 220d, 80d, 80d, 80d };
+
+        Assert.Equal(
+            1,
+            TicketRowLayoutPolicy.CalculateFittingItemCount(widths, 0, 300d, 10d, 1d));
+        Assert.Equal(
+            3,
+            TicketRowLayoutPolicy.CalculateFittingItemCount(widths, 1, 300d, 10d, 1d));
+    }
+
+    [Fact]
+    public void SmallerTicketScaleCanFitMoreThanTenOrdersInOneRow()
+    {
+        var widths = new double[12];
+        for (var i = 0; i < widths.Length; i++)
+        {
+            widths[i] = 100d;
+        }
+
+        Assert.Equal(
+            11,
+            TicketRowLayoutPolicy.CalculateFittingItemCount(widths, 0, 600d, 10d, 0.5d));
+    }
+
+    [Fact]
+    public void TicketRowPackingNormalizesMalformedWidthsAndAlwaysMakesProgress()
+    {
+        var widths = new[] { double.NaN, -10d, double.PositiveInfinity, 100d };
+
+        Assert.Equal(
+            3,
+            TicketRowLayoutPolicy.CalculateFittingItemCount(widths, 0, 3d, 0d, 1d));
+        Assert.Equal(
+            1,
+            TicketRowLayoutPolicy.CalculateFittingItemCount(new[] { 800d, 100d }, 0, 500d, 10d, 0.85d));
+        Assert.Equal(
+            0,
+            TicketRowLayoutPolicy.CalculateFittingItemCount(null!, 0, 500d, 10d, 0.85d));
+        Assert.Equal(
+            0,
+            TicketRowLayoutPolicy.CalculateFittingItemCount(widths, -1, 500d, 10d, 0.85d));
     }
 
     [Theory]
@@ -304,15 +428,15 @@ public sealed class RuntimePolicyTests
     [InlineData(-1, 5, 10, 5)]
     [InlineData(5, -1, 10, 0)]
     [InlineData(5, 5, 0, 0)]
-    public void NativeFallbackUsesOnlyUnusedFirstRowPlaces(
+    public void NativeFallbackUsesOnlyUnusedFlowCapacity(
         int activeRealTickets,
         int requestedGuesses,
-        int rowCapacity,
+        int nativeCapacity,
         int expected)
     {
         Assert.Equal(
             expected,
-            TicketRowLayoutPolicy.CalculateFallbackReferenceTickets(activeRealTickets, requestedGuesses, rowCapacity));
+            TicketRowLayoutPolicy.CalculateFallbackReferenceTickets(activeRealTickets, requestedGuesses, nativeCapacity));
     }
 
     [Theory]
@@ -328,82 +452,33 @@ public sealed class RuntimePolicyTests
         Assert.Equal(expectedScale, TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth), 12);
     }
 
-    [Theory]
-    [InlineData(960d, 1400d, 0.48d)]
-    [InlineData(1200d, 1400d, 0.6d)]
-    [InlineData(1600d, 1400d, 0.7d)]
-    [InlineData(2400d, 1400d, 0.7d)]
-    public void DefaultLowerRowScaleComposesWithEveryTargetHudWidth(
-        double availableWidth,
-        double naturalWidth,
-        double expectedScale)
-    {
-        var fitScale = TicketRowLayoutPolicy.CalculateFitScale(availableWidth, naturalWidth);
-
-        Assert.Equal(
-            expectedScale,
-            TicketRowLayoutPolicy.CalculateRowScale(
-                fitScale,
-                1,
-                TicketRowLayoutPolicy.DefaultLowerRowScalePercent),
-            12);
-    }
-
-    [Theory]
-    [InlineData(5, 5, 1, 10)]
-    [InlineData(5, 10, 2, 5)]
-    [InlineData(8, 10, 2, 8)]
-    [InlineData(12, 5, 2, 7)]
-    [InlineData(12, 0, 2, 2)]
-    [InlineData(24, 10, 4, 4)]
-    public void MixedAndRealOnlyTicketCountsRemainBoundedToTenPerRow(
-        int realTicketCount,
-        int guessTicketCount,
-        int expectedRowCount,
-        int expectedLastRowCount)
-    {
-        var ticketCount = realTicketCount + guessTicketCount;
-        var rowCount = TicketRowLayoutPolicy.CalculateRowCount(ticketCount, 10);
-
-        Assert.Equal(expectedRowCount, rowCount);
-        Assert.Equal(
-            expectedLastRowCount,
-            TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, rowCount - 1, 10));
-        for (var rowIndex = 0; rowIndex < rowCount; rowIndex++)
-        {
-            Assert.InRange(TicketRowLayoutPolicy.CalculateRowItemCount(ticketCount, rowIndex, 10), 1, 10);
-        }
-    }
-
     [Fact]
-    public void TicketRowNaturalWidthIncludesOnlyResolvedItemsAndPositiveSpacing()
+    public void TicketRowNaturalWidthNormalizesMalformedItemsAndSpacing()
     {
         var widths = new[] { 100d, 120d, double.NaN, 80d };
 
-        Assert.Equal(320d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, 0, 3, 50d));
-        Assert.Equal(200d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, 2, 2, 120d));
+        Assert.Equal(321d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, 0, 3, 50d));
+        Assert.Equal(201d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, 2, 2, 120d));
         Assert.Equal(0d, TicketRowLayoutPolicy.CalculateNaturalWidth(widths, -1, 2, 10d));
     }
 
     [Theory]
-    [InlineData(0.8d, 0, 50, 0.8d)]
-    [InlineData(1d, 1, 50, 0.5d)]
-    [InlineData(1d, 1, 70, 0.7d)]
-    [InlineData(1d, 1, 75, 0.75d)]
-    [InlineData(1d, 1, 100, 1d)]
-    [InlineData(0.8d, 2, 75, 0.6d)]
-    [InlineData(1d, 1, 20, 0.5d)]
-    [InlineData(1d, 1, 150, 1d)]
-    [InlineData(double.NaN, 1, 75, 0.75d)]
-    public void TicketRowsApplyConfiguredScaleOnlyAfterTheFirstRow(
-        double fitScale,
-        int rowIndex,
+    [InlineData(1000d, 900d, 85, 0.85d)]
+    [InlineData(600d, 800d, 85, 0.75d)]
+    [InlineData(1200d, 1000d, 150, 1d)]
+    [InlineData(1200d, 1000d, 20, 0.5d)]
+    public void TicketRowsUseConfiguredScaleExceptForAnOversizedSingleTicket(
+        double availableWidth,
+        double naturalWidth,
         int configuredPercent,
         double expectedScale)
     {
         Assert.Equal(
             expectedScale,
-            TicketRowLayoutPolicy.CalculateRowScale(fitScale, rowIndex, configuredPercent),
+            TicketRowLayoutPolicy.CalculateAppliedRowScale(
+                availableWidth,
+                naturalWidth,
+                configuredPercent),
             12);
     }
 
@@ -431,12 +506,12 @@ public sealed class RuntimePolicyTests
     {
         var heights = new[] { 220d, 220d, 220d };
         var headers = new[] { 50d, 50d, 50d };
-        var firstAdvance = TicketRowLayoutPolicy.CalculateRowAdvance(heights, headers, 0, 1, 1d, 5d);
-        var secondAdvance = TicketRowLayoutPolicy.CalculateRowAdvance(heights, headers, 1, 1, 0.75d, 5d);
+        var firstAdvance = TicketRowLayoutPolicy.CalculateRowAdvance(heights, headers, 0, 1, 0.85d, 5d);
+        var secondAdvance = TicketRowLayoutPolicy.CalculateRowAdvance(heights, headers, 1, 1, 0.7d, 5d);
 
-        Assert.Equal(175d, firstAdvance, 12);
-        Assert.Equal(132.5d, secondAdvance, 12);
-        Assert.Equal(307.5d, firstAdvance + secondAdvance, 12);
+        Assert.Equal(149.5d, firstAdvance, 12);
+        Assert.Equal(124d, secondAdvance, 12);
+        Assert.Equal(273.5d, firstAdvance + secondAdvance, 12);
     }
 
     [Fact]
@@ -1095,6 +1170,32 @@ public sealed class RuntimePolicyTests
     public void NoMenuTutorialDetectionChecksConfigAndScene(string? configName, string? sceneName, bool expected)
     {
         Assert.Equal(expected, NoMenuIdentifierPolicy.IsTutorial(configName!, sceneName!));
+    }
+
+    private static List<int> CalculateGreedyTicketRowCounts(
+        double[] widths,
+        double availableWidth,
+        double spacing,
+        int firstRowPercent,
+        int lowerRowPercent)
+    {
+        var counts = new List<int>();
+        var startIndex = 0;
+        while (startIndex < widths.Length)
+        {
+            var configuredPercent = counts.Count == 0 ? firstRowPercent : lowerRowPercent;
+            var itemCount = TicketRowLayoutPolicy.CalculateFittingItemCount(
+                widths,
+                startIndex,
+                availableWidth,
+                spacing,
+                TicketRowLayoutPolicy.CalculateConfiguredScale(configuredPercent));
+            Assert.True(itemCount > 0);
+            counts.Add(itemCount);
+            startIndex += itemCount;
+        }
+
+        return counts;
     }
 
     private static void AssertWindow(string levelName, int phase, bool allPhases, int count, int expectedStart, int expectedEnd)

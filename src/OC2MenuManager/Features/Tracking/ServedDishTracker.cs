@@ -68,16 +68,27 @@ namespace OC2MenuManager
                 TrackerSection,
                 "最大猜单数量",
                 migratedReferenceTicketCountValue ?? DefaultReferenceTicketDisplayCount,
-                new ConfigDescription("猜单数量上限。0 关闭，最多 10 个，默认 5 个。真实订单优先；每行最多 10 张，超出的猜单会显示在下一行。", new AcceptableValueRange<int>(0, MaxReferenceTicketDisplayCount)));
+                new ConfigDescription("猜单数量上限。0 关闭，最多 15 个，默认 5 个。真实订单优先；菜单会按各排大小和可用宽度自动换行。", new AcceptableValueRange<int>(0, TicketCapacityPolicy.MaximumReferenceTickets)));
+            firstTicketRowScalePercent = _MODEntry.SettingsConfig.Bind<int>(
+                TrackerSection,
+                "首排菜单大小百分比",
+                TicketRowLayoutPolicy.NormalizeScalePercent(
+                    migratedFirstTicketRowScalePercentValue ?? TicketRowLayoutPolicy.DefaultFirstRowScalePercent),
+                new ConfigDescription(
+                    "第一排菜单相对于原生大小的百分比。默认 90%；100% 使用原生大小。",
+                    new AcceptableValueRange<int>(
+                        TicketRowLayoutPolicy.MinimumTicketRowScalePercent,
+                        TicketRowLayoutPolicy.MaximumTicketRowScalePercent)));
             lowerTicketRowScalePercent = _MODEntry.SettingsConfig.Bind<int>(
                 TrackerSection,
-                "下排票据大小百分比",
-                TicketRowLayoutPolicy.DefaultLowerRowScalePercent,
+                "下排菜单大小百分比",
+                TicketRowLayoutPolicy.NormalizeScalePercent(
+                    migratedLowerTicketRowScalePercentValue ?? TicketRowLayoutPolicy.DefaultLowerRowScalePercent),
                 new ConfigDescription(
-                    "第一排之后各排票据相对于自动适配大小的百分比。默认 70%；100% 保留原自动适配大小。",
+                    "第一排之后各排菜单相对于原生大小的百分比。默认 70%；100% 使用原生大小；下排的空白顶部不会显示。",
                     new AcceptableValueRange<int>(
-                        TicketRowLayoutPolicy.MinimumLowerRowScalePercent,
-                        TicketRowLayoutPolicy.MaximumLowerRowScalePercent)));
+                        TicketRowLayoutPolicy.MinimumTicketRowScalePercent,
+                        TicketRowLayoutPolicy.MaximumTicketRowScalePercent)));
             menuReferenceTicketTintColor = _MODEntry.SettingsConfig.Bind<Color>(
                 TrackerSection,
                 "猜单颜色",

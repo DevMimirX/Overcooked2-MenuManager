@@ -1,6 +1,8 @@
 // Provides reflection-only soft-dependency boundaries for DIY Level and Recipe
 // Extension. Recipe Extension entries are snapshotted in their source order once
-// per synchronized round and exposed through caller-owned lists.
+// per synchronized round and exposed through caller-owned lists. Author metadata
+// is read through a quiet cached accessor because missing members are normal gaps,
+// not Harmony contract failures.
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -200,7 +202,7 @@ namespace OC2MenuManager
                     return false;
                 }
 
-                object levelSetInfo = GetPairValue(levelSetEntry);
+                object levelSetInfo = OptionalMemberAccessor.GetValue(levelSetEntry, "Value");
                 if (levelSetInfo == null)
                 {
                     result.RejectedEntryCount++;
@@ -211,7 +213,7 @@ namespace OC2MenuManager
                     continue;
                 }
 
-                Array levelInfos = GetMemberValue(levelSetInfo, "levelInfos") as Array;
+                Array levelInfos = OptionalMemberAccessor.GetValue(levelSetInfo, "levelInfos") as Array;
                 if (levelInfos == null)
                 {
                     result.RejectedEntryCount++;
@@ -307,7 +309,7 @@ namespace OC2MenuManager
                 return false;
             }
 
-            Array recipeSources = GetMemberValue(levelInfo, "recipes") as Array;
+            Array recipeSources = OptionalMemberAccessor.GetValue(levelInfo, "recipes") as Array;
             if (recipeSources == null)
             {
                 error = "The DIY level does not expose a recipe list.";
@@ -659,7 +661,7 @@ namespace OC2MenuManager
                 }
 
                 object entriesValue;
-                if (patch == null || !TryGetMemberValueStrict(patch, "entries", out entriesValue))
+                if (patch == null || !OptionalMemberAccessor.TryGetInstanceValue(patch, "entries", out entriesValue))
                 {
                     destination.Clear();
                     LogManyRecipesContractWarning("Recipe Extension provider " + (i + 1) + " does not expose a readable entries array.");
@@ -759,7 +761,7 @@ namespace OC2MenuManager
                 }
 
                 object entriesValue;
-                if (!TryGetMemberValueStrict(patch, "entries", out entriesValue))
+                if (!OptionalMemberAccessor.TryGetInstanceValue(patch, "entries", out entriesValue))
                 {
                     return false;
                 }
@@ -818,7 +820,7 @@ namespace OC2MenuManager
         private static bool TryReadCustomDIYRecipe(object recipeSource, out DIYRecipeDescriptor descriptor)
         {
             descriptor = null;
-            object idValue = GetMemberValue(recipeSource, "uID");
+            object idValue = OptionalMemberAccessor.GetValue(recipeSource, "uID");
             string recipeName = GetStringMember(recipeSource, "recipeName");
             if (!(idValue is int) || string.IsNullOrEmpty(recipeName))
             {
@@ -837,7 +839,7 @@ namespace OC2MenuManager
         {
             RecipeCategoryEvidence evidence = new RecipeCategoryEvidence(recipeId, recipeName);
             evidence.AuthoringName = BoundDIYIdentity(GetStringMember(recipeSource, "name"));
-            evidence.Kind = ReadDIYRecipeKind(GetMemberValue(recipeSource, "type"));
+            evidence.Kind = ReadDIYRecipeKind(OptionalMemberAccessor.GetValue(recipeSource, "type"));
             evidence.CookingIdentity = GetFirstDIYIdentity(
                 recipeSource,
                 "cookingStepSO",
@@ -954,7 +956,7 @@ namespace OC2MenuManager
                 return;
             }
 
-            IList components = GetMemberValue(owner, memberName) as IList;
+            IList components = OptionalMemberAccessor.GetValue(owner, memberName) as IList;
             if (components == null)
             {
                 return;
@@ -1022,7 +1024,7 @@ namespace OC2MenuManager
 
             for (int i = 0; i < memberNames.Length; i++)
             {
-                string identity = GetDIYIdentity(GetMemberValue(owner, memberNames[i]));
+                string identity = GetDIYIdentity(OptionalMemberAccessor.GetValue(owner, memberNames[i]));
                 if (!string.IsNullOrEmpty(identity))
                 {
                     return identity;
@@ -1144,121 +1146,20 @@ namespace OC2MenuManager
             return false;
         }
 
-        private static object GetPairValue(object pair)
-        {
-            PropertyInfo valueProperty = pair != null
-                ? pair.GetType().GetProperty("Value", BindingFlags.Instance | BindingFlags.Public)
-                : null;
-            if (valueProperty == null)
-            {
-                return null;
-            }
-
-            try
-            {
-                return valueProperty.GetValue(pair, null);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static object GetMemberValue(object instance, string memberName)
-        {
-            if (instance == null || string.IsNullOrEmpty(memberName))
-            {
-                return null;
-            }
-
-            Type type = instance.GetType();
-            FieldInfo field = AccessTools.Field(type, memberName);
-            if (field != null)
-            {
-                try
-                {
-                    return field.GetValue(instance);
-                }
-                catch
-                {
-                    return null;
-                }
-            }
-
-            PropertyInfo property = AccessTools.Property(type, memberName);
-            if (property == null || !property.CanRead || property.GetIndexParameters().Length != 0)
-            {
-                return null;
-            }
-
-            try
-            {
-                return property.GetValue(instance, null);
-            }
-            catch
-            {
-                return null;
-            }
-        }
-
-        private static bool TryGetMemberValueStrict(object instance, string memberName, out object value)
-        {
-            value = null;
-            if (instance == null || string.IsNullOrEmpty(memberName))
-            {
-                return false;
-            }
-
-            Type type = instance.GetType();
-            FieldInfo field = AccessTools.Field(type, memberName);
-            if (field != null && !field.IsStatic)
-            {
-                try
-                {
-                    value = field.GetValue(instance);
-                    return true;
-                }
-                catch
-                {
-                    return false;
-                }
-            }
-
-            PropertyInfo property = AccessTools.Property(type, memberName);
-            if (property == null
-                || !property.CanRead
-                || property.GetGetMethod(true) == null
-                || property.GetGetMethod(true).IsStatic
-                || property.GetIndexParameters().Length != 0)
-            {
-                return false;
-            }
-
-            try
-            {
-                value = property.GetValue(instance, null);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
         private static string GetStringMember(object instance, string memberName)
         {
-            return GetMemberValue(instance, memberName) as string;
+            return OptionalMemberAccessor.GetValue(instance, memberName) as string;
         }
 
         private static int GetIntMember(object instance, string memberName)
         {
-            object value = GetMemberValue(instance, memberName);
+            object value = OptionalMemberAccessor.GetValue(instance, memberName);
             return value is int ? (int)value : 0;
         }
 
         private static bool GetBoolMember(object instance, string memberName)
         {
-            object value = GetMemberValue(instance, memberName);
+            object value = OptionalMemberAccessor.GetValue(instance, memberName);
             return value is bool && (bool)value;
         }
 

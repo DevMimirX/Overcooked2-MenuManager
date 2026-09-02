@@ -469,15 +469,23 @@ namespace OC2MenuManager
                     }
                 }
             }, Ui("只控制左侧悬浮窗；不会关闭历史记录、已备跟踪、菜单颜色或猜单。", "Controls only the left floating overlay; history, prepared tracking, ticket colors, and guess orders continue."));
-            DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, MaxReferenceTicketDisplayCount, Ui("猜单数量上限。真实订单优先；每行最多 10 张，超出的猜单显示在下一行。0 关闭。", "Maximum extra guess orders. Real orders stay first; each row holds up to 10 tickets and excess guesses wrap below. Set to 0 to disable."));
+            DrawIntSliderRow(Ui("最大猜单数量", "Max Guess Count"), menuReferenceTicketCount, 0, TicketCapacityPolicy.MaximumReferenceTickets, Ui("猜单数量上限，最多 15 个。真实订单优先；菜单会按各排大小和可用宽度自动换行。0 关闭。", "Maximum extra guess orders, up to 15. Real orders stay first; tickets wrap according to each row's size and available width. Set to 0 to disable."));
             DrawIntSliderRow(
-                Ui("下排票据大小 (%)", "Lower Row Ticket Size (%)"),
-                lowerTicketRowScalePercent,
-                TicketRowLayoutPolicy.MinimumLowerRowScalePercent,
-                TicketRowLayoutPolicy.MaximumLowerRowScalePercent,
+                Ui("首排菜单大小 (%)", "First Row Ticket Size (%)"),
+                firstTicketRowScalePercent,
+                TicketRowLayoutPolicy.MinimumTicketRowScalePercent,
+                TicketRowLayoutPolicy.MaximumTicketRowScalePercent,
                 Ui(
-                    "控制第一排之后所有票据的大小。默认 70%；100% 保留原自动适配大小。下排会自动上移，让上一排遮住无用的顶部留白。",
-                    "Controls every ticket row after the first. The default is 70%; 100% preserves the previous auto-fitted size. Lower rows move up automatically so the preceding row covers the unused header space."));
+                    "控制第一排菜单相对于原生大小的百分比。默认 90%；第一排会尽量容纳最多菜单，放不下的才进入下一排。",
+                    "Controls the first row as a percentage of native ticket size. The default is 90%; the row greedily keeps every ticket that fits before wrapping."));
+            DrawIntSliderRow(
+                Ui("下排菜单大小 (%)", "Lower Row Ticket Size (%)"),
+                lowerTicketRowScalePercent,
+                TicketRowLayoutPolicy.MinimumTicketRowScalePercent,
+                TicketRowLayoutPolicy.MaximumTicketRowScalePercent,
+                Ui(
+                    "控制第一排之后所有菜单相对于原生大小的百分比。默认 70%；每排会尽量容纳最多菜单，并直接隐藏空白顶部。",
+                    "Controls every row after the first as a percentage of native ticket size. The default is 70%; each row greedily keeps every ticket that fits and clips its decorative blank header."));
             DrawToggleRow(Ui("启用已备跟踪", "Enable Prepared Tracking"), preparedTrackingEnabled != null && preparedTrackingEnabled.Value, delegate(bool value)
             {
                 if (preparedTrackingEnabled != null)

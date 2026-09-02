@@ -14,7 +14,7 @@ Main features:
 - menu history overlay on the left side of the screen
 - prepared-dish tracking
 - color tinting for the real order tickets at the top
-- up to ten guess orders for off-menu candidates, wrapping into compact adjustable rows below the real orders when needed
+- up to fifteen guess orders for off-menu candidates, wrapping into compact adjustable rows below the real orders when needed
 - carnival-stage menu helpers
 - built-in no-menu toggle
 
@@ -40,7 +40,7 @@ Compatibility target: Steam build `20236421`. Maintainers can verify the referen
   - A scene with no saved subset tracks newly generated IDs automatically. Once you save an explicit subset, later IDs remain unchecked until you select them; disabling the extension removes generated-only rows for that round without deleting those saved IDs.
   - Provider entry order and duplicate entries are preserved for probability balancing. If an enabled provider snapshot is incomplete or its runtime frequency shape does not match, probability displays `—`, guesses are suppressed, and No Menu disables safely for that round.
   - Its two special dynamic-level phase filters are preserved.
-  - Real orders always keep their slots. Real tickets stay first, guesses fill the first row to ten cards, and additional tickets wrap into fitted rows below it.
+  - Real orders always keep their slots. Real tickets stay first, and each row greedily keeps every next ticket that fits at its configured native-size percentage before additional tickets wrap below.
   - A successfully served real ticket always completes removal even if another mod previously assigned it an invalid UI table index. Expiration follows the base game: the same ticket remains active and its timer resets.
   - On Carnival, non-fixed Good Menu and Good Cake rules use the full generated pool while applying their special restrictions only to the original Carnival recipes. The fixed/TAS sequence remains base-recipe-only.
 
@@ -239,7 +239,7 @@ This row appears immediately below `Show Floating Overlay` and is shown only onc
 
 Range:
 
-- `0` to `10`
+- `0` to `15`
 
 Default:
 
@@ -248,21 +248,38 @@ Default:
 Meaning:
 
 - `0` disables guess orders
-- `1-10` sets the maximum number of extra guess orders after the real orders
+- `1-15` sets the maximum number of extra guess orders after the real orders
 
 Important notes:
 
 - these are reference orders only
 - they are not real game orders
 - real orders stay first; guess orders are appended after them
-- each row contains at most ten tickets
-- guesses use unused places in the first row, then continue on the next row
-- more than ten real orders wrap across rows and never remove otherwise-valid guesses
-- over-wide rows scale uniformly to stay within the available HUD width
+- each row greedily keeps the next ordered ticket while it fits at that row's configured size
+- row capacity changes with ticket size, measured card widths, spacing, and available HUD width; it is not capped at ten
+- smaller scales can fit more than ten tickets in a row
+- overflow real orders and guesses continue below without removing otherwise-valid guesses
+
+#### First Row Ticket Size (%)
+
+This row appears immediately below `Max Guess Count`.
+
+Range and default:
+
+- `50%` to `100%`
+- default `90%`
+
+Meaning:
+
+- applies only to the first ticket row
+- the percentage is a direct fraction of native ticket size; `100%` means native size
+- the row keeps the largest consecutive real-then-guess prefix that fits before wrapping
+- an unusually wide single ticket may shrink below the configured size only to prevent clipping
+- values saved under the pre-rename Chinese setting migrate automatically; otherwise the new `90%` default applies
 
 #### Lower Row Ticket Size (%)
 
-This row appears immediately below `Max Guess Count`.
+This row appears immediately below `First Row Ticket Size (%)`.
 
 Range and default:
 
@@ -272,11 +289,11 @@ Range and default:
 Meaning:
 
 - applies to every ticket row after the first, including overflow real orders
-- scales the row after its normal width fitting, so it can never cause horizontal clipping
-- `100%` preserves the previous automatically fitted lower-row size
-- the first row keeps its native fitted size and position
-- lower rows automatically move upward by the measured unused ticket-header extension
-- the preceding row draws above that extension, while timer bars, recipe contents, and animations remain visible
+- the percentage is a direct fraction of native ticket size; `100%` means native size
+- each lower row greedily keeps the largest consecutive prefix that fits before wrapping again
+- lower rows clip the decorative blank header outside the top recipe tile instead of merely hiding it beneath the preceding row
+- timer bars, recipe contents, card bodies, and animations remain visible because the crop boundary is the base game's top-tile rectangle
+- existing lower-row scale values migrate to the renamed Chinese setting automatically
 
 #### Display Language
 
@@ -489,7 +506,7 @@ Current behavior:
 
 - real orders stay at the front
 - guess orders appear after them
-- each row contains at most ten tickets; overflow continues below
+- each row holds the largest consecutive ordered set that fits at its configured scale; overflow continues below
 - incoming real orders keep all their capacity without evicting valid guesses
 - when a guess becomes invalid, it disappears
 - when a new candidate becomes eligible, it can fill the freed guess slot

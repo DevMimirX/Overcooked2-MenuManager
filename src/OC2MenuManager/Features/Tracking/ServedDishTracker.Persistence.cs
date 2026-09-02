@@ -1,3 +1,6 @@
+// Owns persisted recipe selections and one-time tracker configuration cleanup.
+// Legacy configuration values may be bound entries or BepInEx orphaned entries;
+// both representations are migrated before obsolete keys are removed.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -18,6 +21,14 @@ namespace OC2MenuManager
 {
     internal static partial class ServedDishTracker
     {
+        private static readonly PropertyInfo ConfigFileOrphanedEntriesProperty = typeof(ConfigFile).GetProperty(
+            "OrphanedEntries",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        private static readonly FieldInfo ConfigFileOrphanedEntriesField = typeof(ConfigFile).GetField(
+            "<OrphanedEntries>k__BackingField",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        private static bool configOrphanedEntriesReflectionWarningLogged;
+
         private static void LoadSelections()
         {
             TrackedIdsByScene.Clear();
@@ -101,6 +112,8 @@ namespace OC2MenuManager
             migratedMenuTicketPreparedTintColorValue = TryGetLegacyValue<Color>(LegacyMenuTicketPreparedColorDefinition);
             migratedReferenceTicketCountValue = TryGetLegacyValue<int>(LegacyGuessCountDefinition) ?? TryGetLegacyValue<int>(LegacyReferenceTicketCountDefinition);
             migratedReferenceTicketTintColorValue = TryGetLegacyValue<Color>(LegacyGuessColorDefinition) ?? TryGetLegacyValue<Color>(LegacyReferenceTicketColorDefinition);
+            migratedFirstTicketRowScalePercentValue = TryGetLegacyValue<int>(LegacyFirstTicketRowScaleDefinition);
+            migratedLowerTicketRowScalePercentValue = TryGetLegacyValue<int>(LegacyLowerTicketRowScaleDefinition);
         }
 
         private static void RemoveLegacyConfigEntries()
@@ -108,45 +121,55 @@ namespace OC2MenuManager
             bool removedAny = false;
             ConfigFile config = _MODEntry.SettingsConfig;
 
-            if (config.Remove(LegacySelectedSceneStateDefinition))
+            if (RemoveConfigDefinition(config, LegacySelectedSceneStateDefinition))
             {
                 removedAny = true;
             }
 
             for (int i = 0; i < LegacyConfigDefinitions.Length; i++)
             {
-                if (config.Remove(LegacyConfigDefinitions[i]))
+                if (RemoveConfigDefinition(config, LegacyConfigDefinitions[i]))
                 {
                     removedAny = true;
                 }
             }
 
-            if (config.Remove(LegacyReferenceTicketCountDefinition))
+            if (RemoveConfigDefinition(config, LegacyReferenceTicketCountDefinition))
             {
                 removedAny = true;
             }
 
-            if (config.Remove(LegacyReferenceTicketColorDefinition))
+            if (RemoveConfigDefinition(config, LegacyReferenceTicketColorDefinition))
             {
                 removedAny = true;
             }
 
-            if (config.Remove(LegacyMenuTicketOnMenuColorDefinition))
+            if (RemoveConfigDefinition(config, LegacyMenuTicketOnMenuColorDefinition))
             {
                 removedAny = true;
             }
 
-            if (config.Remove(LegacyMenuTicketPreparedColorDefinition))
+            if (RemoveConfigDefinition(config, LegacyMenuTicketPreparedColorDefinition))
             {
                 removedAny = true;
             }
 
-            if (config.Remove(LegacyGuessCountDefinition))
+            if (RemoveConfigDefinition(config, LegacyGuessCountDefinition))
             {
                 removedAny = true;
             }
 
-            if (config.Remove(LegacyGuessColorDefinition))
+            if (RemoveConfigDefinition(config, LegacyGuessColorDefinition))
+            {
+                removedAny = true;
+            }
+
+            if (RemoveConfigDefinition(config, LegacyFirstTicketRowScaleDefinition))
+            {
+                removedAny = true;
+            }
+
+            if (RemoveConfigDefinition(config, LegacyLowerTicketRowScaleDefinition))
             {
                 removedAny = true;
             }
@@ -160,7 +183,7 @@ namespace OC2MenuManager
         private static void RemoveLegacySettingsWindowHotkeyEntry()
         {
             ConfigFile config = _MODEntry.SettingsConfig;
-            if (config.Remove(LegacySettingsWindowHotkeyDefinition))
+            if (RemoveConfigDefinition(config, LegacySettingsWindowHotkeyDefinition))
             {
                 config.Save();
             }
@@ -170,12 +193,24 @@ namespace OC2MenuManager
         {
             bool removedAny = false;
             ConfigFile config = _MODEntry.SettingsConfig;
-            if (config.Remove(new ConfigDefinition(TrackerSection, SceneSelectorKey)))
+            if (RemoveConfigDefinition(config, new ConfigDefinition(TrackerSection, SceneSelectorKey)))
             {
                 removedAny = true;
             }
 
             List<ConfigDefinition> definitions = config.Keys.ToList();
+            IDictionary<ConfigDefinition, string> orphanedEntries = GetOrphanedConfigEntries(config);
+            if (orphanedEntries != null)
+            {
+                foreach (ConfigDefinition definition in orphanedEntries.Keys)
+                {
+                    if (!definitions.Contains(definition))
+                    {
+                        definitions.Add(definition);
+                    }
+                }
+            }
+
             for (int i = 0; i < definitions.Count; i++)
             {
                 ConfigDefinition definition = definitions[i];
@@ -188,7 +223,7 @@ namespace OC2MenuManager
                 if (string.Equals(section, DishSelectionSection, StringComparison.Ordinal)
                     || section.StartsWith("05-历史菜单追踪 - ", StringComparison.Ordinal))
                 {
-                    if (config.Remove(definition))
+                    if (RemoveConfigDefinition(config, definition))
                     {
                         removedAny = true;
                     }
@@ -204,35 +239,123 @@ namespace OC2MenuManager
         private static T? TryGetLegacyValue<T>(ConfigDefinition definition) where T : struct
         {
             ConfigFile config = _MODEntry.SettingsConfig;
-            if (!config.Keys.Contains(definition))
+            object value = null;
+            if (config.Keys.Contains(definition))
             {
-                return null;
+                ConfigEntryBase entry = config[definition];
+                if (entry != null)
+                {
+                    value = entry.BoxedValue;
+                }
             }
 
-            ConfigEntryBase entry = config[definition];
-            if (entry == null || entry.BoxedValue == null)
+            if (value == null)
             {
-                return null;
+                IDictionary<ConfigDefinition, string> orphanedEntries = GetOrphanedConfigEntries(config);
+                string serializedValue;
+                if (orphanedEntries == null
+                    || !orphanedEntries.TryGetValue(definition, out serializedValue))
+                {
+                    return null;
+                }
+
+                try
+                {
+                    value = TomlTypeConverter.ConvertToValue(serializedValue, typeof(T));
+                }
+                catch
+                {
+                    return null;
+                }
             }
 
             try
             {
-                if (entry.BoxedValue is T)
+                if (value is T)
                 {
-                    return (T)entry.BoxedValue;
+                    return (T)value;
                 }
 
                 if (typeof(T).IsEnum)
                 {
-                    return (T)Enum.Parse(typeof(T), entry.BoxedValue.ToString(), true);
+                    return (T)Enum.Parse(typeof(T), value.ToString(), true);
                 }
 
-                return (T)Convert.ChangeType(entry.BoxedValue, typeof(T));
+                return (T)Convert.ChangeType(value, typeof(T));
             }
             catch
             {
                 return null;
             }
+        }
+
+        private static bool RemoveConfigDefinition(ConfigFile config, ConfigDefinition definition)
+        {
+            if (config == null || definition == null)
+            {
+                return false;
+            }
+
+            bool removed = config.Remove(definition);
+            IDictionary<ConfigDefinition, string> orphanedEntries = GetOrphanedConfigEntries(config);
+            if (orphanedEntries != null && orphanedEntries.Remove(definition))
+            {
+                removed = true;
+            }
+
+            return removed;
+        }
+
+        private static IDictionary<ConfigDefinition, string> GetOrphanedConfigEntries(ConfigFile config)
+        {
+            if (config == null)
+            {
+                return null;
+            }
+
+            Exception inspectionFailure = null;
+            if (ConfigFileOrphanedEntriesProperty != null)
+            {
+                try
+                {
+                    IDictionary<ConfigDefinition, string> entries = ConfigFileOrphanedEntriesProperty.GetValue(config, null)
+                        as IDictionary<ConfigDefinition, string>;
+                    if (entries != null)
+                    {
+                        return entries;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    inspectionFailure = ex;
+                }
+            }
+
+            if (ConfigFileOrphanedEntriesField != null)
+            {
+                try
+                {
+                    return ConfigFileOrphanedEntriesField.GetValue(config)
+                        as IDictionary<ConfigDefinition, string>;
+                }
+                catch (Exception ex)
+                {
+                    if (inspectionFailure == null)
+                    {
+                        inspectionFailure = ex;
+                    }
+                }
+            }
+
+            if (inspectionFailure != null && !configOrphanedEntriesReflectionWarningLogged)
+            {
+                configOrphanedEntriesReflectionWarningLogged = true;
+                _MODEntry.LogWarning(
+                    "[ServedDishTracker] Could not inspect orphaned BepInEx configuration entries; legacy cleanup will continue with bound entries only: "
+                    + inspectionFailure.GetType().Name + ": " + inspectionFailure.Message);
+            }
+
+            return null;
         }
     }
 }

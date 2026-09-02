@@ -877,15 +877,16 @@ namespace OC2MenuManager
                     displayLimit);
                 if (!HasTicketRowLayoutContract())
                 {
+                    int nativeTicketCapacity = GetEffectiveRealTicketLimit(flow, activeRealTickets);
                     int fallbackReferenceCount = TicketRowLayoutPolicy.CalculateFallbackReferenceTickets(
                         activeRealTickets,
                         allowedReferenceCount,
-                        MaxTicketsPerRow);
+                        nativeTicketCapacity);
                     if (fallbackReferenceCount < allowedReferenceCount && !ticketRowLayoutContractWarningLogged)
                     {
                         ticketRowLayoutContractWarningLogged = true;
                         _MODEntry.LogWarning(
-                            "[ServedDishTracker] Wrapped ticket layout is unavailable; guesses are limited to unused places in the native first row.");
+                            "[ServedDishTracker] Wrapped ticket layout is unavailable; guesses are limited to unused places in the flow's native ticket capacity.");
                     }
                     allowedReferenceCount = fallbackReferenceCount;
                 }

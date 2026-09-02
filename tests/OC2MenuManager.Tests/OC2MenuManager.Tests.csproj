@@ -20,5 +20,6 @@
     <Compile Include="..\..\src\OC2MenuManager\Features\Tracking\RecipeCategoryCatalog.cs" Link="Source\RecipeCategoryCatalog.cs" />
     <Compile Include="..\..\src\OC2MenuManager\Features\Tracking\SceneRecipeGroupCatalog.cs" Link="Source\SceneRecipeGroupCatalog.cs" />
     <Compile Include="..\..\src\OC2MenuManager\Features\Tracking\SceneSelectionPolicies.cs" Link="Source\SceneSelectionPolicies.cs" />
+    <Compile Include="..\..\src\OC2MenuManager\Features\Tracking\OptionalMemberAccessor.cs" Link="Source\OptionalMemberAccessor.cs" />
   </ItemGroup>
 </Project>

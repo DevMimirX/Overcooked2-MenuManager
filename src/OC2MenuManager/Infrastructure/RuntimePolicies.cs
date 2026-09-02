@@ -655,12 +655,18 @@ namespace OC2MenuManager.Infrastructure
         }
     }
 
+    /// <summary>
+    /// Bounds synthetic reference-ticket demand and grows the base-game UI table
+    /// storage without reducing the real-order capacity reported by any provider.
+    /// </summary>
     internal static class TicketCapacityPolicy
     {
+        internal const int MaximumReferenceTickets = 15;
+
         internal static int CalculateAllowedReferenceTickets(int eligibleReferenceTickets, int configuredReferenceTickets)
         {
             int safeEligibleCount = Math.Max(0, eligibleReferenceTickets);
-            int safeReferenceCount = Math.Max(0, configuredReferenceTickets);
+            int safeReferenceCount = Math.Min(MaximumReferenceTickets, Math.Max(0, configuredReferenceTickets));
             return Math.Min(safeEligibleCount, safeReferenceCount);
         }
 
@@ -689,57 +695,87 @@ namespace OC2MenuManager.Infrastructure
     }
 
     /// <summary>
-    /// Partitions the ordered real-then-reference ticket sequence into bounded
-    /// rows, calculates each row's uniform non-enlarging scale, and advances rows
-    /// using only safely measured visible body heights. Runtime presentation
-    /// consumes this policy without moving eligibility or order decisions into
-    /// Unity-facing code.
+    /// Greedily packs the ordered real-then-reference ticket sequence at direct
+    /// native-size percentages, calculates a non-enlarging scale for each row,
+    /// and advances rows using safely measured visible body heights. Runtime
+    /// presentation consumes this policy without moving eligibility or order
+    /// decisions into Unity-facing code.
     /// </summary>
     internal static class TicketRowLayoutPolicy
     {
-        internal const int MinimumLowerRowScalePercent = 50;
-        internal const int MaximumLowerRowScalePercent = 100;
+        internal const int MinimumTicketRowScalePercent = 50;
+        internal const int MaximumTicketRowScalePercent = 100;
+        internal const int DefaultFirstRowScalePercent = 90;
         internal const int DefaultLowerRowScalePercent = 70;
 
-        internal static int CalculateRowCount(int ticketCount, int maximumTicketsPerRow)
+        internal static int NormalizeScalePercent(int configuredScalePercent)
         {
-            int safeCount = Math.Max(0, ticketCount);
-            int safeRowCapacity = Math.Max(0, maximumTicketsPerRow);
-            if (safeCount == 0 || safeRowCapacity == 0)
+            return Math.Min(
+                MaximumTicketRowScalePercent,
+                Math.Max(MinimumTicketRowScalePercent, configuredScalePercent));
+        }
+
+        internal static double CalculateConfiguredScale(int configuredScalePercent)
+        {
+            return NormalizeScalePercent(configuredScalePercent) / 100d;
+        }
+
+        internal static int CalculateFittingItemCount(
+            IList<double> itemWidths,
+            int startIndex,
+            double availableWidth,
+            double spacing,
+            double scale)
+        {
+            if (itemWidths == null || startIndex < 0 || startIndex >= itemWidths.Count)
             {
                 return 0;
             }
 
-            return 1 + ((safeCount - 1) / safeRowCapacity);
-        }
-
-        internal static int CalculateRowIndex(int ticketIndex, int maximumTicketsPerRow)
-        {
-            return ticketIndex < 0 || maximumTicketsPerRow <= 0
-                ? -1
-                : ticketIndex / maximumTicketsPerRow;
-        }
-
-        internal static int CalculateRowItemCount(int ticketCount, int rowIndex, int maximumTicketsPerRow)
-        {
-            int rowCount = CalculateRowCount(ticketCount, maximumTicketsPerRow);
-            if (rowIndex < 0 || rowIndex >= rowCount)
+            double safeAvailableWidth = double.IsNaN(availableWidth)
+                || double.IsInfinity(availableWidth)
+                || availableWidth <= 0d
+                    ? 0d
+                    : availableWidth;
+            double safeSpacing = double.IsNaN(spacing)
+                || double.IsInfinity(spacing)
+                || spacing <= 0d
+                    ? 0d
+                    : spacing;
+            double safeScale = double.IsNaN(scale)
+                || double.IsInfinity(scale)
+                || scale <= 0d
+                    ? 1d
+                    : Math.Min(1d, scale);
+            double naturalWidth = 0d;
+            int itemCount = 0;
+            for (int i = startIndex; i < itemWidths.Count; i++)
             {
-                return 0;
+                double itemWidth = NormalizeItemWidth(itemWidths[i]);
+                double candidateWidth = naturalWidth + (itemCount > 0 ? safeSpacing : 0d) + itemWidth;
+                if (itemCount > 0 && candidateWidth * safeScale > safeAvailableWidth)
+                {
+                    break;
+                }
+
+                naturalWidth = candidateWidth;
+                itemCount++;
+                if (candidateWidth * safeScale > safeAvailableWidth)
+                {
+                    break;
+                }
             }
 
-            long rowStart = (long)rowIndex * maximumTicketsPerRow;
-            long remaining = Math.Max(0, ticketCount) - rowStart;
-            return (int)Math.Min(maximumTicketsPerRow, Math.Max(0L, remaining));
+            return itemCount;
         }
 
         internal static int CalculateFallbackReferenceTickets(
             int activeRealTickets,
             int requestedReferenceTickets,
-            int maximumTicketsPerRow)
+            int nativeTicketCapacity)
         {
-            int availableFirstRowSlots = Math.Max(0, maximumTicketsPerRow - Math.Max(0, activeRealTickets));
-            return Math.Min(Math.Max(0, requestedReferenceTickets), availableFirstRowSlots);
+            int availableNativeSlots = Math.Max(0, nativeTicketCapacity - Math.Max(0, activeRealTickets));
+            return Math.Min(Math.Max(0, requestedReferenceTickets), availableNativeSlots);
         }
 
         internal static double CalculateNaturalWidth(
@@ -759,11 +795,7 @@ namespace OC2MenuManager.Infrastructure
             double width = 0d;
             for (int i = startIndex; i < endIndex; i++)
             {
-                double itemWidth = itemWidths[i];
-                if (!double.IsNaN(itemWidth) && !double.IsInfinity(itemWidth) && itemWidth > 0d)
-                {
-                    width += itemWidth;
-                }
+                width += NormalizeItemWidth(itemWidths[i]);
             }
 
             int resolvedItemCount = endIndex - startIndex;
@@ -790,22 +822,21 @@ namespace OC2MenuManager.Infrastructure
             return Math.Min(1d, availableWidth / naturalWidth);
         }
 
-        internal static double CalculateRowScale(double fitScale, int rowIndex, int configuredLowerRowScalePercent)
+        internal static double CalculateAppliedRowScale(
+            double availableWidth,
+            double naturalWidth,
+            int configuredScalePercent)
         {
-            double safeFitScale = double.IsNaN(fitScale)
-                || double.IsInfinity(fitScale)
-                || fitScale <= 0d
-                    ? 1d
-                    : Math.Min(1d, fitScale);
-            if (rowIndex <= 0)
-            {
-                return safeFitScale;
-            }
+            return Math.Min(
+                CalculateConfiguredScale(configuredScalePercent),
+                CalculateFitScale(availableWidth, naturalWidth));
+        }
 
-            int safeScalePercent = Math.Min(
-                MaximumLowerRowScalePercent,
-                Math.Max(MinimumLowerRowScalePercent, configuredLowerRowScalePercent));
-            return safeFitScale * safeScalePercent / 100d;
+        private static double NormalizeItemWidth(double itemWidth)
+        {
+            return double.IsNaN(itemWidth) || double.IsInfinity(itemWidth) || itemWidth <= 0d
+                ? 1d
+                : itemWidth;
         }
 
         internal static double CalculateVisibleBodyHeight(double fullHeight, double headerExtensionHeight)
